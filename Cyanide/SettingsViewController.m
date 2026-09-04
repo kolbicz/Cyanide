@@ -6149,11 +6149,16 @@ void settings_register_defaults(void)
         // path (~4/7). Interleave+reverse-scan (approach A) pins the find to the
         // mapping tail but has not measured a better panic rate, so it is opt-in.
         kSettingsA18Interleave:      @NO,
-        // A18 memory shaping mode: 0 = off (standard geometry), 1 = dynamic
-        // (pin ~75% of live jetsam headroom), 2 = fixed 3 GB (1.5.5). Default
-        // dynamic -- shaping's panic-reduction without the fixed-size jetsam
-        // risk. An old @YES/@NO stored value reads as 1/0, migrating cleanly.
-        kSettingsA18MemoryShaping:   @1,
+        // A18 memory shaping mode: 0 = off (standard geometry, 1 GB window, no
+        // pin), 1 = dynamic (pin ~75% of live jetsam headroom, 4 MB window),
+        // 2 = fixed 3 GB. Default 2 -- this is the 1.5.5 geometry, which field
+        // data shows is markedly more reliable on A18/M4 (fewer aperture-panic
+        // reboots) than dynamic. Dynamic shipped as the 1.5.7 default and cut
+        // the success rate roughly in half on the devices we heard back from.
+        // A one-time migration below (settings_register_defaults) moves anyone
+        // still on dynamic -- including a 1.5.6 @YES that reads back as 1 -- to
+        // 3 GB, so updaters get the 1.5.5 behaviour too, not just fresh installs.
+        kSettingsA18MemoryShaping:   @2,
         // Default OFF = 1.5.5 behaviour: pe_v1 grinds until it acquires. On caps
         // the search at 4 passes and returns a clean retry instead of grinding,
         // which can otherwise end in an aperture panic on a device that never
@@ -6283,6 +6288,27 @@ void settings_register_defaults(void)
         kSettingsNanoMinPairingChipID: @(kNanoDefaultMinPairingChipID),
         kSettingsNanoMinQuickSwitch:   @(kNanoDefaultMinQuickSwitch),
     }];
+    // One-time: 1.5.7 shipped Dynamic (mode 1) as the shaping default, which
+    // pins a fraction of live jetsam headroom instead of the fixed 3 GB that
+    // 1.5.5 used. Field data showed the fixed 3 GB is markedly more reliable on
+    // A18/M4 (fewer aperture-panic reboots), so 3 GB is the default again. Move
+    // anyone still on Dynamic -- whether from the old registered default, from
+    // an unset key (a 1.5.5 updater), or from a 1.5.6 BOOL "on" that reads back
+    // as 1 -- onto 3 GB, once. An unset key now resolves to the @2 registration
+    // default, so only a persisted 1 trips this. An explicit Off (0) is a
+    // deliberate choice and is left alone, and because this is gated by a
+    // one-shot flag, a user who re-selects Dynamic afterwards keeps it.
+    static NSString * const kSettingsA18ShapeThreeGBMigration =
+        @"cyanide.a18shape.default3GB.v1";
+    if (![defaults boolForKey:kSettingsA18ShapeThreeGBMigration]) {
+        if ([defaults integerForKey:kSettingsA18MemoryShaping] == 1) {
+            [defaults setInteger:2 forKey:kSettingsA18MemoryShaping];
+            printf("[SETTINGS] A18 memory shaping migrated Dynamic -> 3 GB "
+                   "(1.5.5 default restored)\n");
+        }
+        [defaults setBool:YES forKey:kSettingsA18ShapeThreeGBMigration];
+        [defaults synchronize];
+    }
     NSString *selectedDockBundle = [defaults stringForKey:kSettingsSBCDockAppBundleID];
     if ([selectedDockBundle isEqualToString:kSBCLegacyDockAppBundleID]) {
         [defaults setObject:kSBCDefaultDockAppBundleID
