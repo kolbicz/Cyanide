@@ -86,7 +86,7 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
     }
     if (!hasHome) {
         HomeViewController *home = [[HomeViewController alloc] init];
-        UINavigationController *homeNav = [[UINavigationController alloc] initWithNavigationBarClass:CYNavigationBar.class toolbarClass:nil];
+        UINavigationController *homeNav = [[UINavigationController alloc] init];
         [homeNav setViewControllers:@[home]];
         homeNav.navigationBar.barStyle = UIBarStyleBlack;
         homeNav.tabBarItem = [[UITabBarItem alloc] initWithTitle:@"Home"
@@ -102,7 +102,7 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
     }
     if (!hasSources) {
         SourcesViewController *sources = [[SourcesViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
-        UINavigationController *nav = [[UINavigationController alloc] initWithNavigationBarClass:CYNavigationBar.class toolbarClass:nil];
+        UINavigationController *nav = [[UINavigationController alloc] init];
         [nav setViewControllers:@[sources]];
         nav.navigationBar.barStyle = UIBarStyleBlack;
         nav.tabBarItem = [[UITabBarItem alloc] initWithTitle:@"Sources"
@@ -331,10 +331,13 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
 
 - (void)updateSourcesBadge
 {
+    // These updates belong to tweaks imported from source repos, which are
+    // browsed and managed in the Sources tab; the Packages list no longer shows
+    // them, so the count rides on Sources instead.
     NSUInteger count = repotweaks_available_update_count();
     NSString *badge = count > 0 ? [NSString stringWithFormat:@"%lu", (unsigned long)count] : nil;
     for (UIViewController *vc in self.viewControllers) {
-        if ([vc.tabBarItem.title isEqualToString:@"Packages"]) {
+        if ([vc.tabBarItem.title isEqualToString:@"Sources"]) {
             vc.tabBarItem.badgeValue = badge;
             break;
         }

@@ -384,8 +384,11 @@ static UIColor *category_color(NSString *cat)
             UINavigationController *nav = [vc isKindOfClass:UINavigationController.class] ? (UINavigationController *)vc : nil;
             if (!nav) return;
             [nav popToRootViewControllerAnimated:NO];
-            SettingsViewController *ql = [[SettingsViewController alloc] initWithUnderlyingSection:25 bundleTitle:@"QuickLoader"];
+            SettingsViewController *ql = [[SettingsViewController alloc] initWithUnderlyingSection:SectionQuickLoader bundleTitle:@"QuickLoader"];
             ql.quickLoaderStandalone = YES;
+            // QuickLoader has no package page to return to, so the back button
+            // is labelled with, and switches to, the tab it was opened from.
+            ql.installerReturnTabTitle = self.navigationController.tabBarItem.title;
             [nav pushViewController:ql animated:NO];
             tab.selectedIndex = i;
             return;

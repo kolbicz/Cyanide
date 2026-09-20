@@ -205,12 +205,24 @@ void settings_application_did_become_active(void);
 - (instancetype)initWithCoder:(NSCoder *)coder;
 - (instancetype)initWithNibName:(nullable NSString *)nibNameOrNil bundle:(nullable NSBundle *)nibBundleOrNil NS_UNAVAILABLE;
 
-// When set on a bundle-detail SettingsViewController launched from the
-// Packages' "Customize" row, the nav bar shows a left-side back button
+// When set on a bundle-detail SettingsViewController launched from a package
+// row's "Configure" entry, the nav bar shows a left-side back button
 // ("← <package name>") that pops Settings to root and switches the user
-// back to the Packages tab — so the install action stays one tap away
+// back to the tab they came from — so the install action stays one tap away
 // after customizing.
 @property (nonatomic, copy, nullable) NSString *installerReturnPackageName;
+
+// Title of the bottom tab the back button switches to (Packages, Sources, ...),
+// instead of always landing on Packages. It is normally the tab the package
+// controls were opened from, but an entry can point somewhere else: the Home
+// QuickLoader row returns to the Sources front page. Setting it on its own —
+// without installerReturnPackageName — still shows the button, labelled with
+// this tab title (the QuickLoader pages have no package).
+@property (nonatomic, copy, nullable) NSString *installerReturnTabTitle;
+
+// When YES, the target tab is popped to its root before the switch, so the
+// button lands on that tab's front page instead of wherever that tab was left.
+@property (nonatomic, assign) BOOL installerReturnResetsTargetTab;
 @property (nonatomic, assign) BOOL quickLoaderStandalone;
 
 // Current values for each configurable row in a settings section.

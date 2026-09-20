@@ -7982,15 +7982,32 @@ static _CyanideMailDelegate *_cyanide_mail_delegate(void) {
     });
 }
 
+// Index of the tab whose item title matches `title`, or NSNotFound when no tab
+// carries that title. Tab titles are the only handle these entries have on the
+// tab a package's controls were opened from.
+static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString *title)
+{
+    if (title.length == 0) return NSNotFound;
+    for (NSUInteger i = 0; i < tab.viewControllers.count; i++) {
+        if ([tab.viewControllers[i].tabBarItem.title isEqualToString:title]) return i;
+    }
+    return NSNotFound;
+}
+
 - (void)installInstallerReturnButtonIfNeeded
 {
-    if (!self.installerReturnPackageName) return;
+    // Package controls label the button with the package name; QuickLoader has
+    // no package, so it falls back to the tab it was opened from.
+    NSString *label = self.installerReturnPackageName.length > 0
+        ? self.installerReturnPackageName
+        : self.installerReturnTabTitle;
+    if (label.length == 0) return;
 
     UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
     UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:17.0 weight:UIImageSymbolWeightSemibold];
     UIImage *chevron = [UIImage systemImageNamed:@"chevron.backward" withConfiguration:cfg];
     [btn setImage:chevron forState:UIControlStateNormal];
-    [btn setTitle:[@" " stringByAppendingString:self.installerReturnPackageName] forState:UIControlStateNormal];
+    [btn setTitle:[@" " stringByAppendingString:label] forState:UIControlStateNormal];
     btn.titleLabel.font = [UIFont systemFontOfSize:17.0 weight:UIFontWeightRegular];
     btn.tintColor = self.view.tintColor;
     btn.contentEdgeInsets = UIEdgeInsetsMake(0, 0, 0, 4);
@@ -8006,15 +8023,14 @@ static _CyanideMailDelegate *_cyanide_mail_delegate(void) {
 {
     UITabBarController *tab = self.tabBarController;
     UINavigationController *settingsNav = self.navigationController;
-    NSUInteger installerIdx = NSNotFound;
-    for (NSUInteger i = 0; i < tab.viewControllers.count; i++) {
-        UIViewController *vc = tab.viewControllers[i];
-        if ([vc.tabBarItem.title isEqualToString:@"Packages"] ||
-            [vc.tabBarItem.title isEqualToString:@"Installer"]) {
-            installerIdx = i;
-            break;
-        }
-    }
+
+    // Prefer the tab the package controls were opened from. Sources pushes the
+    // same Settings bundle as Packages, and always unwinding to Packages
+    // dropped those users out of the browse path they were in.
+    NSUInteger installerIdx = settings_tab_index_for_title(tab, self.installerReturnTabTitle);
+    if (installerIdx == NSNotFound) installerIdx = settings_tab_index_for_title(tab, @"Packages");
+    if (installerIdx == NSNotFound) installerIdx = settings_tab_index_for_title(tab, @"Installer");
+
     // Switch tabs; unwind the Settings stack later, from viewDidDisappear.
     //
     // Both have to happen, and any attempt to time the unwind against the tab
@@ -8035,6 +8051,17 @@ static _CyanideMailDelegate *_cyanide_mail_delegate(void) {
         [settingsNav popToRootViewControllerAnimated:NO];
         return;
     }
+
+    // Some entries ask for the target tab's front page instead of wherever that
+    // tab was left (the Home QuickLoader row returns to the Sources front page).
+    // Reset it before switching: it is off screen now, so this cannot flash.
+    if (self.installerReturnResetsTargetTab) {
+        UIViewController *target = tab.viewControllers[installerIdx];
+        if ([target isKindOfClass:UINavigationController.class]) {
+            [(UINavigationController *)target popToRootViewControllerAnimated:NO];
+        }
+    }
+
     self.unwindSettingsStackWhenHidden = YES;
     tab.selectedIndex = installerIdx;
 }
@@ -8143,7 +8170,10 @@ static _CyanideMailDelegate *_cyanide_mail_delegate(void) {
     }
 
     NSIndexSet *sections = [NSIndexSet indexSetWithIndex:RootSectionActions];
-    [self.tableView reloadSections:sections withRowAnimation:UITableViewRowAnimationNone];
+    [UIView performWithoutAnimation:^{
+        [self.tableView reloadSections:sections withRowAnimation:UITableViewRowAnimationNone];
+        [self.tableView layoutIfNeeded];
+    }];
 }
 
 - (UITableViewCell *)buildWarningCell:(UITableViewCell *)cell

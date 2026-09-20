@@ -359,6 +359,8 @@ static NSString * const kCatPkgCellID = @"CatPkgCell";
     [settingsNav popToRootViewControllerAnimated:NO];
     SettingsViewController *bundle = [[SettingsViewController alloc] initWithUnderlyingSection:pkg.settingsSection bundleTitle:pkg.name];
     bundle.installerReturnPackageName = pkg.name;
+    // Opened from the Sources browse hierarchy, so send the back button there.
+    bundle.installerReturnTabTitle = self.navigationController.tabBarItem.title;
     [settingsNav pushViewController:bundle animated:NO];
     tab.selectedIndex = settingsIndex;
 }

@@ -1296,6 +1296,9 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
     SettingsViewController *bundle = [[SettingsViewController alloc] initWithUnderlyingSection:self.package.settingsSection
                                                                                    bundleTitle:self.package.name];
     bundle.installerReturnPackageName = self.package.name;
+    // This controller lives in the Packages or the Sources stack, so record the
+    // tab it was tapped in; the back button returns there.
+    bundle.installerReturnTabTitle = self.navigationController.tabBarItem.title;
     [settingsNav pushViewController:bundle animated:NO];
     tab.selectedIndex = settingsIndex;
 }

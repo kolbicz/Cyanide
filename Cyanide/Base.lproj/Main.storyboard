@@ -36,7 +36,7 @@
                     <tabBarItem key="tabBarItem" title="Settings" image="gear" catalog="system" id="90p-V5-FPd">
                         <color key="badgeColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                     </tabBarItem>
-                    <navigationBar key="navigationBar" contentMode="scaleToFill" barStyle="black" id="YsO-k3-Sb5" customClass="CYNavigationBar">
+                    <navigationBar key="navigationBar" contentMode="scaleToFill" barStyle="black" id="YsO-k3-Sb5">
                         <rect key="frame" x="0.0" y="118" width="393" height="54"/>
                         <autoresizingMask key="autoresizingMask"/>
                     </navigationBar>
@@ -68,7 +68,7 @@
             <objects>
                 <navigationController id="InsNv001" userLabel="Packages" sceneMemberID="viewController">
                     <tabBarItem key="tabBarItem" title="Packages" image="shippingbox.fill" catalog="system" id="InsTb001"/>
-                    <navigationBar key="navigationBar" contentMode="scaleToFill" barStyle="black" id="InsNb001" customClass="CYNavigationBar">
+                    <navigationBar key="navigationBar" contentMode="scaleToFill" barStyle="black" id="InsNb001">
                         <rect key="frame" x="0.0" y="118" width="393" height="54"/>
                         <autoresizingMask key="autoresizingMask"/>
                     </navigationBar>
@@ -100,7 +100,7 @@
             <objects>
                 <navigationController id="LogNv001" userLabel="Log" sceneMemberID="viewController">
                     <tabBarItem key="tabBarItem" title="Log" image="terminal" catalog="system" id="LogTb001"/>
-                    <navigationBar key="navigationBar" contentMode="scaleToFill" barStyle="black" id="LogNb001" customClass="CYNavigationBar">
+                    <navigationBar key="navigationBar" contentMode="scaleToFill" barStyle="black" id="LogNb001">
                         <rect key="frame" x="0.0" y="118" width="393" height="54"/>
                         <autoresizingMask key="autoresizingMask"/>
                     </navigationBar>

@@ -62,6 +62,16 @@ static const CGFloat kMargin = 20.0;
     [self.stack addArrangedSubview:[self buildCommunity]];
 }
 
+- (void)viewWillAppear:(BOOL)animated
+{
+    [super viewWillAppear:animated];
+    // Force the pending layout so the hero card already has its final bounds
+    // when this appearance's first frame is composited. The gradient layer is
+    // not resized here: layoutIfNeeded runs viewDidLayoutSubviews:, which owns
+    // that (and every later pass).
+    [self.view layoutIfNeeded];
+}
+
 #pragma mark - Hero
 
 - (UIView *)buildHero
@@ -558,8 +568,13 @@ static const CGFloat kMargin = 20.0;
             UINavigationController *nav = [vc isKindOfClass:UINavigationController.class] ? (UINavigationController *)vc : nil;
             if (!nav) return;
             [nav popToRootViewControllerAnimated:NO];
-            SettingsViewController *ql = [[SettingsViewController alloc] initWithUnderlyingSection:25 bundleTitle:@"QuickLoader"];
+            SettingsViewController *ql = [[SettingsViewController alloc] initWithUnderlyingSection:SectionQuickLoader bundleTitle:@"QuickLoader"];
             ql.quickLoaderStandalone = YES;
+            // QuickLoader has no package page to return to. It belongs with the
+            // JS-tweak sources flow, so the back button goes to the Sources front
+            // page instead of back to Home.
+            ql.installerReturnTabTitle = @"Sources";
+            ql.installerReturnResetsTargetTab = YES;
             [nav pushViewController:ql animated:NO];
             tab.selectedIndex = i;
             return;
