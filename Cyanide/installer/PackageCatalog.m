@@ -125,6 +125,7 @@ static const NSInteger kSecFastLockXLite    = SectionFastLockXLite;
 static const NSInteger kSecQuickLoader      = SectionQuickLoader;
 static const NSInteger kSecRepoTweaks       = SectionRepoTweaks;
 static const NSInteger kSecLockScreenDuration = SectionLockScreenDuration;
+static const NSInteger kSecPasscodeTheme    = SectionPasscodeTheme;
 static const NSInteger kSecOTA              = SectionOTA;
 
 + (NSArray<Package *> *)allPackages
@@ -431,6 +432,20 @@ static const NSInteger kSecOTA              = SectionOTA;
         callRecordingSound.experimental = NO;
         callRecordingSound.unstableWarning = @"Beta: persistent CallServices system-file replacement. Disclosure sounds may be legally required where you live; you are responsible for your use and apply this at your own risk. Use Restore Original Sounds before removing Cyanide if you want Cyanide's backups written back.";
 
+        Package *passcodeTheme = [[Package alloc] initWithIdentifier:@"com.darksword.passcode-theme"
+                                           name:@"Passcode Style"
+                               shortDescription:@"Custom Lock Screen passcode artwork"
+                                longDescription:@"Replaces the Lock Screen keypad artwork under /var/mobile/Library/Caches/TelephonyUI-* with a style you import or build in the Passcode Style panel. A style may cover only some digits; the rest stay stock.\n\nOpen Controls to apply it or restore the saved originals. Lock and unlock (or respring) to see the change.\n\nSystem-file warning: the originals Cyanide saves live in Cyanide's own app container, so reinstalling Cyanide deletes them — export them from the Passcode Style panel first if you plan to reinstall.\n\nCredits: ported from the Passcode implementation created for Lara by ruter and neonmodder123, inherited and extended by leonardob8777-bit in Eagle (https://github.com/leonardob8777-bit/Eagle, AGPL-3.0). Cyanide port by FleetingDreamso."
+                                        version:version
+                                         author:@"ruter / neonmodder123 / leonardob8777-bit / FleetingDreamso"
+                                       category:@"Theming"
+                                     symbolName:@"circle.grid.3x3.fill"
+                                           kind:PackageInstallKindDirectTool
+                                     enabledKey:nil
+                                          isNew:YES];
+        passcodeTheme.settingsSection = kSecPasscodeTheme;
+        passcodeTheme.unstableWarning = @"Warning: rewrites the system keypad artwork the Lock Screen uses. Cyanide verifies every write, but edits can still fail or partially apply. Restore Original Digits puts the saved originals back.";
+
         Package *hideHomeBar = [[Package alloc] initWithIdentifier:@"com.darksword.hide-home-bar"
                                            name:@"Hide Home Bar"
                                shortDescription:@"Hide the bottom home indicator"
@@ -560,6 +575,7 @@ static const NSInteger kSecOTA              = SectionOTA;
             axon,
             nanoRegistry,
             callRecordingSound,
+            passcodeTheme,
             hideHomeBar,
 #if CYANIDE_EXPERIMENTAL_TWEAKS_AVAILABLE
             stageStrip,
