@@ -3147,6 +3147,16 @@ static BOOL settings_ensure_springboard_remote_call_locked(void)
                "ABBA avoidance; lock DROPPED for the wait)\n",
                (unsigned long long)((settleUntil - nowNs) / 1000000ULL));
         NSObject *rcLock = settings_rc_lock();
+        // Round 42 guard: this exit/enter pair is only correct if the caller
+        // holds @synchronized (settings_rc_lock()) at EXACTLY ONE nesting
+        // level (verified for all four call sites: settings_apply_lock_screen_
+        // duration_body, settings_read_lock_screen_duration, the tweak-run
+        // "Opening SpringBoard injection channel" step, and the FastLockX
+        // request). Zero levels → objc_sync_exit on an unheld lock (undefined);
+        // two+ levels → one level stays held across the wait (reintroduces the
+        // serialization this fixes). objc-sync exposes no recursion count, so
+        // there is no cheap runtime assertion — if you add a call site, keep
+        // the single-level invariant or refactor this.
         objc_sync_exit(rcLock);
         BOOL aborted = NO;
         while ((nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) < settleUntil) {
