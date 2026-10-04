@@ -68,6 +68,7 @@ extern NSString * const kSettingsSBCDockIcons;
 extern NSString * const kSettingsSBCCols;
 extern NSString * const kSettingsSBCRows;
 extern NSString * const kSettingsSBCHideLabels;
+extern NSString * const kSettingsSBCDockLabels;
 extern NSString * const kSettingsSBCArrangePages;
 extern NSString * const kSettingsSBCFirstPageIcons;
 extern NSString * const kSettingsSBCOtherPageIcons;

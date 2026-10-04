@@ -655,22 +655,103 @@ static int patch_homescreen_list_models_v3(uint64_t mgr, int cols, int rows)
 // Labels left folder icons labelled. Safe no-op if the location, config, or
 // selector is absent (and on iOS 17, where setShowsLabels: is a no-op — the
 // process-wide _shouldShowLabel swizzle already covers folder icons there).
-static void set_shows_labels_off_for_location(uint64_t provider, const char *locName)
+static bool set_shows_labels_for_location(uint64_t provider, const char *locName, bool shows)
 {
-    if (!provider || !locName) return;
+    if (!provider || !locName) return false;
     uint64_t loc = r_cfstr(locName);
-    if (!loc || !r_responds(provider, "layoutForIconLocation:")) return;
+    if (!loc || !r_responds(provider, "layoutForIconLocation:")) return false;
     uint64_t layout = r_msg2(provider, "layoutForIconLocation:", loc, 0, 0, 0);
-    if (!layout) { printf("[SBC] labels: no layout for %s\n", locName); return; }
+    if (!layout) { printf("[SBC] labels: no layout for %s\n", locName); return false; }
     usleep(50000);
     uint64_t cfg = try_msg0(layout, "layoutConfiguration");
     if (!r_is_objc_ptr(cfg) || !r_responds(cfg, "setShowsLabels:")) {
         printf("[SBC] labels: %s cfg lacks setShowsLabels:\n", locName);
-        return;
+        return false;
     }
     usleep(50000);
-    r_msg2(cfg, "setShowsLabels:", 0, 0, 0, 0);
-    printf("[SBC] labels: showsLabels=NO for %s\n", locName);
+    r_msg2(cfg, "setShowsLabels:", shows ? 1 : 0, 0, 0, 0);
+    printf("[SBC] labels: showsLabels=%s for %s\n", shows ? "YES" : "NO", locName);
+    return true;
+}
+
+// Dock labels. Stock iOS draws the dock without app names; the same two levers
+// Hide Labels uses can put them back, pointed the other way.
+//
+//  * iOS 18: the dock is its own icon location with its own layout
+//    configuration, so setShowsLabels: on it survives relayouts. This is also
+//    why Dock Labels and Hide Labels do not fight on 18 -- Hide Labels only
+//    touches SBIconLocationRoot and SBIconLocationFolder.
+//  * iOS 17: setShowsLabels: is a no-op there (issue #7), so clear
+//    setLabelHidden: on each of the dock's own SBIconViews instead. The walk
+//    runs on the main thread; a worker-thread view walk PAC-crashes
+//    SpringBoard, same as the home-screen one above.
+//
+// The per-view pass runs on both versions: on 18 it makes the change visible
+// immediately instead of waiting for the next relayout.
+//
+// Caveat on iOS 17: Hide Labels installs a process-wide _shouldShowLabel hook
+// that answers NO for every SBIconView, the dock included. While that hook is
+// up a rebuilt dock icon comes back unlabelled no matter what is set here.
+static int set_dock_icon_labels(uint64_t iconCtrl, bool show)
+{
+    uint64_t mgr = try_msg0(iconCtrl, "iconManager");
+    if (!mgr) { printf("[SBC] dock labels: nil iconManager\n"); return 0; }
+    usleep(50000);
+
+    // Durable lever first, so a later relayout keeps the setting.
+    uint64_t provider = try_msg0(mgr, "listLayoutProvider");
+    if (provider) {
+        usleep(50000);
+        set_shows_labels_for_location(provider, "SBIconLocationDock", show);
+    }
+
+    uint64_t dock = try_msg0(mgr, "dockListView");
+    if (!dock) dock = try_msg0(iconCtrl, "dockListView");
+    if (!r_is_objc_ptr(dock)) { printf("[SBC] dock labels: nil dockListView\n"); return 0; }
+
+    uint64_t clsIconView = r_class("SBIconView");
+    uint64_t selHidden   = r_sel("setLabelHidden:");
+    uint64_t selIsHidden = r_sel("isLabelHidden");
+    uint64_t selUpdate   = r_sel("_updateLabel");
+    uint64_t selSubs     = r_sel("subviews");
+    uint64_t selCount    = r_sel("count");
+    uint64_t selObjAt    = r_sel("objectAtIndex:");
+    uint64_t selKind     = r_sel("isKindOfClass:");
+    if (!clsIconView || !selHidden) {
+        printf("[SBC] dock labels: SBIconView/setLabelHidden: missing\n");
+        return 0;
+    }
+
+    uint64_t subs = r_msg_main(dock, selSubs, 0, 0, 0, 0);
+    if (!subs) return 0;
+    r_msg_main(subs, r_sel("retain"), 0, 0, 0, 0);
+    uint64_t n = r_msg_main(subs, selCount, 0, 0, 0, 0);
+    if (n > 64) n = 64;   // a dock holds a handful of icons; cap a wild read
+    uint64_t wantHidden = show ? 0 : 1;
+    int changed = 0;
+    for (uint64_t i = 0; i < n; i++) {
+        uint64_t v = r_msg_main(subs, selObjAt, i, 0, 0, 0);
+        if (!v || !r_msg_main(v, selKind, clsIconView, 0, 0, 0)) continue;
+        if (r_msg_main(v, selIsHidden, 0, 0, 0, 0) == wantHidden) continue;   // already right
+        r_msg_main(v, selHidden, wantHidden, 0, 0, 0);
+        r_msg_main(v, selUpdate, 0, 0, 0, 0);
+        changed++;
+    }
+    r_msg_main(subs, r_sel("release"), 0, 0, 0, 0);
+
+    printf("[SBC] dock labels: %s on %d icon view(s)\n", show ? "shown" : "hidden", changed);
+    return changed;
+}
+
+// Public entry point. Called as a late home-screen step, after the dock has been
+// resized and any auto-dock move has run, so every icon view that will exist is
+// there to be relabelled. Session must be open.
+int sbcustomizer_set_dock_labels_in_session(bool show)
+{
+    uint64_t cls = r_class("SBIconController");
+    uint64_t iconCtrl = cls ? r_msg2(cls, "sharedInstance", 0, 0, 0, 0) : 0;
+    if (!r_is_objc_ptr(iconCtrl)) { printf("[SBC] dock labels: no SBIconController\n"); return 0; }
+    return set_dock_icon_labels(iconCtrl, show);
 }
 
 static void patch_homescreen_grid(uint64_t iconCtrl, int cols, int rows, bool hideLabels)
@@ -725,7 +806,7 @@ static void patch_homescreen_grid(uint64_t iconCtrl, int cols, int rows, bool hi
         // Root (home screen) is done above. Folders have their own layout
         // configuration, so extend the label switch to the folder location too.
         if (hideLabels) {
-            set_shows_labels_off_for_location(provider, "SBIconLocationFolder");
+            set_shows_labels_for_location(provider, "SBIconLocationFolder", false);
         }
     } else {
         printf("[SBC] hs: nil listLayoutProvider\n");

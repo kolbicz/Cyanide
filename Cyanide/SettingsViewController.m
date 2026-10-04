@@ -874,6 +874,7 @@ NSString * const kSettingsSBCDockIcons  = @"SBCDockIcons";
 NSString * const kSettingsSBCCols       = @"SBCCols";
 NSString * const kSettingsSBCRows       = @"SBCRows";
 NSString * const kSettingsSBCHideLabels = @"SBCHideLabels";
+NSString * const kSettingsSBCDockLabels = @"SBCDockLabels";
 NSString * const kSettingsSBCArrangePages = @"SBCArrangePages";
 NSString * const kSettingsSBCFirstPageIcons = @"SBCFirstPageIcons";
 NSString * const kSettingsSBCOtherPageIcons = @"SBCOtherPageIcons";
@@ -1487,6 +1488,8 @@ static const NSInteger kSBCDefaultDockIcons = 4;
 static const NSInteger kSBCDefaultCols = 4;
 static const NSInteger kSBCDefaultRows = 6;
 static const BOOL kSBCDefaultHideLabels = NO;
+// Stock iOS draws no dock labels, so off matches the system.
+static const BOOL kSBCDefaultDockLabels = NO;
 static const BOOL kSBCDefaultArrangePages = NO;
 static const NSInteger kSBCDefaultFirstPageIcons = 20;
 static const NSInteger kSBCDefaultOtherPageIcons = 25;
@@ -4323,6 +4326,7 @@ static void settings_reset_sbc_defaults(void)
     [d setInteger:kSBCDefaultCols forKey:kSettingsSBCCols];
     [d setInteger:kSBCDefaultRows forKey:kSettingsSBCRows];
     [d setBool:kSBCDefaultHideLabels forKey:kSettingsSBCHideLabels];
+    [d setBool:kSBCDefaultDockLabels forKey:kSettingsSBCDockLabels];
     [d setBool:kSBCDefaultArrangePages forKey:kSettingsSBCArrangePages];
     [d setInteger:kSBCDefaultFirstPageIcons forKey:kSettingsSBCFirstPageIcons];
     [d setInteger:kSBCDefaultOtherPageIcons forKey:kSettingsSBCOtherPageIcons];
@@ -5836,6 +5840,7 @@ static BOOL settings_key_is_sbc(NSString *key)
            [key isEqualToString:kSettingsSBCCols] ||
            [key isEqualToString:kSettingsSBCRows] ||
            [key isEqualToString:kSettingsSBCHideLabels] ||
+           [key isEqualToString:kSettingsSBCDockLabels] ||
            [key isEqualToString:kSettingsSBCArrangePages] ||
            [key isEqualToString:kSettingsSBCFirstPageIcons] ||
            [key isEqualToString:kSettingsSBCOtherPageIcons] ||
@@ -5849,6 +5854,7 @@ static BOOL settings_key_is_sbc_configuration(NSString *key)
            [key isEqualToString:kSettingsSBCCols] ||
            [key isEqualToString:kSettingsSBCRows] ||
            [key isEqualToString:kSettingsSBCHideLabels] ||
+           [key isEqualToString:kSettingsSBCDockLabels] ||
            [key isEqualToString:kSettingsSBCArrangePages] ||
            [key isEqualToString:kSettingsSBCFirstPageIcons] ||
            [key isEqualToString:kSettingsSBCOtherPageIcons] ||
@@ -6866,6 +6872,7 @@ void settings_register_defaults(void)
         kSettingsSBCCols:       @(kSBCDefaultCols),
         kSettingsSBCRows:       @(kSBCDefaultRows),
         kSettingsSBCHideLabels: @(kSBCDefaultHideLabels),
+        kSettingsSBCDockLabels: @(kSBCDefaultDockLabels),
         kSettingsSBCArrangePages: @(kSBCDefaultArrangePages),
         kSettingsSBCFirstPageIcons: @(kSBCDefaultFirstPageIcons),
         kSettingsSBCOtherPageIcons: @(kSBCDefaultOtherPageIcons),
@@ -7629,6 +7636,29 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                         g_labels_live_stop_requested = 1;
                         sbcustomizer_restore_home_labels();
                         settings_mark_tweak_applied(kSettingsSBCHideLabels, NO);
+                    }
+
+                    // Dock labels run after the home-label step for the same
+                    // reason it runs last: the dock's icon views are rebuilt by
+                    // the resize and the auto-dock move, so this is the first
+                    // point where every view that will exist is there. Applied
+                    // in both directions so turning it back off restores the
+                    // stock bare dock without needing a respring.
+                    if ([d boolForKey:kSettingsSBCEnabled]) {
+                        BOOL wantDockLabels = [d boolForKey:kSettingsSBCDockLabels];
+                        int nDock = sbcustomizer_set_dock_labels_in_session(wantDockLabels);
+                        if (wantDockLabels) {
+                            log_user("[OK] Dock labels shown on %d icon view(s).\n", nDock);
+                            if (settings_current_ios_major() < 18 &&
+                                [d boolForKey:kSettingsSBCHideLabels]) {
+                                // The iOS 17 Hide Labels hook answers NO for every
+                                // SBIconView, so a rebuilt dock icon loses the label
+                                // again. Say so rather than let it look flaky.
+                                log_user("[RUN] Note: Hide icon labels also hides dock labels on "
+                                         "iOS 17; turn it off to keep them.\n");
+                            }
+                        }
+                        settings_mark_tweak_applied(kSettingsSBCDockLabels, wantDockLabels);
                     }
                 }
 
@@ -9706,6 +9736,8 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         @{ @"kind": @"stepper", @"key": kSettingsSBCCols,       @"title": @"Home columns", @"min": @3, @"max": @7, @"default": @(kSBCDefaultCols) },
         @{ @"kind": @"stepper", @"key": kSettingsSBCRows,       @"title": @"Home rows", @"min": @4, @"max": @8, @"default": @(kSBCDefaultRows) },
         @{ @"kind": @"toggle",  @"key": kSettingsSBCHideLabels, @"title": @"Hide icon labels" },
+        @{ @"kind": @"toggle",  @"key": kSettingsSBCDockLabels, @"title": @"Show dock labels",
+           @"subtitle": @"Draws app names under the dock icons, which stock iOS leaves off. On iOS 17 this cannot be combined with Hide icon labels \u2014 that one hides every label in SpringBoard, the dock included." },
         @{ @"kind": @"toggle",  @"key": kSettingsSBCArrangePages, @"title": @"Arrange icons by page" },
         @{ @"kind": @"stepper", @"key": kSettingsSBCFirstPageIcons, @"title": @"First page icons", @"min": @12, @"max": @49, @"default": @(kSBCDefaultFirstPageIcons) },
         @{ @"kind": @"stepper", @"key": kSettingsSBCOtherPageIcons, @"title": @"Other page icons", @"min": @12, @"max": @49, @"default": @(kSBCDefaultOtherPageIcons) },

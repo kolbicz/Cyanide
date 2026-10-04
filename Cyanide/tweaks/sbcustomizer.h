@@ -32,6 +32,12 @@ int sbcustomizer_restore_home_labels(void);
 int sbcustomizer_home_labels_hook_active(void);
 void sbcustomizer_forget_home_labels_hook_state(void);
 
+// Show (or hide) the app-name labels under the dock icons. Stock iOS hides
+// them. Sets the dock icon location's showsLabels (durable on iOS 18) and
+// clears setLabelHidden: on the dock's own icon views (the only lever on
+// iOS 17, and an immediate repaint on both). Returns icon views changed.
+int sbcustomizer_set_dock_labels_in_session(bool show);
+
 // Cheap current-page identity for the Hide Labels loop's change detection.
 uint64_t sbcustomizer_current_page_token(void);
 
