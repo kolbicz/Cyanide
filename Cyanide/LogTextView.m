@@ -90,7 +90,7 @@ static void live_log_open_if_needed(void) {
         time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
         fprintf(live_log_file,
                 "\n# --- Cyanide live log opened %04d-%02d-%02d %02d:%02d:%02d "
-                "(built %s %s, round45) ---\n",
+                "(built %s %s) ---\n",
                 tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
                 tm.tm_hour, tm.tm_min, tm.tm_sec, __DATE__, __TIME__);
         fflush(live_log_file);
@@ -232,7 +232,15 @@ static bool log_line_is_routine_remotecall(const char *msg) {
     if (!log_rc_filter || !msg) return false;
     const char *p = msg;
     while (*p == ' ' || *p == '\t') p++;
-    if (strncmp(p, "[RC]", 4) != 0) return false;   // only filter [RC] lines
+    // RemoteCall emits several prefixes, not just [RC]: the exploit/arm path logs
+    // ~150 function:line debug lines per full run — [init_remote_call_internal:N]
+    // and [do_remote_call_*_internal:N] (per-call retValues). Treat all of them
+    // as routine RemoteCall chatter. [RemoteCall] milestones and [KRW] exploit
+    // progress are NOT filtered (they're the "important" info the user wants).
+    if (strncmp(p, "[RC]", 4) != 0 &&
+        strncmp(p, "[init_remote_call_internal:", 27) != 0 &&
+        strncmp(p, "[do_remote_call_", 16) != 0)
+        return false;   // not a routine RemoteCall-internal line
     // Never hide a line that signals a problem — these must always surface.
     static const char *keep[] = {
         "fail", "error", "refus", "wedg", "violation", "critical",
