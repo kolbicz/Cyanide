@@ -1599,6 +1599,7 @@ bool set_exception_port_on_thread(mach_port_t exceptionPort, uint64_t currThread
 
 static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64_t currThread, bool useMigFilterBypass) {
     bool success = false;
+    bool stopGateLandedInDance = false;   // round 43: gate-aware wedge declaration
 
     void* thread_set_exception_ports_addr = dlsym(RTLD_DEFAULT, "thread_set_exception_ports");
     void* pthread_exit_addr = dlsym(RTLD_DEFAULT, "pthread_exit");
@@ -1732,6 +1733,7 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
         if (remote_call_stop_requested() || excport_gate_blocked()) {
             printf("[RC] arm: stop/gate landed mid tro-dance — aborting this "
                    "candidate's arm (no direct clear)\n");
+            stopGateLandedInDance = true;
             break;
         }
 
@@ -1846,6 +1848,40 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
     for (int i = 0; i < 50; i++) {   // 500 ms bound
         if (helperSlot->exited) { helperExited = true; break; }
         usleep(10000);
+    }
+    // Round 43 (live 44 false positive): if the abort was stop/gate-induced
+    // — the gate closed during the dance, i.e. we are MID-backgrounding —
+    // a 500 ms silence is NOT wedge evidence. The backgrounding transition
+    // itself delays the helper: runningboardd policy-sets our task right
+    // there (holding our task lock, which the helper's in-kernel
+    // thread_set_exception_ports on our dummy thread needs), and our threads
+    // are deprioritized until the transition settles. Re-join instead of
+    // latching: wait while the gate stays closed (bounded 2 s), then a
+    // 500 ms grace after it reopens — ~3.5 s worst case, vs the 184716
+    // window where a TRUE wedge must still latch. Only a helper that is
+    // still silent after the transition has fully settled is declared
+    // wedged.
+    if (!helperExited &&
+        (stopGateLandedInDance || remote_call_stop_requested() || excport_gate_blocked())) {
+        printf("[RC] arm: helper silent after 500 ms but the abort was "
+               "stop/gate-induced (mid-backgrounding) — extending join; the "
+               "transition itself delays the helper, a true wedge still "
+               "latches\n");
+        uint64_t phaseDeadline = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)
+                               + 2ULL * 1000000000ULL;   // gate-closed phase: 2 s
+        while (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) < phaseDeadline) {
+            if (helperSlot->exited) { helperExited = true; break; }
+            if (!excport_gate_blocked() && !remote_call_stop_requested())
+                break;   // gate reopened → grace phase below
+            usleep(50000);
+        }
+        for (int i = 0; !helperExited && i < 50; i++) {   // 500 ms grace
+            if (helperSlot->exited) { helperExited = true; break; }
+            usleep(10000);
+        }
+        if (helperExited)
+            printf("[RC] arm: helper exited during the extended (gate-aware) "
+                   "join — transition delay, NOT a wedge; no latch\n");
     }
     if (helperExited) {
         rc_helper_slot_free(helperSlot);
