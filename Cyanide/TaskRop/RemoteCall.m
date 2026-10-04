@@ -3326,26 +3326,35 @@ static void rc_restore_trapped_thread_for_abort(mach_port_t port, int trapStage,
                                   "abort restore");
         }
     }
-    // Release any OTHER injected thread that trapped (init injects 2). Each
-    // pending message carries that thread's own pre-trap state; replying with
-    // it verbatim resumes the thread exactly where it was.
-    for (int i = 0; i < 8; i++) {
-        ExceptionMessage stray;
-        if (!wait_exception(port, &stray, 150, false)) break;
-        // Round 19: a sentinel park trap here is a parked protocol thread, NOT
-        // a stray — an own-state reply resumes it at the sentinel PC and its
-        // re-fault lands on a port we are abandoning. Leave it for the
-        // teardown drain (which restores it with its original state).
-        if (rc_exc_is_park_trap(&stray)) {
-            printf("[RC] thread restore: abort stray-drain found a PARK TRAP "
-                   "(pc=%#llx) — left queued for the teardown drain\n",
-                   (unsigned long long)stray.threadState.__pc);
-            continue;
-        }
-        reply_with_state(&stray, &stray.threadState);
-        printf("[RC] thread restore: released stray trapped %s thread #%d with its "
-               "own state\n", process, i + 1);
-    }
+    // Round 34 (panic-full-2026-10-03-215535: launchd thread 17081 parked on
+    // Cyanide pid 497 → watchdog timeout, 90 s): do NOT drain strays here.
+    // The old stray-drain loop dequeued every pending trap with wait_exception,
+    // and for a sentinel PARK TRAP it then DROPPED the message — it logged
+    // "left queued for the teardown drain" and continue'd, but wait_exception
+    // had ALREADY consumed it, so it was NOT queued. The parked launchd thread
+    // was stranded on a message nothing could ever see again: abandon's drain
+    // found drained=0, the zero-parked invariant falsely "held," and ~90 s
+    // later launchd wedged the device. This violated the responder's own rule
+    // (rc_firstport_responder_main): "every dequeued message must get one
+    // reply, or the thread is parked on a message the teardown drain can no
+    // longer see."
+    //
+    // The fix (user-chosen "safer" variant): leave EVERY residual trap in the
+    // port queue. Every caller of this function proceeds to abandon_remote_call
+    // / destroy_remote_call_internal, whose symmetric teardown (unarm ->
+    // rc_drain_stray_traps on both ports -> rc_teardown_verify_zero_parked with
+    // its settle + second pass) runs BEFORE the ports are destroyed and is the
+    // only code that restores a park trap correctly (trojan -> ORIGINAL state,
+    // synthetic -> pthread_exit) and resumes non-park EXC_GUARD strays with
+    // their own state — exactly what this loop used to do for the non-park
+    // case, minus the park-trap drop. Nothing is consumed-and-dropped here, so
+    // the one-reply-per-dequeued-message invariant can no longer be violated on
+    // the abort path. (The trapStage==2 block above still restores the PRIMARY
+    // trapped thread and replies to everything it dequeues; this only removes
+    // the buggy secondary stray drain.)
+    printf("[RC] thread restore: leaving residual trapped %s thread(s) queued "
+           "for the symmetric teardown drain (no stray-drain here — it dropped "
+           "park traps and stranded launchd threads)\n", process);
     if (trapStage == 1 && pendingExc) {
         reply_with_state(pendingExc, &g_RC_originalState);
         printf("[RC] thread restore: trapped %s thread resumed with original state "

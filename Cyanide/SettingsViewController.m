@@ -1471,6 +1471,17 @@ static BOOL settings_cleanup_entry_should_stop(NSUserDefaults *d,
     return YES;
 }
 static volatile int g_app_in_background = 0;
+// Round 35: a FRESH SpringBoard hijack (set_exception_ports → AMFI global
+// entitlement lock) must not run while runningboardd / PerfPowerServices apply
+// task_policy_set to our task at launch/activation — the two take the AMFI lock
+// and the task/proc lock in OPPOSITE orders → ABBA deadlock, with launchd caught
+// as our exception server → 90 s watchdog (proven: panic-full-2026-10-03-235811,
+// symbolized identically in kc_22F76/SYMBOLIZATION_REPORT.md panic 1). This is
+// the monotonic deadline until which a fresh SpringBoard establishment waits.
+// Set on every activation/foreground; only the first (automatic launch-time)
+// hijack pays it — a reused session and any user action after the window do not.
+static volatile uint64_t g_activation_settle_until_ns = 0;
+static const uint64_t kActivationSettleNs = 3ULL * 1000000000ULL; // 3 s
 static volatile int g_screen_awake = 1;
 static volatile int g_screen_locked = 0;
 static volatile int g_screen_lock_state_logged = 0;
@@ -3009,6 +3020,33 @@ static BOOL settings_ensure_springboard_remote_call_locked(void)
     if (g_springboard_rc_ready) {
         printf("[SETTINGS] reusing SpringBoard RemoteCall session\n");
         return YES;
+    }
+
+    // Round 35: a FRESH hijack must wait out the activation settle window. Arming
+    // (set_exception_ports → AMFI global entitlement lock) while runningboardd /
+    // PerfPowerServices run task_policy_set on our task at launch/activation is
+    // an ABBA deadlock → 90 s watchdog (panic 235811). Only this first
+    // establishment after an activation waits; the reuse path above and any
+    // later user action (window already elapsed) are unaffected. Interruptible:
+    // bail immediately on backgrounding/cleanup so we never hold across suspend.
+    uint64_t settleUntil = g_activation_settle_until_ns;
+    uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    if (settleUntil > nowNs) {
+        printf("[SETTINGS] SpringBoard hijack deferred ~%llu ms — waiting out the "
+               "launch/activation settle window (runningboardd task_policy_set "
+               "ABBA avoidance)\n",
+               (unsigned long long)((settleUntil - nowNs) / 1000000ULL));
+        while ((nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) < settleUntil) {
+            if (g_app_in_background || settings_cleanup_in_progress() ||
+                excport_gate_blocked()) {
+                printf("[SETTINGS] SpringBoard hijack settle-wait aborted — app "
+                       "backgrounding/cleanup; not arming now\n");
+                return NO;
+            }
+            usleep(100000);   // 100 ms, re-checking the bail conditions
+        }
+        printf("[SETTINGS] activation settle window elapsed — proceeding with "
+               "SpringBoard hijack\n");
     }
 
     for (int attempt = 1; attempt <= kSettingsSpringBoardRCMaxAttempts; attempt++) {
@@ -5900,6 +5938,10 @@ void settings_application_will_enter_foreground(void)
     // gate is a lifecycle fact, not a foreground-work item: open it (and
     // clear the background flag) unconditionally, then gate the rest.
     g_app_in_background = 0;
+    // Round 35: open the activation settle window — a fresh SpringBoard hijack
+    // defers until it elapses (runningboardd task_policy_set ABBA avoidance).
+    g_activation_settle_until_ns =
+        clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) + kActivationSettleNs;
     // Round 21: own-process exception-port traps are allowed again (pair of
     // the backgrounded gate set in settings_application_did_enter_background).
     excport_gate_set_backgrounded(false);
@@ -5923,6 +5965,10 @@ void settings_application_did_become_active(void)
     // Round 31: same reorder as will_enter_foreground — the gate re-open must
     // not depend on the UIApplicationState early return.
     g_app_in_background = 0;
+    // Round 35: refresh the activation settle window (covers launch, where
+    // didBecomeActive fires without a prior willEnterForeground).
+    g_activation_settle_until_ns =
+        clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) + kActivationSettleNs;
     // Round 21: belt-and-braces pair of the backgrounded gate — covers the
     // become-active-without-will-enter-foreground edge (e.g. control-center
     // overlay dismiss after an inactive spell).
