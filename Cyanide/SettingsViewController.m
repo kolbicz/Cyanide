@@ -7622,12 +7622,39 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                         // the per-view live loop only if the hook can't be installed.
                         // iOS 18+ uses the durable config lever (no swizzle there).
                         BOOL legacyLabels = settings_current_ios_major() < 18;
-                        int swizzled = legacyLabels ? sbcustomizer_swizzle_home_labels_hidden() : 0;
+                        BOOL wantDockLabels = [d boolForKey:kSettingsSBCDockLabels];
+
+                        // Both settings drive that one method on iOS 17: hiding home
+                        // labels durably wants NO, showing dock labels wants YES. They
+                        // still combine, because the two levers are not symmetric —
+                        // _updateLabel computes "_shouldShowLabel && !labelHidden", so
+                        // with the answer forced YES the per-view labelHidden pass can
+                        // still hide the home screen. What that costs is durability:
+                        // a page rebuilt on swipe comes back with labelHidden clear,
+                        // so the live loop has to re-hide it. That is exactly what
+                        // Hide Labels did before the swizzle existed, so the only
+                        // price of combining is the polling and the keep-alive.
+                        //
+                        // Install YES first, so the hide pass below is computed
+                        // against the answer that will actually be in place.
+                        int durable = 0;
+                        if (legacyLabels) {
+                            if (wantDockLabels) {
+                                (void)sbcustomizer_swizzle_labels_shown();
+                            } else {
+                                durable = sbcustomizer_swizzle_home_labels_hidden();
+                            }
+                        }
                         int nHid = sbcustomizer_hide_home_labels_in_session();
                         log_user("[OK] Hid labels on %d visible icon view(s)%s.\n",
-                                 nHid, swizzled ? " (durable across pages)" : "");
-                        if (legacyLabels && !swizzled) {
-                            // Hook unavailable — keep the old live loop as a fallback.
+                                 nHid, durable ? " (durable across pages)" : "");
+                        if (legacyLabels && !durable) {
+                            // No durable hook for the home screen — either it was
+                            // unavailable, or dock labels are holding the method.
+                            if (wantDockLabels) {
+                                log_user("[RUN] Hide icon labels is running in live mode so dock "
+                                         "labels can stay on; it re-hides pages as you swipe.\n");
+                            }
                             settings_start_labels_live_loop();
                         } else {
                             settings_mark_tweak_applied(kSettingsSBCHideLabels, YES);
@@ -7647,22 +7674,12 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                     if ([d boolForKey:kSettingsSBCEnabled]) {
                         BOOL wantDockLabels = [d boolForKey:kSettingsSBCDockLabels];
                         BOOL hidingLabels = [d boolForKey:kSettingsSBCHideLabels];
-                        // Both toggles drive the same _shouldShowLabel method on
-                        // iOS 17, so only one may hold it. Hide Labels wins: it is
-                        // the older, broader setting, and it is already installed by
-                        // the block above.
-                        BOOL mayForce = !hidingLabels;
-                        int nDock = sbcustomizer_set_dock_labels_in_session(wantDockLabels, mayForce);
+                        // Always allowed to force the answer now: when Hide Labels is
+                        // also on, the block above has already installed YES for this
+                        // very reason, so the probe below sees it and leaves it alone.
+                        int nDock = sbcustomizer_set_dock_labels_in_session(wantDockLabels, YES);
                         if (wantDockLabels) {
                             log_user("[OK] Dock labels shown on %d icon view(s).\n", nDock);
-                            if (hidingLabels) {
-                                // The iOS 17 Hide Labels hook answers NO for every
-                                // SBIconView, so a rebuilt dock icon loses the label
-                                // again. Say so rather than let it look flaky.
-                                log_user("[RUN] Note: Hide icon labels and Show dock labels use the "
-                                         "same SpringBoard switch; turn Hide icon labels off to keep "
-                                         "dock labels.\n");
-                            }
                         } else if (!hidingLabels) {
                             // Turning dock labels off: drop the forced-YES hook if we
                             // are the ones holding it, so the dock goes back to stock.
@@ -9747,7 +9764,7 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         @{ @"kind": @"stepper", @"key": kSettingsSBCRows,       @"title": @"Home rows", @"min": @4, @"max": @8, @"default": @(kSBCDefaultRows) },
         @{ @"kind": @"toggle",  @"key": kSettingsSBCHideLabels, @"title": @"Hide icon labels" },
         @{ @"kind": @"toggle",  @"key": kSettingsSBCDockLabels, @"title": @"Show dock labels",
-           @"subtitle": @"Draws app names under the dock icons, which stock iOS leaves off. On iOS 17 this cannot be combined with Hide icon labels \u2014 that one hides every label in SpringBoard, the dock included." },
+           @"subtitle": @"Draws app names under the dock icons, which stock iOS leaves off. Combines with Hide icon labels; on iOS 17 that combination makes Hide icon labels poll to re-hide pages as you swipe." },
         @{ @"kind": @"toggle",  @"key": kSettingsSBCArrangePages, @"title": @"Arrange icons by page" },
         @{ @"kind": @"stepper", @"key": kSettingsSBCFirstPageIcons, @"title": @"First page icons", @"min": @12, @"max": @49, @"default": @(kSBCDefaultFirstPageIcons) },
         @{ @"kind": @"stepper", @"key": kSettingsSBCOtherPageIcons, @"title": @"Other page icons", @"min": @12, @"max": @49, @"default": @(kSBCDefaultOtherPageIcons) },
