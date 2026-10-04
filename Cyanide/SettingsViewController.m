@@ -9507,6 +9507,36 @@ static void pm_prewarm_fastkill_session(const char *reason)
         else                      [gPMKillSession abandonRemoteCall];
         gPMKillSession = nil;
     }
+    if (!gPMKillSession) {
+        // Round 39 (panic-full-2026-10-04-082220 "unexpected SIGKILL of
+        // launchd"): a USER kill that has to warm a fresh launchd session must
+        // ALSO wait out the activation settle window. Arming launchd
+        // (set_exception_ports → AMFI global lock) while runningboardd /
+        // PerfPowerServices policy-set our task during the launch/foreground
+        // churn strands a launchd thread → SIGKILL of launchd (082220: user
+        // kill at 08:21:52, INSIDE the settle window, armed 5 launchd threads,
+        // hung → reboot 27 s later). Round 36 gated the automatic pre-warm; the
+        // on-demand kill warm hit the same window. The kill runs off-main (the
+        // row already shows "terminating…"), so a bounded wait is just a brief
+        // delay; bail if the app backgrounds mid-wait (never arm into a suspend).
+        uint64_t settleUntil = g_activation_settle_until_ns;
+        uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        if (settleUntil > nowNs) {
+            printf("[PROCMGR] fastkill: kill warm deferred ~%llu ms — activation "
+                   "settle window (launchd-hijack ⇄ task_policy_set strand "
+                   "avoidance)\n",
+                   (unsigned long long)((settleUntil - nowNs) / 1000000ULL));
+            while ((nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) < settleUntil) {
+                if (g_app_in_background || excport_gate_blocked()) {
+                    printf("[PROCMGR] fastkill: kill warm aborted — app "
+                           "backgrounding during settle wait; not arming "
+                           "launchd\n");
+                    return -2;
+                }
+                usleep(100000);   // 100 ms, re-checking the bail conditions
+            }
+        }
+    }
     BOOL warmed = (gPMKillSession != nil);
     if (!gPMKillSession) {
         printf("[PROCMGR] fastkill: warming launchd RemoteCall session "
