@@ -7488,6 +7488,9 @@ void settings_register_defaults(void)
     // debug toggle survives relaunch and the RemoteCall guard/RC_DEBUG spam
     // stays suppressed unless explicitly enabled.
     remote_call_set_verbose([defaults boolForKey:kSettingsVerboseLoggingEnabled]);
+    // Round 43: keep routine [RC] lines out of the user log unless verbose
+    // debug is on (then show the full firehose for diagnosis).
+    log_set_rc_filter(![defaults boolForKey:kSettingsVerboseLoggingEnabled]);
 }
 
 static void settings_run_actions_internal(BOOL pendingOnly)
@@ -8884,6 +8887,7 @@ static NSString *pm_chip_name(NSString *machine) {
         BOOL now = !verbose;
         [NSUserDefaults.standardUserDefaults setBool:now forKey:kSettingsVerboseLoggingEnabled];
         remote_call_set_verbose(now);
+        log_set_rc_filter(!now);   // verbose on → show all [RC]; off → hide routine
         printf("[SETTINGS] verbose RemoteCall logging %s\n", now ? "ENABLED" : "disabled");
     }]];
 

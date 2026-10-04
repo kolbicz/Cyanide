@@ -90,7 +90,7 @@ static void live_log_open_if_needed(void) {
         time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
         fprintf(live_log_file,
                 "\n# --- Cyanide live log opened %04d-%02d-%02d %02d:%02d:%02d "
-                "(built %s %s, round43) ---\n",
+                "(built %s %s, round44) ---\n",
                 tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
                 tm.tm_hour, tm.tm_min, tm.tm_sec, __DATE__, __TIME__);
         fflush(live_log_file);
@@ -214,8 +214,41 @@ void log_write_raw_no_timestamp(const char *msg) {
     log_write_raw_internal(msg, 1);
 }
 
+// Round 43: keep the user log readable. RemoteCall emits ~200 verbose [RC]
+// internal lines per session (guard acquire/release, thread walks, tro-dance,
+// teardown steps) — useful only when debugging a RemoteCall problem. By default
+// they are suppressed from the in-app log + live.log, EXCEPT lines that signal
+// a problem (so a real failure is never hidden). The Process Viewer "Verbose
+// logging" debug option flips log_rc_filter off to restore the full firehose.
+// Only [RC] lines are touched; tweak ([SETTINGS]/[STATBAR]/…), exploit ([KRW]),
+// and higher-level [RemoteCall]/[PROCMGR] milestones are unaffected.
+static volatile int log_rc_filter = 1;   // 1 = hide routine [RC] lines
+
+void log_set_rc_filter(BOOL hideRoutineRemoteCall) {
+    log_rc_filter = hideRoutineRemoteCall ? 1 : 0;
+}
+
+static bool log_line_is_routine_remotecall(const char *msg) {
+    if (!log_rc_filter || !msg) return false;
+    const char *p = msg;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "[RC]", 4) != 0) return false;   // only filter [RC] lines
+    // Never hide a line that signals a problem — these must always surface.
+    static const char *keep[] = {
+        "fail", "error", "refus", "wedg", "violation", "critical",
+        "unrecoverable", "strand", "abort", "could not", "couldn't",
+        "timeout", "panic", "lost", "orphan", "invalid", "mismatch",
+        "poison", "underflow", "stale", "corrupt", "no trap", "gave up",
+        "landmine", "REPAIR", "zombie", "sabotage",
+    };
+    for (size_t i = 0; i < sizeof(keep) / sizeof(keep[0]); i++)
+        if (strcasestr(msg, keep[i])) return false;   // keep it
+    return true;   // routine [RC] success/progress line — suppress
+}
+
 void log_write(const char *msg) {
     if (!log_verbose_enabled()) return;
+    if (log_line_is_routine_remotecall(msg)) return;
     log_write_raw(msg);
 }
 

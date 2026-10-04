@@ -44,6 +44,11 @@ NSString * _Nullable log_most_recent_session_path(void);
 // context regardless of whether log_session_begin/end ran.
 NSString *log_inapp_buffer_snapshot(void);
 
+// Round 43: when YES (default), routine [RC] RemoteCall lines are kept out of
+// the in-app log + live.log (failures/problems still shown). The Process Viewer
+// "Verbose logging" debug option passes NO to restore the full [RC] firehose.
+void log_set_rc_filter(BOOL hideRoutineRemoteCall);
+
 // Mirror printf into the LogTextView ring buffer. Any TU that imports this
 // header gets its printf calls echoed both to stdout and to the in-app log.
 #define printf(fmt, ...) ({ \
