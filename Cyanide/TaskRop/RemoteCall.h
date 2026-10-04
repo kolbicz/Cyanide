@@ -49,6 +49,11 @@ typedef enum {
     // terminating. Distinct from Other so the fastkill path can tell "try
     // again" (transient) from "we were backgrounded" (deterministic).
     RemoteCallInitFailureLifecycleGated,
+    // Round 43: init refused at entry because a tro-dance helper wedged
+    // earlier this session (fail-closed latch). Distinct so the kill path
+    // can fail FAST (no 3-attempt retry storm — every arm would be refused)
+    // and surface a "restart the app" message instead of "try again".
+    RemoteCallInitFailureHelperWedged,
     RemoteCallInitFailureOther,
 } RemoteCallInitFailure;
 

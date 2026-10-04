@@ -9573,6 +9573,12 @@ static NSString *pm_chip_name(NSString *machine) {
                             // retrying while backgrounded cannot work.
                             msg = @"Cyanide was backgrounded or the screen locked mid-force-quit, so nothing was signalled and the process is still running. Reopen Cyanide and try again.";
                             break;
+                        case -10:
+                            // Round 43: helper-wedge latch set (a kernel call
+                            // stuck from an earlier backgrounding). Retrying
+                            // CANNOT work while latched — say so honestly.
+                            msg = @"A kernel call is stuck from an earlier backgrounding, so Force Quit is disabled for this session — nothing was signalled and the process is still running. Restart Cyanide to re-enable Force Quit.";
+                            break;
                         default:
                             msg = [NSString stringWithFormat:@"Error %d (the process may have already exited).", rc];
                             break;
@@ -9813,6 +9819,16 @@ static volatile int g_prewarm_defer_pending = 0;
 static void pm_prewarm_fastkill_session(const char *reason)
 {
     if (settings_krw_reattach_suppressed()) return;   // backgrounded/screen-off
+    // Round 43: while the helper-wedge latch is set the warm-up cannot
+    // succeed (init fails fast); skip the attempt entirely (one log line
+    // per trigger instead of an init's worth of noise). The latch is
+    // revocable — a late helper exit re-enables the next pre-warm.
+    if (remote_call_helper_unaccounted_count() > 0) {
+        printf("[PROCMGR] fastkill: pre-warm skipped (%s) — helper-wedge latch "
+               "set (a kernel call is stuck from an earlier backgrounding; "
+               "kill path reports restart-needed)\n", reason);
+        return;
+    }
     // Round 36 (panic-full-2026-10-04-080209 "unexpected SIGKILL of launchd"):
     // the AUTOMATIC pre-warm hijacks launchd (set_exception_ports → AMFI global
     // lock) and fires at the activation edge (0.25 s after foreground / on
@@ -9962,6 +9978,20 @@ static void pm_prewarm_fastkill_session(const char *reason)
         log_user("[PROCMGR] kill(%d) refused: app backgrounded mid-kill — "
                  "process still alive, nothing signalled\n", pid);
         return -9;
+    }
+    // Round 43 (live 44): while the helper-wedge latch is set, the launchd
+    // warm-up CANNOT succeed (init fails fast, every arm refused) — refuse
+    // here with a distinct rc so the UI says "restart Cyanide" instead of
+    // "try again" (retrying cannot work while latched). The latch is
+    // revocable: a late helper exit clears it and the next kill works.
+    if (remote_call_helper_unaccounted_count() > 0) {
+        printf("[PROCMGR] fastkill: REFUSING kill(%d) — tro-dance helper wedged "
+               "in-kernel earlier this session (fail-closed latch); the process "
+               "is still alive, nothing was signalled\n", pid);
+        log_user("[PROCMGR] kill(%d) refused: a kernel call is stuck from an "
+                 "earlier backgrounding — restart Cyanide to re-enable Force "
+                 "Quit\n", pid);
+        return -10;
     }
     // Same layer, comm hard-stop — FAIL CLOSED like every other kill entry
     // point: a failed lookup refuses (SpringBoard/backboardd have ordinary

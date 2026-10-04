@@ -931,6 +931,7 @@ const char *remote_call_init_failure_description(RemoteCallInitFailure failure)
         case RemoteCallInitFailureNoTargetThreads: return "no injectable target threads";
         case RemoteCallInitFailureFirstExceptionTimeout: return "target did not deliver bootstrap exception";
         case RemoteCallInitFailureLifecycleGated: return "lifecycle gate closed (app backgrounded/terminating)";
+        case RemoteCallInitFailureHelperWedged: return "tro-dance helper wedged in-kernel earlier this session (fail-closed)";
         case RemoteCallInitFailureOther: return "other RemoteCall init failure";
     }
     return "unknown RemoteCall init failure";
@@ -3881,6 +3882,20 @@ static int init_remote_call_internal(const char* process, bool useMigFilterBypas
         return -1;
     }
 
+    // Round 43 (live 44): while the helper-wedge latch is set every arm is
+    // refused instantly — but pre-43 the init still walked and storm-retried
+    // for ~9 s (3 attempts × refusals + retry_first_thread sleeps + the
+    // hard-budget tail) before failing. Fail FAST at entry; the latch is
+    // revocable (a late helper exit clears it), so a transient wedge
+    // re-enables the next kill automatically.
+    if (atomic_load_explicit(&g_rc_helper_wedged_latch, memory_order_acquire)) {
+        printf("[RC] init: refusing %s hijack — tro-dance helper wedged "
+               "earlier this session (fail-closed latch; fail-fast, no retry "
+               "storm)\n", process ?: "?");
+        remote_call_note_init_failure(RemoteCallInitFailureHelperWedged, 0);
+        return -1;
+    }
+
     uint64_t procAddr;
     if (g_RC_targetProcOverride) {
         procAddr = g_RC_targetProcOverride;
@@ -4155,6 +4170,18 @@ static int init_remote_call_internal(const char* process, bool useMigFilterBypas
             abandon_remote_call();
             return -1;
         }
+        // Round 43: same fail-fast when THIS init's earlier candidate wedged
+        // its helper — every further arm this session is refused, so the
+        // remaining attempts can only storm (live 44: 9 s of refusals after
+        // the wedge). Nothing armed at attempt top → abandon is symmetric.
+        if (atomic_load_explicit(&g_rc_helper_wedged_latch, memory_order_acquire)) {
+            printf("[RC] init: helper-wedge latch set before arm attempt %d/%d "
+                   "— failing FAST (every arm would be refused)\n",
+                   armAttempt, kMaxArmAttempts);
+            remote_call_note_init_failure(RemoteCallInitFailureHelperWedged, targetPid);
+            abandon_remote_call();
+            return -1;
+        }
         // Fresh list head each attempt — churn may have replaced the whole
         // candidate set since the last walk.
         firstThread = kread64(g_RC_taskAddr + off_task_threads_next);
@@ -4229,6 +4256,24 @@ static int init_remote_call_internal(const char* process, bool useMigFilterBypas
             rc_armed_snapshot_forget();
             rc_restore_trapped_thread_for_abort(firstExceptionPort, 0, NULL, process);
             remote_call_note_init_failure(RemoteCallInitFailureOther, targetPid);
+            abandon_remote_call();
+            return -1;
+        }
+        // Round 43: helper-wedge latch set mid-walk (this init's own earlier
+        // candidate wedged its helper) — every further arm is refused, so
+        // the retry path can only burn 1 s sleeps. Abort like a stop request
+        // (live 44: the refusal loop stormed for ~9 s per kill attempt).
+        if (atomic_load_explicit(&g_rc_helper_wedged_latch, memory_order_acquire)) {
+            printf("[RC] init: helper-wedge latch set mid-walk (%d armed, %d "
+                   "candidate(s)) — un-arming and aborting hijack (fail-fast)\n",
+                   successThreadCount, validThreadCount);
+            for (NSNumber *thread in g_RC_threadList) {
+                clear_guard_exception(thread.unsignedLongLongValue);
+                rc_livearm_unregister(thread.unsignedLongLongValue);
+            }
+            rc_armed_snapshot_forget();
+            rc_restore_trapped_thread_for_abort(firstExceptionPort, 0, NULL, process);
+            remote_call_note_init_failure(RemoteCallInitFailureHelperWedged, targetPid);
             abandon_remote_call();
             return -1;
         }
