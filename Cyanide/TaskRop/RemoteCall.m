@@ -1403,7 +1403,18 @@ static void rc_helper_slot_free(RCHelperSlot *slot)
 // several preflights the offset is wrong for this build (signal implausible)
 // and the preflight disables itself, also logged.
 
-#define RC_TASK_LOCK_WORD_OFF 0x0    // offsetof(task, lock.lck_mtx_data)
+// offsetof(task, lock.lck_mtx_data): xnu kern/task.h declares `struct task`
+// with lck_mtx_t lock as its FIRST member, so the lock's owner/state word
+// sits at task+0x00. Build-coupled in principle (a kernel that reorders the
+// task header would move it) — unlike the offsets.m table this value is NOT
+// per-version calibrated; it was validated against the two supported builds
+// (iPhone16,2 / iOS 17.3.1 21D61 and iPhone17,2 / iOS 18.5 22F76) by
+// observing the word read 0 when idle and a kernel-pointer-shaped owner word
+// under contention. The runtime implausibility guard in
+// rc_arm_preflight_should_defer (never reads 0 across the first 8 preflights
+// → disable, logged) covers a wrong offset on any other build: the preflight
+// fails OPEN, never stuck deferring.
+#define RC_TASK_LOCK_WORD_OFF 0x0
 #define RC_ARM_PREFLIGHT_BUDGET_NS (900ULL * 1000000ULL)
 
 typedef struct {
