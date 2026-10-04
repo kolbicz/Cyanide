@@ -10502,7 +10502,11 @@ static const NSInteger kPasscodePreviewRow = 1;
     return @[
         @{ @"title": @"OTA Updates",       @"icon": @"icloud.slash.fill",    @"color": [UIColor systemGrayColor],   @"section": @(SectionOTA) },
         @{ @"title": @"Watch Pairing",     @"icon": @"applewatch.radiowaves.left.and.right", @"color": [UIColor systemPurpleColor], @"section": @(SectionNanoRegistry) },
-        @{ @"title": @"Process Viewer",    @"icon": @"list.bullet.rectangle.fill", @"color": [UIColor systemGrayColor], @"section": @(-1), @"custom": @"procmgr" },
+        // Process Viewer is deliberately not listed: it is still WIP and must not
+        // ship in a release. Everything behind it stays — ProcessManagerViewController,
+        // utils/process.m, and the "procmgr" branch in didSelectRowAtIndexPath — so
+        // putting the row back is this one line and nothing else.
+        //   @{ @"title": @"Process Viewer",    @"icon": @"list.bullet.rectangle.fill", @"color": [UIColor systemGrayColor], @"section": @(-1), @"custom": @"procmgr" },
     ];
 }
 
