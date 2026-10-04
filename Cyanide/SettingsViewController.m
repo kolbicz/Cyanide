@@ -2595,11 +2595,26 @@ static void settings_safe_detach_drain_and_end(UIBackgroundTaskIdentifier task,
         const uint64_t deadlineNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)
                                   + 8ULL * 1000000000ULL;   // 8 s bound
         int waited = 0;
+        // Round 41: also wait on the tro-dance helper liveness count. The
+        // round-40 drain polled only remote_call_inflight_count() — but a
+        // helper wedged in-kernel (the 184716 ABBA class) is invisible to
+        // that count (guard ops only), so the window could be released with
+        // a Cyanide thread parked in-kernel: the exact un-reaped-corpse
+        // shape this drain exists to prevent.
         while (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) < deadlineNs) {
-            if (remote_call_inflight_count() == 0)
+            if (remote_call_inflight_count() == 0 &&
+                remote_call_helper_unaccounted_count() == 0)
                 break;
             usleep(100000);   // 100 ms
             waited++;
+        }
+        if (remote_call_helper_unaccounted_count() != 0) {
+            printf("[SETTINGS] safe-detach: tro-dance helper WEDGED in-kernel "
+                   "(unaccounted=%d, %s) — process must not exit; a corpse "
+                   "would wedge on reopen\n",
+                   remote_call_helper_unaccounted_count(), why);
+            log_user("[WARN] Cyanide cannot safely exit — a kernel call is "
+                     "stuck; keep the app open or reboot soon.\n");
         }
         if (remote_call_inflight_count() != 0)
             printf("[SETTINGS] safe-detach: in-flight RemoteCall op STILL live after "
@@ -3439,6 +3454,20 @@ void settings_best_effort_termination_cleanup(const char *reason)
                    remote_call_inflight_count() == 0
                        ? "drained — clean exit"
                        : "STILL live (wedged in-kernel) — exiting anyway");
+        }
+        // Round 41: the in-flight count does NOT cover a tro-dance helper
+        // wedged in-kernel (it counts guard ops only). Exiting with such a
+        // thread live is the un-reaped-corpse shape (live 41) — say so
+        // LOUDLY instead of going quietly. (We cannot block termination on
+        // it: the count never clears once wedged, and the UIKit watchdog
+        // would SIGKILL us anyway — which at least reaps the corpse.)
+        if (remote_call_helper_unaccounted_count() != 0) {
+            printf("[SETTINGS] termination: tro-dance helper WEDGED in-kernel "
+                   "(unaccounted=%d) — exiting anyway; reopen may black-screen "
+                   "until the corpse is reaped\n",
+                   remote_call_helper_unaccounted_count());
+            log_user("[WARN] Cyanide cannot safely exit — a kernel call is "
+                     "stuck; keep the app open or reboot soon.\n");
         }
     } @finally {
         __sync_lock_release(&g_settings_actions_running);
