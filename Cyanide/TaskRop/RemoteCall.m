@@ -121,6 +121,19 @@ static __thread int t_rc_guard_held = 0;
 
 static bool remote_call_verbose_logging(void);   // defined below, near RC_DEBUG
 
+// Round 37: the per-op guard acquire/release lines fire at the OUTERMOST op
+// (n==1 / n==0), where `what` is the top-level label. Process Viewer kills wrap
+// in the external "fastkill"/"fastkill-prewarm" guard; SpringBoard tweak applies
+// and their live-repair loops run as "call-stable"/"init-hijack"/"destroy" with
+// no external guard. The verbose/debug toggle exists to debug the PROCESS
+// VIEWER — so scope these boundary lines to the fastkill context and stop them
+// spamming the log on every tweak-loop tick. (RC_DEBUG, hijack/trap/teardown
+// and strand logs are unaffected.)
+static inline bool rc_what_is_procviewer(const char *what)
+{
+    return what && strncmp(what, "fastkill", 8) == 0;
+}
+
 // Returns false when the detach gate is closed — the caller must NOT touch the
 // target (fail-fast beats starting a call whose KRW dies mid-flight).
 // bypassGate is for cleanup paths (destroy/abandon): they are part of the
@@ -147,7 +160,7 @@ static bool remote_call_inflight_begin_ex(const char *what, bool bypassGate)
     int n = g_rc_inflight_count;
     pthread_mutex_unlock(&g_rc_inflight_mutex);
     t_rc_guard_held++;
-    if (n == 1 && remote_call_verbose_logging())
+    if (n == 1 && remote_call_verbose_logging() && rc_what_is_procviewer(what))
         printf("[RC] guard acquire (%s) — KRW detach must wait\n", what);
     return true;
 }
@@ -167,7 +180,7 @@ static void remote_call_inflight_end(const char *what)
     pthread_cond_broadcast(&g_rc_inflight_cond);
     pthread_mutex_unlock(&g_rc_inflight_mutex);
     if (t_rc_guard_held > 0) t_rc_guard_held--;   // pairs with begin_ex (same thread)
-    if (n == 0 && remote_call_verbose_logging())
+    if (n == 0 && remote_call_verbose_logging() && rc_what_is_procviewer(what))
         printf("[RC] guard release (%s) — all RemoteCall ops drained\n", what);
 }
 
