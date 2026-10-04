@@ -944,8 +944,19 @@ static bool remote_call_verbose_logging(void)
 
 static bool remote_call_should_log_result(const char *name, bool stable)
 {
-    if (remote_call_verbose_logging())
-        return true;
+    // Round 38: the quiet-list below is now honored EVEN under the runtime
+    // verbose/debug toggle. Previously `if (verbose) return true` here bypassed
+    // it, so turning the Process Viewer debug option on flooded the chain log
+    // with 100k+ no-value per-call retValue lines on a single tweak apply
+    // (objc_msgSend alone ~60k, malloc/free ~18k). The debug toggle should help
+    // debug the Process Viewer, not drown the log in objc/alloc churn — so a
+    // quiet symbol stays quiet, and verbose only governs the MEANINGFUL calls
+    // (below). A dev who genuinely wants the full firehose sets RC_VERBOSE_ALL.
+    {
+        const char *all = getenv("RC_VERBOSE_ALL");
+        if (all && all[0] && strcmp(all, "0") != 0)
+            return true;
+    }
 
     if (!name)
         return true;
