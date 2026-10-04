@@ -78,3 +78,16 @@ chain-*.log
 
 # Internal stability/analysis notes (kernel offsets, device details; keep local)
 CYANIDE_STABILITY_NOTES.md
+
+# Large local research artifacts — NEVER commit (multi-GB / big binaries)
+*.ipsw
+*.ips
+kernelcache*
+kc_*/
+# Reference checkouts / disassembly dumps (local only)
+cocoatop-ref/
+lara-ref/
+tools/
+docs/
+# Persistent live logs (contain kernel addresses; keep local)
+logs/
