@@ -23,6 +23,7 @@
 #import "tweaks/killallapps.h"
 #import "tweaks/themer.h"
 #import "tweaks/snowboardlite.h"
+#import "tweaks/passcode_theme.h"
 #import "tweaks/livewp.h"
 #import "tweaks/gravitylite.h"
 #import "tweaks/appswitchergrid.h"
@@ -2713,6 +2714,41 @@ static NSArray<NSString *> *powercuff_levels(void) {
     return @[ @"off", @"nominal", @"light", @"moderate", @"heavy" ];
 }
 
+// The window tint is the real accent colour: while a modal (the activity log)
+// is up, the settings view is dimmed and self.view.tintColor returns a grey.
+// That grey is a concrete UIColor, so once it is written into a cell it stays
+// there after the modal closes — the buttons looked disabled until the cell
+// was rebuilt. Reading the tint off the window avoids the dimmed value.
+static UIColor *settings_cell_tint_color(UIView *view)
+{
+    // UIColor.tintColor is dynamic: UIKit resolves it against the tint of the
+    // view it is drawn in, at draw time. Reading self.view.tintColor instead
+    // freezes a concrete value — and while a modal (the activity log) dims the
+    // panel, that value is a desaturated grey, which then stayed on the cell
+    // after the modal closed. A dynamic colour also survives a reload that
+    // happens while the dim is still up.
+    if (@available(iOS 15.0, *)) return UIColor.tintColor;
+    return view.window.tintColor ?: view.tintColor;
+}
+
+// The import mode lives on the picker instance, not on the controller: several
+// pickers share this delegate, so a mode stored on the controller could leak
+// from one sheet into the next. Associating it also means there is nothing to
+// clean up — the mode dies with the picker.
+static const void *kSettingsPickerModeKey = &kSettingsPickerModeKey;
+
+static void settings_set_picker_mode(UIDocumentPickerViewController *picker, NSString *mode)
+{
+    if (!picker) return;
+    objc_setAssociatedObject(picker, kSettingsPickerModeKey, mode, OBJC_ASSOCIATION_COPY_NONATOMIC);
+}
+
+static NSString *settings_picker_mode(UIDocumentPickerViewController *picker)
+{
+    if (!picker) return nil;
+    return objc_getAssociatedObject(picker, kSettingsPickerModeKey);
+}
+
 static NSComparisonResult settings_compare_system_version(NSString *target)
 {
     NSString *version = UIDevice.currentDevice.systemVersion ?: @"0";
@@ -4490,6 +4526,45 @@ BOOL settings_apply_call_recording_sound_disabled(BOOL disabled)
             return NO;
         }
         return call_recording_sound_set_disabled(disabled) ? YES : NO;
+    } @finally {
+        settings_release_actions_lock();
+    }
+}
+
+BOOL settings_apply_passcode_theme_now(BOOL apply)
+{
+    if (!settings_try_claim_actions_lock("Passcode style apply",
+                                         "[PASSCODE] Another action is already running.")) {
+        return NO;
+    }
+
+    // No session handling here, same as every other panel action (Call
+    // Recording, Hide Home Bar, Watch Pairing): the log lines go to the in-app
+    // buffer and, when a chain session file is open, are appended to it. After a
+    // fresh launch the queue run is what opens that file.
+    @try {
+        if (!settings_ensure_kexploit()) {
+            log_user("[PASSCODE] Failed: kernel primitives were not acquired. Please try running chain again.\n");
+            return NO;
+        }
+
+        if (!apply) {
+            // nil: the cache path is resolved inside, after the sandbox is unlocked.
+            return settings_passcode_restore_originals(nil) ? YES : NO;
+        }
+
+        NSDictionary *theme = settings_passcode_selected_theme();
+        if (!theme) {
+            log_user("[PASSCODE] Failed: no style is selected. Import or build one first.\n");
+            return NO;
+        }
+
+        NSDictionary<NSString *, NSData *> *digits = settings_passcode_theme_digit_images(theme);
+        if (digits.count == 0) {
+            log_user("[PASSCODE] Failed: the selected style has no digit art.\n");
+            return NO;
+        }
+        return settings_passcode_apply_digits(digits) ? YES : NO;
     } @finally {
         settings_release_actions_lock();
     }
@@ -7740,12 +7815,202 @@ static NSString *settings_pretty_date_for_iso(NSString *iso)
 @property (nonatomic, assign) BOOL changelogExpanded;
 // Set by returnToInstaller; consumed in viewDidDisappear. See both.
 @property (nonatomic, assign) BOOL unwindSettingsStackWhenHidden;
-@property (nonatomic, copy)   NSString *pendingThemeImportMode;
+@property (nonatomic, copy)   NSString *pendingPasscodeDigit;
+- (void)handlePasscodeBackupImport:(NSArray<NSURL *> *)urls;
+- (void)handlePasscodeBackupRowLongPress:(UILongPressGestureRecognizer *)recognizer;
+- (void)presentPasscodeBackupDeletion;
+- (NSString *)passcodeDeletionMessageForBackups:(NSUInteger)backups digits:(NSUInteger)digits remaining:(NSInteger)remaining;
+- (void)deletePasscodeBackupsConfirmed;
 @property (nonatomic, assign) BOOL qlStandalone;
 @property (nonatomic, strong) NSString *qlScriptName;
 @property (nonatomic, strong) NSString *qlRawScript;
 @property (nonatomic, strong) NSMutableDictionary *qlValues;
 @property (nonatomic, strong) NSArray *qlParams;
+@end
+
+// Keypad mock for the Passcode Style panel: draws the 3x4 Lock Screen gesture
+// grid with each digit's selected art, falling back to the plain digit, and
+// reports taps so the panel can open the photo picker for that key.
+@interface CYPasscodeKeypadPreviewView : UIView
+@property (nonatomic, copy) NSDictionary<NSString *, NSData *> *digitArt;
+@property (nonatomic, copy) void (^onDigitTapped)(NSString *digit);
+@end
+
+@interface CYPasscodeKeypadPreviewView ()
+// Decoded once per data change; drawing runs on every redraw, so decoding here
+// keeps scrolling from re-parsing the PNGs.
+@property (nonatomic, copy) NSDictionary<NSString *, UIImage *> *digitImages;
+@end
+
+// Grid geometry, shared by drawing and hit testing.
+typedef struct {
+    CGRect  card;
+    CGFloat cell;
+    CGFloat spacing;
+    CGPoint origin;
+} CYPasscodeKeypadMetrics;
+
+static CYPasscodeKeypadMetrics CYPasscodeKeypadMetricsForBounds(CGRect bounds)
+{
+    static const CGFloat padding = 12.0;
+    static const CGFloat spacing = 10.0;
+    static const CGFloat verticalInset = 6.0;
+
+    CYPasscodeKeypadMetrics metrics;
+    metrics.spacing = spacing;
+    metrics.cell = MIN((CGRectGetWidth(bounds) - padding * 2.0 - spacing * 2.0) / 3.0,
+                       (CGRectGetHeight(bounds) - verticalInset * 2.0 - padding * 2.0 - spacing * 3.0) / 4.0);
+
+    if (metrics.cell < 1.0) {
+        metrics.cell = 0.0;
+        metrics.card = CGRectZero;
+        metrics.origin = CGPointZero;
+        return metrics;
+    }
+
+    CGSize grid = CGSizeMake(metrics.cell * 3.0 + spacing * 2.0,
+                             metrics.cell * 4.0 + spacing * 3.0);
+    // The card hugs the grid instead of filling the row, so the keys keep a
+    // tight, deliberate frame at any width.
+    metrics.card = CGRectMake(CGRectGetMidX(bounds) - (grid.width + padding * 2.0) / 2.0,
+                              CGRectGetMidY(bounds) - (grid.height + padding * 2.0) / 2.0,
+                              grid.width + padding * 2.0,
+                              grid.height + padding * 2.0);
+    metrics.origin = CGPointMake(CGRectGetMidX(metrics.card) - grid.width / 2.0,
+                                 CGRectGetMidY(metrics.card) - grid.height / 2.0);
+    return metrics;
+}
+
+// 1-9 then 0 in the middle of the last row; the empty corners stay blank,
+// exactly like the Lock Screen keypad.
+static NSInteger CYPasscodeKeypadDigitAtIndex(NSInteger index)
+{
+    static const NSInteger kLayout[12] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, -1, 0, -1 };
+    if (index < 0 || index > 11) return -1;
+    return kLayout[index];
+}
+
+static CGRect CYPasscodeKeypadFrame(NSInteger index, CYPasscodeKeypadMetrics metrics)
+{
+    return CGRectMake(metrics.origin.x + (index % 3) * (metrics.cell + metrics.spacing),
+                      metrics.origin.y + (index / 3) * (metrics.cell + metrics.spacing),
+                      metrics.cell, metrics.cell);
+}
+
+static UIFont *CYPasscodeKeypadDigitFont(CGFloat size)
+{
+    UIFont *base = [UIFont systemFontOfSize:size weight:UIFontWeightMedium];
+    UIFontDescriptor *rounded = [base.fontDescriptor fontDescriptorWithDesign:UIFontDescriptorSystemDesignRounded];
+    return rounded ? [UIFont fontWithDescriptor:rounded size:size] : base;
+}
+
+@implementation CYPasscodeKeypadPreviewView
+
+- (void)setDigitArt:(NSDictionary<NSString *, NSData *> *)digitArt
+{
+    _digitArt = [digitArt copy];
+
+    NSMutableDictionary<NSString *, UIImage *> *images = [NSMutableDictionary dictionary];
+    for (NSString *key in digitArt) {
+        NSData *data = digitArt[key];
+        if (data.length == 0) continue;
+        UIImage *image = [UIImage imageWithData:data];
+        if (image) images[key] = image;
+    }
+    _digitImages = [images copy];
+    [self setNeedsDisplay];
+}
+
+- (void)drawRect:(CGRect)rect
+{
+    (void)rect;
+
+    CYPasscodeKeypadMetrics metrics = CYPasscodeKeypadMetricsForBounds(self.bounds);
+    if (metrics.cell <= 0.0) return;
+
+    CGContextRef context = UIGraphicsGetCurrentContext();
+    if (!context) return;
+
+    // Neutral system styling: the card only groups the keys, so the preview sits
+    // inside the settings list instead of shouting over it. Every colour here
+    // follows light and dark mode on its own.
+    UIBezierPath *card = [UIBezierPath bezierPathWithRoundedRect:metrics.card cornerRadius:20.0];
+    [[UIColor tertiarySystemGroupedBackgroundColor] setFill];
+    [card fill];
+
+    NSDictionary *attributes = @{
+        NSFontAttributeName: CYPasscodeKeypadDigitFont(metrics.cell * 0.40),
+        NSForegroundColorAttributeName: UIColor.labelColor,
+    };
+
+    for (NSInteger index = 0; index < 12; index++) {
+        NSInteger digit = CYPasscodeKeypadDigitAtIndex(index);
+        if (digit < 0) continue;
+
+        CGRect frame = CYPasscodeKeypadFrame(index, metrics);
+        UIBezierPath *shape = [UIBezierPath bezierPathWithOvalInRect:frame];
+        [[UIColor secondarySystemGroupedBackgroundColor] setFill];
+        [shape fill];
+        // One neutral hairline for every key. The digit art itself already marks a
+        // customised key, so no accent colour belongs here.
+        [[UIColor separatorColor] setStroke];
+        shape.lineWidth = 1.0;
+        [shape stroke];
+
+        NSString *key = [NSString stringWithFormat:@"%ld", (long)digit];
+        UIImage *image = self.digitImages[key];
+
+        if (image && image.size.width > 0.0 && image.size.height > 0.0) {
+            // Aspect-fit inside the key circle, like the upstream implementation's
+            // scaledToFit.
+            CGFloat scale = MIN(CGRectGetWidth(frame) / image.size.width,
+                                CGRectGetHeight(frame) / image.size.height);
+            CGSize drawSize = CGSizeMake(image.size.width * scale, image.size.height * scale);
+
+            CGContextSaveGState(context);
+            [shape addClip];
+            [image drawInRect:CGRectMake(CGRectGetMidX(frame) - drawSize.width / 2.0,
+                                         CGRectGetMidY(frame) - drawSize.height / 2.0,
+                                         drawSize.width, drawSize.height)];
+            CGContextRestoreGState(context);
+        } else {
+            CGSize size = [key sizeWithAttributes:attributes];
+            [key drawAtPoint:CGPointMake(CGRectGetMidX(frame) - size.width / 2.0,
+                                         CGRectGetMidY(frame) - size.height / 2.0)
+              withAttributes:attributes];
+        }
+    }
+}
+
+- (NSString *)digitAtPoint:(CGPoint)point
+{
+    CYPasscodeKeypadMetrics metrics = CYPasscodeKeypadMetricsForBounds(self.bounds);
+    if (metrics.cell <= 0.0) return nil;
+
+    for (NSInteger index = 0; index < 12; index++) {
+        NSInteger digit = CYPasscodeKeypadDigitAtIndex(index);
+        if (digit < 0) continue;
+
+        // A slightly padded target keeps the small keys easy to hit.
+        CGRect target = CGRectInset(CYPasscodeKeypadFrame(index, metrics), -4.0, -4.0);
+        if (CGRectContainsPoint(target, point)) {
+            return [NSString stringWithFormat:@"%ld", (long)digit];
+        }
+    }
+    return nil;
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
+{
+    (void)event;
+    UITouch *touch = touches.anyObject;
+    if (!touch) return;
+
+    NSString *digit = [self digitAtPoint:[touch locationInView:self]];
+    if (digit.length == 0) return;
+    if (self.onDigitTapped) self.onDigitTapped(digit);
+}
+
 @end
 
 // Singleton delegate so MFMailCompose's host VC doesn't need to conform. Lives
@@ -9190,7 +9455,7 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
     [btn setImage:chevron forState:UIControlStateNormal];
     [btn setTitle:[@" " stringByAppendingString:label] forState:UIControlStateNormal];
     btn.titleLabel.font = [UIFont systemFontOfSize:17.0 weight:UIFontWeightRegular];
-    btn.tintColor = self.view.tintColor;
+    btn.tintColor = settings_cell_tint_color(self.view);
     btn.contentEdgeInsets = UIEdgeInsetsMake(0, 0, 0, 4);
     [btn addTarget:self action:@selector(returnToInstaller) forControlEvents:UIControlEventTouchUpInside];
     [btn sizeToFit];
@@ -9280,6 +9545,11 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
 - (void)viewWillAppear:(BOOL)animated
 {
     [super viewWillAppear:animated];
+    // UIKit normally restores the presenting view's tint when a modal closes,
+    // but an interrupted presentation can leave the mode Dimmed, and a dimmed
+    // view renders every tint-derived colour desaturated. Re-arm it here, at
+    // the point where this view is guaranteed to be uncovered again.
+    self.view.tintAdjustmentMode = UIViewTintAdjustmentModeAutomatic;
     [self reloadManualActions];
 
     // The NanoRegistry plist lives behind a sandbox wall on-device. Keep the
@@ -9799,6 +10069,136 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
     return rows;
 }
 
+// Row index of the keypad preview inside passcodeThemeRows. heightForRowAtIndexPath
+// reads it directly so row sizing never has to build the rows array.
+static const NSInteger kPasscodePreviewRow = 1;
+
+- (NSArray<NSDictionary *> *)passcodeThemeRows
+{
+    NSDictionary *theme = settings_passcode_selected_theme();
+    NSSet<NSString *> *presentDigits = theme ? settings_passcode_theme_digit_presence(theme)
+                                              : [NSSet set];
+    PTPasscodeStyleState styleState = theme ? settings_passcode_style_state()
+                                            : PTPasscodeStyleStateNotApplied;
+
+    NSMutableArray<NSDictionary *> *rows = [NSMutableArray array];
+
+    // "Unknown" is its own case on purpose: right after a reboot the cache
+    // cannot be read without kernel access, but the style is still in place on
+    // disk. Claiming "not applied" there would be wrong.
+    NSString *stateText = @"not applied";
+    if (styleState == PTPasscodeStyleStateApplied) {
+        stateText = @"in use";
+    } else if (styleState == PTPasscodeStyleStateUnknown) {
+        stateText = @"unknown (needs kernel access)";
+    }
+
+    [rows addObject:@{
+        @"kind": @"info",
+        @"title": @"Selected Style",
+        @"subtitle": theme
+            ? [NSString stringWithFormat:@"%@ · %lu/10 digits · %@",
+                                       settings_passcode_selected_theme_display_name(),
+                                       (unsigned long)presentDigits.count,
+                                       stateText]
+            : @"None selected. Import a style below, or tap a key in the preview.",
+    }];
+
+    [rows addObject:@{ @"kind": @"passcode-preview" }];
+
+    [rows addObject:@{ @"kind": @"button",
+                       @"title": @"Import Style (.passthm/ZIP)…",
+                       @"action": @"passcode-import" }];
+
+    if (theme) {
+        [rows addObject:@{ @"kind": @"button",
+                           @"title": @"Apply Style Now",
+                           @"action": @"passcode-apply" }];
+        [rows addObject:@{ @"kind": @"button",
+                           @"title": @"Clear Selected Style",
+                           @"action": @"passcode-clear",
+                           @"destructive": @YES }];
+    }
+
+    // Saved originals are the only state worth a row: they decide whether Restore has
+    // anything to write back. Cache paths and file counts live in the log.
+    NSUInteger backups = settings_passcode_theme_backup_count();
+    NSUInteger backupDigits = settings_passcode_backup_digit_count();
+    [rows addObject:@{
+        @"kind": @"info",
+        @"title": @"Originals",
+        @"subtitle": backups > 0
+            ? [NSString stringWithFormat:@"%lu file(s) across %lu digit(s) saved",
+                                         (unsigned long)backups, (unsigned long)backupDigits]
+            : @"None saved yet. Restore needs a saved original to write back.",
+    }];
+
+    [rows addObject:@{ @"kind": @"button",
+                       @"title": @"Restore Original Digits",
+                       @"action": @"passcode-restore",
+                       @"destructive": @YES }];
+
+    // Transferring originals stays at the bottom: a .zip of originals is not a style,
+    // so it must not read as part of the style actions above.
+    if (backups > 0) {
+        [rows addObject:@{ @"kind": @"button",
+                           @"title": @"Export Originals…",
+                           @"action": @"passcode-export-backups" }];
+    }
+    [rows addObject:@{ @"kind": @"button",
+                       @"title": @"Import Originals…",
+                       @"action": @"passcode-import-backups" }];
+
+    return rows;
+}
+
+- (UITableViewCell *)buildPasscodePreviewCellInTableView:(UITableView *)tableView
+{
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"passcode-preview"];
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                      reuseIdentifier:@"passcode-preview"];
+    }
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    cell.textLabel.text = nil;
+    cell.detailTextLabel.text = nil;
+    cell.accessoryView = nil;
+    cell.accessoryType = UITableViewCellAccessoryNone;
+    for (UIView *view in [cell.contentView.subviews copy]) [view removeFromSuperview];
+
+    CYPasscodeKeypadPreviewView *preview =
+        [[CYPasscodeKeypadPreviewView alloc] initWithFrame:CGRectZero];
+    preview.translatesAutoresizingMaskIntoConstraints = NO;
+    preview.backgroundColor = UIColor.clearColor;
+    [cell.contentView addSubview:preview];
+
+    // The preview shows what the Lock Screen will look like after applying: the
+    // selected style's digits, with the cache's current art behind them for any
+    // digit the style does not cover. With no style selected it is simply the
+    // current keypad.
+    NSMutableDictionary<NSString *, NSData *> *art =
+        [settings_passcode_current_digit_images() mutableCopy];
+    NSDictionary *theme = settings_passcode_selected_theme();
+    if (theme) {
+        [art addEntriesFromDictionary:settings_passcode_theme_digit_images(theme)];
+    }
+    preview.digitArt = art;
+
+    __weak typeof(self) weakSelf = self;
+    preview.onDigitTapped = ^(NSString *digit) {
+        [weakSelf presentPasscodeDigitPicker:digit];
+    };
+
+    UILayoutGuide *margins = cell.contentView.layoutMarginsGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [preview.leadingAnchor constraintEqualToAnchor:margins.leadingAnchor],
+        [preview.trailingAnchor constraintEqualToAnchor:margins.trailingAnchor],
+        [preview.topAnchor constraintEqualToAnchor:margins.topAnchor],
+        [preview.bottomAnchor constraintEqualToAnchor:margins.bottomAnchor],
+    ]];
+    return cell;
+}
+
 - (NSArray<NSDictionary *> *)liveWPRows
 {
     NSMutableArray<NSDictionary *> *rows = [NSMutableArray arrayWithArray:@[
@@ -9949,6 +10349,17 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         [out addObject:@{@"title": @"Theme", @"value": settings_themer_selected_theme_display_name()}];
     } else if (section == SectionSnowBoardLite) {
         [out addObject:@{@"title": @"Theme", @"value": settings_snowboardlite_selected_theme_display_name()}];
+    } else if (section == SectionPasscodeTheme) {
+        NSDictionary *passcodeTheme = settings_passcode_selected_theme();
+        [out addObject:@{@"title": @"Style",
+                         @"value": passcodeTheme ? settings_passcode_selected_theme_display_name() : @"None selected"}];
+        if (passcodeTheme) {
+            [out addObject:@{@"title": @"Digits in style",
+                             @"value": [NSString stringWithFormat:@"%lu/10",
+                                        (unsigned long)settings_passcode_theme_digit_presence(passcodeTheme).count]}];
+        }
+        [out addObject:@{@"title": @"Saved originals",
+                         @"value": [@(settings_passcode_theme_backup_count()) stringValue]}];
     } else if (section == SectionLiveWP) {
         [out addObject:@{@"title": @"Video", @"value": settings_livewp_video_detail()}];
     } else if (section == SectionLocationSim) {
@@ -9986,6 +10397,7 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         case SectionGravityLite: return self.gravityLiteRows;
         case SectionLocationSim: return self.locationSimRows;
         case SectionSnowBoardLite: return self.snowboardLiteRows;
+        case SectionPasscodeTheme: return self.passcodeThemeRows;
         case SectionLiveWP: return self.liveWPRows;
         case SectionQuickLoader: return self.quickLoaderRows;
         case SectionRepoTweaks: return self.repoTweaksRows;
@@ -10022,6 +10434,7 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         @{ @"title": @"Drag Coefficient",   @"icon": @"dial.medium.fill",                    @"color": [UIColor systemIndigoColor], @"section": @(SectionDragCoefficient) },
         @{ @"title": @"Home Layout Extras", @"icon": @"square.dashed.inset.filled",          @"color": [UIColor systemPurpleColor], @"section": @(SectionLayoutExtras) },
         @{ @"title": @"Lock Screen Duration", @"icon": @"lock.rectangle.on.rectangle",       @"color": [UIColor systemIndigoColor], @"section": @(SectionLockScreenDuration) },
+        @{ @"title": @"Passcode Style",     @"icon": @"circle.grid.3x3.fill",                @"color": [UIColor systemPinkColor],   @"section": @(SectionPasscodeTheme) },
     ];
 }
 
@@ -10222,6 +10635,9 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
     if (s == SectionLiveWP) {
         return @"Video wallpaper ported from d1y/cyanide-ios. Select an MP4, MOV, or M4V; Cyanide copies it into Documents/LiveWP and plays it in SpringBoard while the RemoteCall session stays alive.";
     }
+    if (s == SectionPasscodeTheme) {
+        return @"Replaces the Lock Screen keypad artwork with a style you import here. Every write is verified, and each keypad original is saved before the first change so Restore Original Digits can put the stock art back. Run the chain at least once first so kernel access is active. Lock and unlock (or respring) to see the change; touch and hold Import Originals to erase the saved originals.";
+    }
     return nil;
 }
 
@@ -10403,7 +10819,7 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
     cell.imageView.image = nil;
     cell.textLabel.text = @"See all releases on GitHub";
     cell.textLabel.font = [UIFont systemFontOfSize:15.0];
-    cell.textLabel.textColor = self.view.tintColor;
+    cell.textLabel.textColor = settings_cell_tint_color(self.view);
     cell.detailTextLabel.text = nil;
     cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     cell.selectionStyle = UITableViewCellSelectionStyleDefault;
@@ -10441,7 +10857,7 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
     cell.imageView.image = nil;
     cell.textLabel.text = @"Show Less";
     cell.textLabel.font = [UIFont systemFontOfSize:15.0];
-    cell.textLabel.textColor = self.view.tintColor;
+    cell.textLabel.textColor = settings_cell_tint_color(self.view);
     cell.textLabel.textAlignment = NSTextAlignmentCenter;
     cell.accessoryType = UITableViewCellAccessoryNone;
     cell.selectionStyle = UITableViewCellSelectionStyleDefault;
@@ -10590,9 +11006,9 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         (void)a;
         UIDocumentPickerViewController *picker =
             [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder, UTTypePropertyList]];
+        settings_set_picker_mode(picker, @"themer");
         picker.delegate = self;
         picker.allowsMultipleSelection = NO;
-        self.pendingThemeImportMode = @"themer";
         [self presentViewController:picker animated:YES completion:nil];
     }]];
     [hint addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
@@ -10609,9 +11025,9 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         (void)a;
         UIDocumentPickerViewController *picker =
             [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder]];
+        settings_set_picker_mode(picker, @"snowboardlite");
         picker.delegate = self;
         picker.allowsMultipleSelection = NO;
-        self.pendingThemeImportMode = @"snowboardlite";
         [self presentViewController:picker animated:YES completion:nil];
     }]];
     [hint addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
@@ -10632,13 +11048,438 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         ];
         UIDocumentPickerViewController *picker =
             [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:types asCopy:YES];
+        settings_set_picker_mode(picker, @"snowboardlite");
         picker.delegate = self;
         picker.allowsMultipleSelection = NO;
-        self.pendingThemeImportMode = @"snowboardlite";
         [self presentViewController:picker animated:YES completion:nil];
     }]];
     [hint addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:hint animated:YES completion:nil];
+}
+
+- (void)presentPasscodeBackupExporter
+{
+    NSUInteger backups = settings_passcode_theme_backup_count();
+    if (backups == 0) {
+        log_user("[PASSCODE] Nothing to export: no original backups are saved yet.\n");
+        UIAlertController *ac = [UIAlertController
+            alertControllerWithTitle:@"Nothing to Export"
+                             message:@"Cyanide saves a keypad original the first time a style writes over it. Nothing has been saved yet — apply a style first, then export before reinstalling Cyanide."
+                      preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:ac animated:YES completion:nil];
+        return;
+    }
+
+    // One archive instead of a folder of .orig files: Files, Mail and chat apps
+    // all handle a single .zip, and the importer reads the same archive back.
+    NSError *error = nil;
+    NSUInteger skipped = 0;
+    NSURL *archive = settings_passcode_create_backup_archive(&error, &skipped);
+    if (!archive) {
+        log_user("[PASSCODE] Could not pack the backups: %s\n",
+                 error.localizedDescription.UTF8String ?: "unknown");
+        UIAlertController *ac = [UIAlertController
+            alertControllerWithTitle:@"Could Not Pack Originals"
+                             message:(error.localizedDescription ?: @"The originals could not be read.")
+                      preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:ac animated:YES completion:nil];
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    void (^presentExportPicker)(void) = ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        UIDocumentPickerViewController *picker =
+            [[UIDocumentPickerViewController alloc] initForExportingURLs:@[archive] asCopy:YES];
+        // The exporting picker calls the same delegate as the importers. Without a
+        // mode the callback falls through to the themer branch and reports an
+        // import failure right after a successful export.
+        settings_set_picker_mode(picker, @"passcode-export");
+        picker.delegate = strongSelf;
+        [strongSelf presentViewController:picker animated:YES completion:nil];
+    };
+
+    if (skipped == 0) {
+        presentExportPicker();
+        return;
+    }
+
+    // A backup that could not be read is left out of the archive. Say so before
+    // the picker opens: an archive that quietly omits originals is worse than no
+    // archive at all, because it looks complete.
+    UIAlertController *skipAlert = [UIAlertController
+        alertControllerWithTitle:@"Some Originals Were Skipped"
+                         message:[NSString stringWithFormat:
+                                  @"%lu saved original(s) could not be read and are not in this archive. Export the rest now, then retry on a device that still has them.",
+                                  (unsigned long)skipped]
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [skipAlert addAction:[UIAlertAction actionWithTitle:@"Continue" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        (void)action;
+        presentExportPicker();
+    }]];
+    [skipAlert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:skipAlert animated:YES completion:nil];
+}
+
+- (void)presentPasscodeBackupImporter
+{
+    NSMutableArray<UTType *> *types = [NSMutableArray arrayWithObjects:UTTypeZIP, UTTypeFolder, nil];
+    UTType *origType = [UTType typeWithFilenameExtension:@"orig"];
+    if (origType) [types addObject:origType];
+    UIDocumentPickerViewController *picker =
+        [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:types asCopy:YES];
+    settings_set_picker_mode(picker, @"passcode-backups");
+    picker.delegate = self;
+    picker.allowsMultipleSelection = YES;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+// Long-press entry point for erasing the stored originals. Deliberately not on
+// the row's tap action: tapping Import Originals adds originals, this removes them.
+- (void)handlePasscodeBackupRowLongPress:(UILongPressGestureRecognizer *)recognizer
+{
+    if (recognizer.state != UIGestureRecognizerStateBegan) return;
+    [self presentPasscodeBackupDeletion];
+}
+
+- (NSString *)passcodeDeletionMessageForBackups:(NSUInteger)backups
+                                         digits:(NSUInteger)digits
+                                      remaining:(NSInteger)remaining
+{
+    NSString *warning = [NSString stringWithFormat:
+        @"This erases %lu saved original(s) covering %lu digit(s). Restore Original Digits will not be able to put the stock keypad art back afterwards — use Export Originals first if you want to keep a copy.",
+        (unsigned long)backups, (unsigned long)digits];
+    if (remaining <= 0) return warning;
+    return [NSString stringWithFormat:@"Delete becomes available in %lds…\n\n%@", (long)remaining, warning];
+}
+
+- (void)presentPasscodeBackupDeletion
+{
+    NSUInteger backups = settings_passcode_theme_backup_count();
+    NSUInteger digits = settings_passcode_backup_digit_count();
+    if (backups == 0) {
+        log_user("[PASSCODE] Nothing to delete: no original backups are saved.\n");
+        UIAlertController *ac = [UIAlertController
+            alertControllerWithTitle:@"Nothing to Delete"
+                             message:@"No saved originals are on this device."
+                      preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:ac animated:YES completion:nil];
+        return;
+    }
+
+    // Five seconds of enforced waiting before the button unlocks: these files are
+    // the only way back to the stock keypad art on this device, and Cyanide has no
+    // way to rebuild them.
+    __block NSInteger remaining = 5;
+
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:@"Delete All Originals?"
+                         message:[self passcodeDeletionMessageForBackups:backups
+                                                                  digits:digits
+                                                               remaining:remaining]
+                  preferredStyle:UIAlertControllerStyleAlert];
+
+    UIAlertAction *deleteAction = [UIAlertAction
+        actionWithTitle:@"Delete All Originals"
+                  style:UIAlertActionStyleDestructive
+                handler:^(UIAlertAction *action) {
+        (void)action;
+        [self deletePasscodeBackupsConfirmed];
+    }];
+    deleteAction.enabled = NO;
+    [alert addAction:deleteAction];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+
+    __weak typeof(self) weakSelf = self;
+    [self presentViewController:alert animated:YES completion:nil];
+
+    [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *timer) {
+        // The sheet is gone (cancelled or dismissed): stop ticking.
+        if (alert.presentingViewController == nil) {
+            [timer invalidate];
+            return;
+        }
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) { [timer invalidate]; return; }
+        remaining--;
+        if (remaining <= 0) {
+            deleteAction.enabled = YES;
+            alert.message = [strongSelf passcodeDeletionMessageForBackups:backups
+                                                                   digits:digits
+                                                                remaining:0];
+            [timer invalidate];
+            return;
+        }
+        alert.message = [strongSelf passcodeDeletionMessageForBackups:backups
+                                                               digits:digits
+                                                            remaining:remaining];
+    }];
+}
+
+- (void)deletePasscodeBackupsConfirmed
+{
+    NSUInteger removed = settings_passcode_delete_all_backups();
+    [self reloadSectionOrAll:SectionPasscodeTheme];
+    settings_notify_package_queue_changed_async();
+
+    NSString *message = removed > 0
+        ? [NSString stringWithFormat:@"%lu original(s) deleted. Restore Original Digits has nothing to write back now.",
+                                     (unsigned long)removed]
+        : @"No original files were found to delete.";
+    UIAlertController *ac = [UIAlertController
+        alertControllerWithTitle:(removed > 0 ? @"Originals Deleted" : @"Nothing Deleted")
+                         message:message
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:ac animated:YES completion:nil];
+}
+
+- (void)handlePasscodeBackupImport:(NSArray<NSURL *> *)urls
+{
+    NSMutableArray<NSURL *> *scoped = [NSMutableArray array];
+    for (NSURL *url in urls) {
+        if ([url startAccessingSecurityScopedResource]) [scoped addObject:url];
+    }
+
+    // A .zip is unpacked first — that is how an export from another device
+    // arrives (one file through Files, Mail or a chat app).
+    NSMutableArray<NSURL *> *items = [NSMutableArray array];
+    NSMutableArray<NSString *> *tempDirs = [NSMutableArray array];
+    NSMutableArray<NSString *> *unzipFailures = [NSMutableArray array];
+    for (NSURL *url in urls) {
+        if (![url.pathExtension.lowercaseString isEqualToString:@"zip"]) {
+            [items addObject:url];
+            continue;
+        }
+        NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                         [NSString stringWithFormat:@"PasscodeBackups-%@", NSUUID.UUID.UUIDString]];
+        NSError *unzipError = nil;
+        if (SBLExtractArchiveToDirectory(url, tmp, &unzipError)) {
+            [items addObject:[NSURL fileURLWithPath:tmp isDirectory:YES]];
+            [tempDirs addObject:tmp];
+        } else {
+            NSString *why = unzipError.localizedDescription ?: @"not a readable archive";
+            log_user("[PASSCODE] Could not open %s: %s\n",
+                     url.lastPathComponent.UTF8String, why.UTF8String);
+            [unzipFailures addObject:[NSString stringWithFormat:@"%@ — %@",
+                                                                url.lastPathComponent, why]];
+        }
+    }
+
+    NSUInteger skipped = 0;
+    NSUInteger failed = 0;
+    NSUInteger unusable = 0;
+    NSUInteger added = items.count > 0
+        ? settings_passcode_import_backup_items(items, &skipped, &failed, &unusable)
+        : 0;
+
+    for (NSString *tmp in tempDirs) {
+        [[NSFileManager defaultManager] removeItemAtPath:tmp error:nil];
+    }
+    for (NSURL *url in scoped) [url stopAccessingSecurityScopedResource];
+
+    NSString *message;
+    if (added == 0 && skipped == 0 && failed == 0 && unzipFailures.count > 0) {
+        // The archive itself never opened — say that, instead of blaming what is
+        // (or is not) inside it.
+        message = [NSString stringWithFormat:@"Could not open the selected archive:\n\n%@",
+                                             [unzipFailures componentsJoinedByString:@"\n"]];
+    } else if (added == 0 && skipped == 0 && failed == 0) {
+        message = @"No saved originals were found in the selection. On the device that still has the originals, tap Export Originals, then import the .zip it saves here.";
+    } else if (added == 0 && failed == 0) {
+        message = [NSString stringWithFormat:
+            @"Nothing to import: all %lu original(s) are already present on this device.",
+            (unsigned long)skipped];
+    } else {
+        // Report every outcome separately: a failure count reported on its own
+        // reads as a clean success.
+        NSMutableArray<NSString *> *parts = [NSMutableArray array];
+        [parts addObject:[NSString stringWithFormat:@"Imported %lu original(s).", (unsigned long)added]];
+        if (skipped > 0) {
+            [parts addObject:[NSString stringWithFormat:@"%lu were already present and were kept.",
+                                                        (unsigned long)skipped]];
+        }
+        if (failed > 0) {
+            [parts addObject:[NSString stringWithFormat:@"%lu could not be copied or verified.",
+                                                        (unsigned long)failed]];
+        }
+        if (unusable > 0) {
+            [parts addObject:[NSString stringWithFormat:
+                @"%lu cannot be matched to keypad files, so Restore Original Digits can't write them back.",
+                (unsigned long)unusable]];
+        }
+        if (unzipFailures.count > 0) {
+            [parts addObject:[NSString stringWithFormat:@"%lu archive(s) could not be opened.",
+                                                        (unsigned long)unzipFailures.count]];
+        }
+        [parts addObject:@"Tap Restore Original Digits to write the imported originals back."];
+        message = [parts componentsJoinedByString:@"\n\n"];
+    }
+
+    [self reloadSectionOrAll:SectionPasscodeTheme];
+    settings_notify_package_queue_changed_async();
+
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Import Originals"
+                                                              message:message
+                                                       preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:ac animated:YES completion:nil];
+}
+
+- (void)presentPasscodeThemeImporter
+{
+    UIAlertController *hint = [UIAlertController
+        alertControllerWithTitle:@"Import Passcode Style"
+                         message:@"Pick a .passthm style or a ZIP of keypad digit art — a .passthm is the same archive under another extension. An export of the saved originals works too. The art is copied into Cyanide's library; the file you pick stays untouched."
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [hint addAction:[UIAlertAction actionWithTitle:@"Continue" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        (void)a;
+        NSMutableArray<UTType *> *types = [NSMutableArray arrayWithObject:UTTypeZIP];
+        UTType *passthm = [UTType typeWithFilenameExtension:@"passthm"];
+        if (passthm && ![types containsObject:passthm]) [types addObject:passthm];
+
+        UIDocumentPickerViewController *picker =
+            [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:types asCopy:YES];
+        settings_set_picker_mode(picker, @"passcode");
+        picker.delegate = self;
+        picker.allowsMultipleSelection = NO;
+        [self presentViewController:picker animated:YES completion:nil];
+    }]];
+    [hint addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:hint animated:YES completion:nil];
+}
+
+- (void)presentPasscodeDigitPicker:(NSString *)digit
+{
+    self.pendingPasscodeDigit = digit;
+
+    PHPickerConfiguration *config = [[PHPickerConfiguration alloc] init];
+    config.filter = [PHPickerFilter imagesFilter];
+    config.selectionLimit = 1;
+    config.preferredAssetRepresentationMode = PHPickerConfigurationAssetRepresentationModeCurrent;
+
+    PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:config];
+    picker.delegate = self;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)clearPasscodeTheme
+{
+    settings_passcode_clear_selected_theme();
+    log_user("[PASSCODE] Cleared the selected style. Original backups are kept.\n");
+    [self reloadSectionOrAll:SectionPasscodeTheme];
+    settings_notify_package_queue_changed_async();
+}
+
+- (void)runPasscodeThemeApply:(BOOL)apply
+{
+    if (apply && settings_passcode_selected_theme() == nil) {
+        log_user("[PASSCODE] Failed: no style is selected. Import or build one first.\n");
+        UIAlertController *ac = [UIAlertController
+            alertControllerWithTitle:@"No Style Selected"
+                             message:@"Import a .passthm / ZIP style below, or tap a key in the preview to pick that digit's photo, then apply again."
+                      preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:ac animated:YES completion:nil];
+        return;
+    }
+
+    if (!apply && settings_passcode_theme_backup_count() == 0) {
+        log_user("[PASSCODE] Nothing to restore: no original digit backups were found.\n");
+        UIAlertController *ac = [UIAlertController
+            alertControllerWithTitle:@"Nothing To Restore"
+                             message:@"No originals are saved on this device. Styles applied by another app are not covered by Cyanide's originals."
+                      preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:ac animated:YES completion:nil];
+        return;
+    }
+
+    NSString *title = apply ? @"Apply Passcode Style?"
+                            : @"Restore Original Digits?";
+    NSString *message = apply
+        ? @"Applies the selected digits to the Lock Screen keypad and verifies every write.\n\nLock and unlock (or respring) afterwards to see the change."
+        : @"Writes the saved originals back over the keypad art and verifies each restore.";
+
+    if (apply && settings_passcode_theme_backup_count() == 0 &&
+        settings_passcode_originals_were_discarded()) {
+        message = [message stringByAppendingString:
+            @"\n\nWarning: the saved originals were deleted, so the keypad art on this device cannot be proven to be the stock art. Apply saves whatever is there now as the \"original\", so Restore brings that back instead of the factory art."];
+    }
+
+    if (!settings_krw_available_without_exploit()) {
+        message = [message stringByAppendingString:
+            @"\n\nKernel access is not active yet: Cyanide runs the chain first, so this takes noticeably longer."];
+    }
+
+    UIAlertController *confirm = [UIAlertController alertControllerWithTitle:title
+                                                                     message:message
+                                                              preferredStyle:UIAlertControllerStyleAlert];
+    [confirm addAction:[UIAlertAction actionWithTitle:(apply ? @"Apply" : @"Restore")
+                                                style:(apply ? UIAlertActionStyleDefault : UIAlertActionStyleDestructive)
+                                              handler:^(UIAlertAction *a) {
+        (void)a;
+        [self performPasscodeThemeApply:apply];
+    }]];
+    [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:confirm animated:YES completion:nil];
+}
+
+- (void)performPasscodeThemeApply:(BOOL)apply
+{
+    // Same shape as the Location Simulator / FastLockX actions: present the
+    // activity log first, run in the background, then report through Cyanide's
+    // shared completion notification so that screen itself flips to "Complete"
+    // with the result text. No extra alert of our own.
+    dispatch_block_t startAction = ^{
+        // __block so both the expiration handler and the completion can clear it:
+        // an ended-but-not-invalidated task tells iOS the app is still holding
+        // background time, and iOS answers that by killing the process.
+        __block UIBackgroundTaskIdentifier bgTask = [[UIApplication sharedApplication]
+            beginBackgroundTaskWithName:@"Passcode Style"
+                      expirationHandler:^{
+            log_user("[PASSCODE] Background time expired; the keypad write may not have finished.\n");
+            if (bgTask != UIBackgroundTaskInvalid) {
+                [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+                bgTask = UIBackgroundTaskInvalid;
+            }
+        }];
+
+        __weak typeof(self) weakSelf = self;
+        // User-initiated work: the default-priority queue can be throttled under
+        // low-power / background conditions, which is exactly when the keypad
+        // write has to finish before the background task above expires.
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            BOOL ok = settings_apply_passcode_theme_now(apply);
+            NSString *summary = settings_passcode_last_result_summary()
+                ?: (apply ? @"Passcode style finished." : @"Original digits restored.");
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                typeof(self) strongSelf = weakSelf;
+                [strongSelf reloadSectionOrAll:SectionPasscodeTheme];
+                settings_notify_package_queue_changed_async();
+
+                [[NSNotificationCenter defaultCenter]
+                    postNotificationName:kSettingsActionsDidCompleteNotification
+                                  object:nil
+                                userInfo:@{
+                    kSettingsActionsDidCompleteSuccessKey: @(ok),
+                    kSettingsActionsDidCompleteMessageKey: summary
+                }];
+
+                if (bgTask != UIBackgroundTaskInvalid) {
+                    [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+                    bgTask = UIBackgroundTaskInvalid;
+                }
+            });
+        });
+    };
+
+    [self presentActivityLogWithCompletion:startAction];
 }
 
 - (void)presentLiveWPVideoPicker
@@ -10699,9 +11540,9 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
 {
     UIDocumentPickerViewController *picker =
         [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:[self liveWPVideoDocumentTypes] asCopy:YES];
+    settings_set_picker_mode(picker, @"livewp");
     picker.delegate = self;
     picker.allowsMultipleSelection = NO;
-    self.pendingThemeImportMode = @"livewp";
     [self presentViewController:picker animated:YES completion:nil];
 }
 
@@ -10831,8 +11672,19 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
 didFinishPicking:(NSArray<PHPickerResult *> *)results
 {
     [picker dismissViewControllerAnimated:YES completion:nil];
+
+    // Consume the digit target before the early return so a cancelled picker
+    // cannot leave it armed for the next video selection.
+    NSString *passcodeDigit = self.pendingPasscodeDigit;
+    self.pendingPasscodeDigit = nil;
+
     PHPickerResult *result = results.firstObject;
     if (!result) return;
+
+    if (passcodeDigit.length > 0) {
+        [self handlePasscodeDigitPick:result digit:passcodeDigit];
+        return;
+    }
 
     NSItemProvider *provider = result.itemProvider;
     NSString *identifier = [self liveWPPreferredTypeIdentifierForProvider:provider];
@@ -10860,6 +11712,68 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results
             return;
         }
         [self finishLiveWPVideoImportFromURL:url displayName:displayName];
+    }];
+}
+
+- (void)handlePasscodeDigitPick:(PHPickerResult *)result digit:(NSString *)digit
+{
+    NSItemProvider *provider = result.itemProvider;
+    if (![provider canLoadObjectOfClass:UIImage.class]) {
+        UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Import Failed"
+                                                                     message:@"That item is not a photo. Choose an image for the keypad digit."
+                                                              preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:ac animated:YES completion:nil];
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    [provider loadObjectOfClass:UIImage.class
+              completionHandler:^(__kindof id<NSItemProviderReading> object, NSError *error) {
+        UIImage *image = [object isKindOfClass:UIImage.class] ? (UIImage *)object : nil;
+        // Resize off the main thread; the keypad art is only 202 points tall.
+        NSData *png = settings_passcode_png_data_for_image(image);
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+
+            if (png.length == 0) {
+                UIAlertController *ac = [UIAlertController
+                    alertControllerWithTitle:@"Import Failed"
+                                     message:(error.localizedDescription ?: @"The selected photo could not be read.")
+                              preferredStyle:UIAlertControllerStyleAlert];
+                [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                [strongSelf presentViewController:ac animated:YES completion:nil];
+                return;
+            }
+
+            NSError *err = nil;
+            NSDictionary *theme = settings_passcode_ensure_selected_theme(&err);
+            BOOL ok = theme && settings_passcode_theme_set_digit_image(theme, digit, png, &err);
+            if (!ok) {
+                UIAlertController *ac = [UIAlertController
+                    alertControllerWithTitle:@"Digit Not Saved"
+                                     message:(err.localizedDescription ?: @"The digit image could not be saved.")
+                              preferredStyle:UIAlertControllerStyleAlert];
+                [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                [strongSelf presentViewController:ac animated:YES completion:nil];
+                return;
+            }
+
+            log_user("[PASSCODE] Digit %s art saved into \"%s\".\n",
+                     digit.UTF8String,
+                     settings_passcode_selected_theme_display_name().UTF8String);
+            [strongSelf reloadSectionOrAll:SectionPasscodeTheme];
+            settings_notify_package_queue_changed_async();
+
+            UIAlertController *ac = [UIAlertController
+                alertControllerWithTitle:[NSString stringWithFormat:@"Digit %@ Saved", digit]
+                                 message:@"Apply the style to write it over the keypad art."
+                          preferredStyle:UIAlertControllerStyleAlert];
+            [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+            [strongSelf presentViewController:ac animated:YES completion:nil];
+        });
     }];
 }
 
@@ -10941,12 +11855,29 @@ didFinishPicking:(NSArray<PHPickerResult *> *)results
 - (void)documentPicker:(UIDocumentPickerViewController *)controller
 didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
 {
-    (void)controller;
+    // The mode belongs to the picker that was tapped, not to this controller, so
+    // one sheet's mode cannot affect another pick. Pickers with no mode of their
+    // own fall back to the extension branches below.
+    NSString *mode = settings_picker_mode(controller) ?: @"themer";
+
+    // An exporting picker reports through this delegate too: the archive has been
+    // handed to Files and there is nothing to import.
+    if ([mode isEqualToString:@"passcode-export"]) {
+        log_user("[PASSCODE] Backup archive export finished.\n");
+        return;
+    }
+
+    // Backup folders, .orig files and .zip archives are multi-item and the whole
+    // array matters, so they are handled before the single-file paths below take
+    // urls.firstObject.
+    if ([mode isEqualToString:@"passcode-backups"]) {
+        [self handlePasscodeBackupImport:urls];
+        return;
+    }
+
     NSURL *url = urls.firstObject;
     if (!url) return;
     NSString *ext = url.pathExtension.lowercaseString;
-    NSString *mode = self.pendingThemeImportMode ?: @"themer";
-    self.pendingThemeImportMode = nil;
 
     BOOL scoped = [url startAccessingSecurityScopedResource];
     BOOL isDir = NO;
@@ -11068,6 +11999,25 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
             successTitle = @"SnowBoard Theme Imported";
             NSString *name = settings_snowboardlite_selected_theme_display_name();
             successMessage = [NSString stringWithFormat:@"\"%@\" is now selected. Toggle SnowBoard Lite on and tap Run to apply.", name];
+        } else if ([mode isEqualToString:@"passcode"]) {
+            if (isDir) {
+                ok = settings_passcode_import_folder_named(url, url.lastPathComponent, &err);
+            } else {
+                NSString *tmpRoot = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                    [NSString stringWithFormat:@"PasscodeTheme-%@", NSUUID.UUID.UUIDString]];
+                ok = SBLExtractArchiveToDirectory(url, tmpRoot, &err);
+                if (ok) {
+                    NSString *displayName = url.URLByDeletingPathExtension.lastPathComponent ?: @"Imported Style";
+                    ok = settings_passcode_import_folder_named([NSURL fileURLWithPath:tmpRoot],
+                                                               displayName,
+                                                               &err);
+                }
+                [[NSFileManager defaultManager] removeItemAtPath:tmpRoot error:nil];
+            }
+            successTitle = @"Passcode Style Imported";
+            successMessage = [NSString stringWithFormat:
+                @"\"%@\" is now selected. Use Apply Style Now below to write it to the keypad.",
+                settings_passcode_selected_theme_display_name()];
         } else {
             ok = isDir ? [self importThemerFolderAtURL:url error:&err]
                        : [self importThemerPlistAtURL:url error:&err];
@@ -11097,6 +12047,9 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
                 }
             } else if ([mode isEqualToString:@"livewp"]) {
                 [self finishLiveWPVideoImportAndSwapIfRunning];
+            } else if ([mode isEqualToString:@"passcode"]) {
+                settings_notify_package_queue_changed_async();
+                [self reloadSectionOrAll:SectionPasscodeTheme];
             } else {
                 [self reloadThemerSectionAndQueue];
             }
@@ -11171,11 +12124,6 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
 }
 
 
-- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller
-{
-    (void)controller;
-    self.pendingThemeImportMode = nil;
-}
 
 - (void)reloadSectionOrAll:(NSInteger)section
 {
@@ -11942,6 +12890,18 @@ void cyanide_present_contact(UIViewController *host)
     [host presentViewController:ac animated:YES completion:nil];
 }
 
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath
+{
+    // The keypad preview is drawn to a fixed height; every other row keeps the
+    // automatic dimension the rest of the table uses. Matched by index so row
+    // sizing never has to build the rows array.
+    if (self.detailMode && self.underlyingSection == SectionPasscodeTheme &&
+        indexPath.row == kPasscodePreviewRow) {
+        return 280.0;
+    }
+    return UITableViewAutomaticDimension;
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
     // Preserve the table view's actual indexPath for dequeue calls (which
@@ -12072,6 +13032,10 @@ void cyanide_present_contact(UIViewController *host)
         return [self buildNiceBarGridCellInTableView:tableView indexPath:dequeuePath];
     }
 
+    if ([kind isEqualToString:@"passcode-preview"]) {
+        return [self buildPasscodePreviewCellInTableView:tableView];
+    }
+
     if ([kind isEqualToString:@"info"]) {
         UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"info"];
         if (!cell) {
@@ -12115,16 +13079,41 @@ void cyanide_present_contact(UIViewController *host)
         cell.textLabel.textAlignment = NSTextAlignmentCenter;
 
         BOOL prominent = [row[@"style"] isEqualToString:@"prominent"];
-        if (prominent && rowSupported) {
+        BOOL filled = prominent && rowSupported;
+        if (filled) {
             cell.textLabel.textColor = UIColor.whiteColor;
             cell.textLabel.font = [UIFont systemFontOfSize:17.0 weight:UIFontWeightSemibold];
-            cell.backgroundColor = self.view.tintColor;
         } else {
             cell.textLabel.textColor = rowSupported
-                ? ([row[@"destructive"] boolValue] ? UIColor.systemRedColor : self.view.tintColor)
+                ? ([row[@"destructive"] boolValue] ? UIColor.systemRedColor
+                                                   : settings_cell_tint_color(self.view))
                 : UIColor.tertiaryLabelColor;
             cell.textLabel.font = [UIFont systemFontOfSize:17.0 weight:UIFontWeightRegular];
-            cell.backgroundColor = nil;
+        }
+        // Build a fresh configuration every time. Editing the cell's current one
+        // instead let the fill from a previous use of the same reused cell
+        // survive, which tinted unrelated rows (the destructive buttons after a
+        // filled Apply row).
+        UIBackgroundConfiguration *buttonBackground =
+            [UIBackgroundConfiguration listGroupedCellConfiguration];
+        if (filled) {
+            buttonBackground.backgroundColor = settings_cell_tint_color(self.view);
+        }
+        cell.backgroundConfiguration = buttonBackground;
+
+        // Long-press on Import Backups offers to erase the stored originals: it is
+        // the one action in this panel with no undo, so it stays off the row's tap
+        // action. Reused cells keep their old recognisers, so drop those first.
+        for (UIGestureRecognizer *recognizer in [cell.gestureRecognizers copy]) {
+            if ([recognizer isKindOfClass:UILongPressGestureRecognizer.class]) {
+                [cell removeGestureRecognizer:recognizer];
+            }
+        }
+        if ([row[@"action"] isEqualToString:@"passcode-import-backups"]) {
+            UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc]
+                initWithTarget:self action:@selector(handlePasscodeBackupRowLongPress:)];
+            hold.minimumPressDuration = 0.8;
+            [cell addGestureRecognizer:hold];
         }
         return cell;
     }
@@ -13944,6 +14933,26 @@ void cyanide_present_contact(UIViewController *host)
         return;
     }
 
+    if (indexPath.section == SectionPasscodeTheme) {
+        NSDictionary *row = [self rowsForSection:indexPath.section][indexPath.row];
+        if (![row[@"kind"] isEqualToString:@"button"]) return;
+        NSString *action = row[@"action"];
+        if ([action isEqualToString:@"passcode-import"]) {
+            [self presentPasscodeThemeImporter];
+        } else if ([action isEqualToString:@"passcode-apply"]) {
+            [self runPasscodeThemeApply:YES];
+        } else if ([action isEqualToString:@"passcode-restore"]) {
+            [self runPasscodeThemeApply:NO];
+        } else if ([action isEqualToString:@"passcode-clear"]) {
+            [self clearPasscodeTheme];
+        } else if ([action isEqualToString:@"passcode-export-backups"]) {
+            [self presentPasscodeBackupExporter];
+        } else if ([action isEqualToString:@"passcode-import-backups"]) {
+            [self presentPasscodeBackupImporter];
+        }
+        return;
+    }
+
     if (indexPath.section == SectionQuickLoader) {
         NSDictionary *row = [self rowsForSection:indexPath.section][indexPath.row];
         if (![row[@"kind"] isEqualToString:@"button"]) return;
@@ -13953,6 +14962,9 @@ void cyanide_present_contact(UIViewController *host)
             // Opens the iOS Files App Picker to select a JS file
             NSArray *types = @[UTTypeJavaScript.identifier, UTTypePlainText.identifier];
             UIDocumentPickerViewController *dp = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:types inMode:UIDocumentPickerModeImport];
+            // No mode of its own: the callback recognises this picker by the
+            // selected file's extension (js / txt).
+            settings_set_picker_mode(dp, nil);
             dp.delegate = self;
             [self presentViewController:dp animated:YES completion:nil];
             return;
