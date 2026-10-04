@@ -127,6 +127,13 @@ const char *remote_call_init_failure_description(RemoteCallInitFailure failure);
 // should call remote_call_request_stop() and remote_call_inflight_wait_drained_ms()
 // first, and skip the detach if the wait times out.
 int  remote_call_inflight_count(void);
+// Round 41: tro-dance helpers that never returned from the kernel (wedged).
+// This is NOT included in remote_call_inflight_count() (that counts guard
+// begin/end ops). >0 means a Cyanide thread is parked in-kernel: the
+// process must not exit (un-reaped corpse → black screen on reopen), and
+// arming is already fail-closed process-wide once this is nonzero. The
+// round-40 suspend/exit drains poll this too.
+int  remote_call_helper_unaccounted_count(void);
 bool remote_call_inflight_wait_drained_ms(int timeoutMs);
 void remote_call_request_stop(const char *reason);   // ask in-flight ops to abort ASAP
 bool remote_call_stop_requested(void);

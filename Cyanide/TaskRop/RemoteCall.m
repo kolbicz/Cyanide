@@ -1304,7 +1304,91 @@ static void reap_dead_port_names_if_needed(const char *reason)
 // (b) never overlaps another of our threads inside the trap family. A refusal
 // is a clean init/arming failure; every caller unwinds on false.
 static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64_t currThread, bool useMigFilterBypass);
+// ---- Round 41: tro-dance helper liveness accounting -----------------------
+// The arming helper below is a suspended pthread whose PC is pointed at
+// thread_set_exception_ports and whose LR is pointed at an exit trampoline.
+// It is how we arm without entering the exception-ports MIG trap on a
+// "real" thread — but the helper ITSELF can wedge in-kernel (the 184716
+// ABBA: AMFI global entitlement lock vs runningboardd's task_policy_set
+// holding our task lock). Pre-41 it was fire-and-forget: nothing noticed
+// the helper never returned, remote_call_inflight_count() never counted it
+// (it counts guard begin/end ops only), and the process could exit with a
+// thread parked in-kernel — an un-reaped corpse that black-screens on
+// reopen (live 41). Now: every helper gets a slot, its exit trampoline
+// marks the slot before pthread_exit, the creator waits (bounded) for the
+// mark, and a helper that does not return latches the wedge flag — further
+// arms are refused (fail-closed) and the count is exported so the
+// suspend/exit drains (round 40) can wait on it and warn loudly.
+#define RC_HELPER_SLOTS 64
+typedef struct {
+    pthread_t thread;          // helper pthread (trampoline looks itself up)
+    volatile int exited;       // set by rc_helper_exit_trampoline
+    int in_use;
+} RCHelperSlot;
+static RCHelperSlot g_rc_helpers[RC_HELPER_SLOTS];
+static pthread_mutex_t g_rc_helpers_mutex = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic int g_rc_helper_unaccounted = 0;
+static _Atomic bool g_rc_helper_wedged_latch = false;
+
+int remote_call_helper_unaccounted_count(void)
+{
+    return atomic_load_explicit(&g_rc_helper_unaccounted, memory_order_acquire);
+}
+
+// Runs as the helper's LR target: thread_set_exception_ports "returns" here
+// with its kern_return_t in x0. Marks the slot, then exits for real.
+static void rc_helper_exit_trampoline(void *ret)
+{
+    pthread_t self = pthread_self();
+    pthread_mutex_lock(&g_rc_helpers_mutex);
+    for (int i = 0; i < RC_HELPER_SLOTS; i++) {
+        if (g_rc_helpers[i].in_use && g_rc_helpers[i].thread == self) {
+            g_rc_helpers[i].exited = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_rc_helpers_mutex);
+    pthread_exit(ret);
+}
+
+static RCHelperSlot *rc_helper_slot_alloc(pthread_t thread)
+{
+    RCHelperSlot *slot = NULL;
+    pthread_mutex_lock(&g_rc_helpers_mutex);
+    for (int i = 0; i < RC_HELPER_SLOTS; i++) {
+        if (!g_rc_helpers[i].in_use) {
+            g_rc_helpers[i].in_use = 1;
+            g_rc_helpers[i].exited = 0;
+            g_rc_helpers[i].thread = thread;
+            slot = &g_rc_helpers[i];
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_rc_helpers_mutex);
+    return slot;
+}
+
+static void rc_helper_slot_free(RCHelperSlot *slot)
+{
+    if (!slot) return;
+    pthread_mutex_lock(&g_rc_helpers_mutex);
+    slot->in_use = 0;
+    slot->thread = NULL;
+    slot->exited = 0;
+    pthread_mutex_unlock(&g_rc_helpers_mutex);
+}
+
 bool set_exception_port_on_thread(mach_port_t exceptionPort, uint64_t currThread, bool useMigFilterBypass) {
+    // Round 41: fail-closed. A wedged helper is parked in-kernel holding
+    // whatever locks it died on (the AMFI/entitlement family) — arming
+    // ANOTHER helper into the same trap family is how one stuck thread
+    // becomes two.
+    if (atomic_load_explicit(&g_rc_helper_wedged_latch, memory_order_acquire)) {
+        printf("[RC] arming thread %#llx REFUSED — a tro-dance helper wedged "
+               "in-kernel earlier; fail-closed, no further arms this session\n",
+               currThread);
+        return false;
+    }
     if (!excport_op_begin("thread arm")) {
         printf("[RC] arming thread %#llx refused by lifecycle gate — clean "
                "init/arming failure\n", currThread);
@@ -1345,11 +1429,23 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
                __FUNCTION__, __LINE__, createErr, pthread);
         return false;
     }
+    // Round 41: liveness slot BEFORE any path that can leak the thread. A
+    // helper cancelled while still suspended never runs, so its slot is
+    // freed on the pre-resume error paths below; once resumed, liveness is
+    // proven via the exit trampoline (bounded join at the end).
+    RCHelperSlot *helperSlot = rc_helper_slot_alloc(pthread);
+    if (!helperSlot) {
+        printf("[%s:%d] helper slot table full (%d) — refusing arm\n",
+               __FUNCTION__, __LINE__, RC_HELPER_SLOTS);
+        pthread_cancel(pthread);
+        return false;
+    }
 
     mach_port_t machThread = pthread_mach_thread_np(pthread);
     if (!machThread) {
         printf("[%s:%d] pthread_mach_thread_np returned null for helper thread\n",
                __FUNCTION__, __LINE__);
+        rc_helper_slot_free(helperSlot);
         pthread_cancel(pthread);
         return false;
     }
@@ -1357,6 +1453,7 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
     if (!is_kaddr_valid(machThreadAddr)) {
         printf("[%s:%d] failed to resolve helper thread kobject mach=0x%x addr=%#llx\n",
                __FUNCTION__, __LINE__, machThread, machThreadAddr);
+        rc_helper_slot_free(helperSlot);
         pthread_cancel(pthread);
         mach_port_deallocate(mach_task_self_, machThread);
         return false;
@@ -1374,6 +1471,7 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
     if (kr != KERN_SUCCESS) {
         printf("[%s:%d] thread_get_state failed: 0x%x (%s)\n",
                __FUNCTION__, __LINE__, kr, mach_error_string(kr));
+        rc_helper_slot_free(helperSlot);
         pthread_cancel(pthread);
         mach_port_deallocate(mach_task_self_, machThread);
         return false;
@@ -1383,7 +1481,11 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
     diver = (uint64_t)state.__flags & __DARWIN_ARM_THREAD_STATE64_USER_DIVERSIFIER_MASK;
 
     arm_thread_state64_set_pc_fptr(state, thread_set_exception_ports_addr);
-    arm_thread_state64_set_lr_fptr(state, pthread_exit_addr);
+    // Round 41: LR no longer points straight at pthread_exit — it points at
+    // a trampoline that MARKS the helper's liveness slot first (the whole
+    // point of the accounting: a helper that never reaches the trampoline
+    // is wedged in-kernel).
+    arm_thread_state64_set_lr_fptr(state, (void *)rc_helper_exit_trampoline);
 
     uint64_t exceptionMask = EXC_MASK_GUARD |
                              EXC_MASK_BAD_ACCESS |
@@ -1403,6 +1505,7 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
     if (!thread_set_state_wrapper(machThread, machThreadAddr,
                                   (arm_thread_state64_internal *)&state))
     {
+        rc_helper_slot_free(helperSlot);
         pthread_cancel(pthread);
         mach_port_deallocate(mach_task_self_, machThread);
         return false;
@@ -1415,6 +1518,7 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
 
     if (!thread_resume_wrapper(machThread))
     {
+        rc_helper_slot_free(helperSlot);
         pthread_cancel(pthread);
         mach_port_deallocate(mach_task_self_, machThread);
         return false;
@@ -1533,6 +1637,33 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
 
     if(useMigFilterBypass)
         usleep(100000);
+
+    // Round 41: bounded join on the helper's exit trampoline. Normally the
+    // helper is long gone (its in-kernel write completed before our tro
+    // write landed), so this exits on the first poll. A helper that is
+    // still in-kernel after 500 ms is wedged (the 184716 ABBA class): count
+    // it, latch fail-closed (set_exception_port_on_thread refuses further
+    // arms), and log LOUDLY — the process must not exit while a thread is
+    // parked in-kernel (un-reaped corpse → black screen on reopen).
+    bool helperExited = false;
+    for (int i = 0; i < 50; i++) {   // 500 ms bound
+        if (helperSlot->exited) { helperExited = true; break; }
+        usleep(10000);
+    }
+    if (helperExited) {
+        rc_helper_slot_free(helperSlot);
+    } else {
+        int unaccounted = atomic_fetch_add_explicit(&g_rc_helper_unaccounted, 1,
+                                                    memory_order_acq_rel) + 1;
+        atomic_store_explicit(&g_rc_helper_wedged_latch, true, memory_order_release);
+        printf("[RC] tro-dance helper WEDGED in-kernel — process must not exit; "
+               "refusing further arms this session (helper pthread=%p "
+               "machThread=0x%x kaddr=%#llx, unaccounted=%d)\n",
+               (void *)pthread, machThread, machThreadAddr, unaccounted);
+        // Slot intentionally NOT freed: it is the wedge record (and the
+        // trampoline can still mark it if the kernel ever lets the thread
+        // return — the count stays, conservatively).
+    }
 
     mach_port_deallocate(mach_task_self_, machThread);
     return success;
