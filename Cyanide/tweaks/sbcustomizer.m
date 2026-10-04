@@ -842,8 +842,14 @@ static int set_dock_icon_labels(uint64_t iconCtrl, bool show, bool mayForceShowL
             // answer to YES, but only on the evidence of this probe -- never
             // speculatively, because this rewrites a method table inside a live
             // SpringBoard.
-            if (show && mayForceShowLabels && responds && !shouldShow) {
-                if (sbcustomizer_swizzle_labels_shown()) {
+            if (show && responds && !shouldShow) {
+                if (!mayForceShowLabels) {
+                    // Hide icon labels is holding this same method at NO. Say so
+                    // plainly: the dock follows the home screen by design, it is
+                    // not a failure to find the lever.
+                    printf("[SBC] dock labels: _shouldShowLabel=NO and forcing not allowed "
+                           "(Hide icon labels holds it); dock follows the home screen\n");
+                } else if (sbcustomizer_swizzle_labels_shown()) {
                     // The hook changes what _updateLabel computes, so the
                     // per-view pass below now has something to build.
                     printf("[SBC] dock labels: forced _shouldShowLabel=YES for this session\n");
