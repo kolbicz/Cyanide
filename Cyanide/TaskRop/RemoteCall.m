@@ -1806,6 +1806,22 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
         // Slot intentionally NOT freed: it is the wedge record (and the
         // trampoline can still mark it if the kernel ever lets the thread
         // return — the count stays, conservatively).
+        // Round 42: report FAILURE, not whatever the tro-dance spin concluded.
+        // The 184716-class wedge blocks the helper inside the MIG trap BEFORE
+        // its port write can complete, so the arm state is indeterminate —
+        // returning true would let the caller inject EXC_GUARD into a thread
+        // whose exception port may never have been retargeted (a launchd
+        // crash vector). Caller audit: the arm walk (init) treats false as a
+        // bounded skip/retry (retryCount<3, then the attempt loop ends) and
+        // the synthetic-thread arm retries once then aborts init with the
+        // symmetric cleanup; with the fail-closed latch set, every follow-up
+        // arm is refused instantly, so a wedge degrades to a bounded, honest
+        // init failure — exactly what a wedged-helper session should do.
+        // Residual (documented, pre-existing): if the wedge landed AFTER the
+        // helper's write reached the target, that target stays armed but
+        // unregistered — indistinguishable from the outside, and the session
+        // fails init and tears down regardless.
+        success = false;
     }
 
     mach_port_deallocate(mach_task_self_, machThread);
