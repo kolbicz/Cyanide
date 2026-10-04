@@ -68,6 +68,21 @@ extern kern_return_t mach_vm_deallocate(task_t task, mach_vm_address_t address, 
 uint64_t g_RC_targetProcOverride = 0;
 uint64_t g_RC_gadgetPacia = 0;
 
+// Round 41: one-shot arm-candidate cap consumed by the next init (see
+// RemoteCall.h for the fastkill-2 vs anchoring-6 rationale).
+#define RC_DEFAULT_TARGET_INJECTED_THREADS 6
+static char g_RC_nextInitTargetProcess[32];
+static int g_RC_nextInitTargetThreads = 0;
+void remote_call_set_next_init_target_threads(const char *process, int count) {
+    if (!process || count <= 0) {
+        g_RC_nextInitTargetProcess[0] = 0;
+        g_RC_nextInitTargetThreads = 0;
+        return;
+    }
+    strlcpy(g_RC_nextInitTargetProcess, process, sizeof(g_RC_nextInitTargetProcess));
+    g_RC_nextInitTargetThreads = count;
+}
+
 static pthread_mutex_t g_universal_ipc_mutex;
 static pthread_once_t g_universal_ipc_mutex_once = PTHREAD_ONCE_INIT;
 
@@ -3662,7 +3677,33 @@ static int init_remote_call_internal(const char* process, bool useMigFilterBypas
     // trap and on every abort path, near-simultaneous traps answered in the
     // post-trap drain, late traps answered by the first-port responder for the
     // session's life, residual traps drained at teardown (round-5 symmetry).
-    int targetInjectedThreadCount = 6;
+    // (Round 41: this is now the DEFAULT; the fastkill launchd sessions cap
+    // themselves to 2 via remote_call_set_next_init_target_threads.)
+    int targetInjectedThreadCount = RC_DEFAULT_TARGET_INJECTED_THREADS;
+    // Round 41: consume a caller-scoped one-shot cap (fastkill launchd
+    // sessions arm 2 candidates, not 6 — fewer armed launchd threads that can
+    // be stranded if the app dies mid-session; see RemoteCall.h). The value
+    // is cleared on THIS init whether or not the process name matches, so it
+    // can never leak into a later unrelated init (e.g. the PERSIST launchd
+    // anchoring, which keeps the default 6).
+    if (g_RC_nextInitTargetThreads > 0) {
+        int pending = g_RC_nextInitTargetThreads;
+        char pendingProcess[32];
+        strlcpy(pendingProcess, g_RC_nextInitTargetProcess, sizeof(pendingProcess));
+        g_RC_nextInitTargetThreads = 0;
+        g_RC_nextInitTargetProcess[0] = 0;
+        if (process && strcmp(process, pendingProcess) == 0) {
+            targetInjectedThreadCount = pending;
+            printf("[RC] init: caller-scoped arm candidate cap for %s: %d "
+                   "(round 41 — reduced strand surface)\n",
+                   process, targetInjectedThreadCount);
+        } else {
+            printf("[RC] init: DISCARDING one-shot arm candidate cap (%s, %d) — "
+                   "this init is %s; default %d applies\n",
+                   pendingProcess, pending, process ?: "?",
+                   targetInjectedThreadCount);
+        }
+    }
     uint64_t tInjectStartNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     g_RC_lastInitInjected = 0;
     g_RC_lastInitTrapMs = 0;

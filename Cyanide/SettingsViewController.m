@@ -9495,6 +9495,11 @@ static void pm_prewarm_fastkill_session(const char *reason)
     // A backgrounding teardown that needs this lock first issues an
     // optimistic remote_call_request_stop (idempotent) so the init aborts at
     // its next checkpoint instead of holding the lock for its full length.
+    // Round 41: the fastkill session arms only 2 launchd candidates (default
+    // is 6). Every armed launchd thread is a thread the kernel SIGKILLs if we
+    // die mid-session (082220: a 5-arm warm hung into "unexpected SIGKILL of
+    // launchd"); the pre-warm is not latency-critical enough to justify six.
+    remote_call_set_next_init_target_threads("launchd", 2);
     RemoteCallSession *session =
         [[RemoteCallSession alloc] initWithProcess:@"launchd"
                                  useMigFilterBypass:NO
@@ -9652,6 +9657,8 @@ static void pm_prewarm_fastkill_session(const char *reason)
         // every extra second is time an orphaned armed thread can detonate
         // against our dead ports if the app leaves the foreground
         // (17:45:56: silence 145 ms into the 120 s wait, panic <60 s).
+        // Round 41: same 2-candidate cap as the pre-warm (strand surface).
+        remote_call_set_next_init_target_threads("launchd", 2);
         gPMKillSession = [[RemoteCallSession alloc] initWithProcess:@"launchd"
                                                  useMigFilterBypass:NO
                                             firstExceptionTimeoutMS:10000];

@@ -60,6 +60,19 @@ int disable_excguard_kill(uint64_t task);
 // processes with the same name (e.g. system vs per-user cfprefsd) and we
 // need to target a specific one. Reset to 0 by init_remote_call.
 extern uint64_t g_RC_targetProcOverride;
+// Round 41: one-shot override consumed by the NEXT init_remote_call whose
+// process name matches (cleared on the next init regardless of match, so a
+// stale value can never leak into a later unrelated init — e.g. the PERSIST
+// launchd anchoring, which must keep the default). Caps how many candidate
+// threads the arm walk injects. The fastkill (Process Viewer) launchd
+// sessions use 2: every armed launchd thread is a thread that can be
+// stranded/SIGKILLed if the app dies mid-session (082220: a 5-arm warm hung
+// into "unexpected SIGKILL of launchd"), and the kill path can tolerate a
+// slightly later first trap. The initial PERSIST/exploit anchoring inits
+// keep the default 6 (round 7: warm-up latency is the min over injected
+// threads; those are one-shot bootstraps where a fast first trap matters
+// more than strand surface).
+void remote_call_set_next_init_target_threads(const char *process, int count);
 int init_remote_call(const char* process, bool useMigFilterBypass);
 // Round 7 warm-up telemetry: stats of the most recent init_remote_call —
 // injected thread count and the first-trap wait in ms (0/0 if none yet).
