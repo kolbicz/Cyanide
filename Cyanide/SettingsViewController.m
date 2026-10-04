@@ -2533,6 +2533,91 @@ static void settings_begin_statbar_background_task_async(const char *reason)
     }
 }
 
+// ---- Round 40: safe-detach window around the backgrounding teardown ---------
+// The hijack teardown on background restores launchd's threads and parks KRW.
+// It runs SYNCHRONOUSLY in didEnterBackground and completes before iOS can
+// suspend us (iOS waits for didEnterBackground to return) — that part is fine.
+// What is NOT covered: after the teardown returns, one of Cyanide's OWN RemoteCall
+// helper threads can still be mid-trap in the kernel (a set_exception_ports /
+// MIG call that has not returned). If iOS suspends us with such a thread live,
+// the process cannot fully exit → un-reaped corpse → black screen on reopen
+// (live 41, 08:51:59: clean teardown, yet no `main: entry` on reopen = corpse).
+//
+// Fix: hold a UIBackgroundTask assertion ACROSS the teardown and then, on a
+// background queue, WAIT (bounded) for every in-flight RemoteCall op to drain
+// (remote_call_inflight_count()==0 && no warm-up) before releasing it — giving
+// a slow-but-not-deadlocked helper the scheduling time to return so the process
+// can exit cleanly. This is passive (it only POLLS the count; it never touches
+// shared RC/KRW state), so it cannot recreate the round-32 teardown↔foreground
+// freeze. If the wait times out, the op is genuinely wedged in-kernel (the
+// irreducible floor) and we release anyway — no worse than before.
+static UIBackgroundTaskIdentifier g_safe_detach_task = (UIBackgroundTaskIdentifier)-1;
+static volatile int g_safe_detach_in_flight = 0;
+
+static UIBackgroundTaskIdentifier settings_safe_detach_begin(const char *reason)
+{
+    UIApplication *app = [UIApplication sharedApplication];
+    __block UIBackgroundTaskIdentifier task = UIBackgroundTaskInvalid;
+    task = [app beginBackgroundTaskWithName:@"cyanide.safe-detach"
+                          expirationHandler:^{
+        @synchronized (settings_bg_lock()) {
+            if (task != UIBackgroundTaskInvalid && g_safe_detach_task == task) {
+                printf("[SETTINGS] safe-detach: background task EXPIRED by iOS — "
+                       "an in-flight RemoteCall op did not drain in time (wedged "
+                       "in-kernel); releasing the assertion\n");
+                [[UIApplication sharedApplication] endBackgroundTask:task];
+                g_safe_detach_task = UIBackgroundTaskInvalid;
+                __sync_lock_release(&g_safe_detach_in_flight);
+            }
+        }
+    }];
+    if (task == UIBackgroundTaskInvalid) {
+        printf("[SETTINGS] safe-detach: background task unavailable (%s) — teardown "
+               "runs without an extended window\n", reason ?: "backgrounding");
+        return UIBackgroundTaskInvalid;
+    }
+    @synchronized (settings_bg_lock()) { g_safe_detach_task = task; }
+    __sync_lock_test_and_set(&g_safe_detach_in_flight, 1);
+    printf("[SETTINGS] safe-detach: window open id=%lu (%s)\n",
+           (unsigned long)task, reason ?: "backgrounding");
+    return task;
+}
+
+// Release the window after the in-flight RemoteCall ops have drained (so we do
+// not suspend with a Cyanide helper thread mid-trap). Runs the drain-wait on a
+// background queue; the assertion keeps us alive meanwhile.
+static void settings_safe_detach_drain_and_end(UIBackgroundTaskIdentifier task,
+                                               const char *reason)
+{
+    if (task == UIBackgroundTaskInvalid) { __sync_lock_release(&g_safe_detach_in_flight); return; }
+    const char *why = reason ?: "backgrounding";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const uint64_t deadlineNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)
+                                  + 8ULL * 1000000000ULL;   // 8 s bound
+        int waited = 0;
+        while (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) < deadlineNs) {
+            if (remote_call_inflight_count() == 0)
+                break;
+            usleep(100000);   // 100 ms
+            waited++;
+        }
+        if (remote_call_inflight_count() != 0)
+            printf("[SETTINGS] safe-detach: in-flight RemoteCall op STILL live after "
+                   "%d ms (%s) — wedged in-kernel; releasing window anyway\n",
+                   waited * 100, why);
+        else if (waited)
+            printf("[SETTINGS] safe-detach: in-flight ops drained after %d ms (%s)\n",
+                   waited * 100, why);
+        @synchronized (settings_bg_lock()) {
+            if (g_safe_detach_task == task) {
+                [[UIApplication sharedApplication] endBackgroundTask:task];
+                g_safe_detach_task = UIBackgroundTaskInvalid;
+            }
+        }
+        __sync_lock_release(&g_safe_detach_in_flight);
+    });
+}
+
 static void settings_notify_remote_call_state_changed(void)
 {
     settings_notify_remote_call_state_changed_preserving_applied(NO);
@@ -3338,6 +3423,23 @@ void settings_best_effort_termination_cleanup(const char *reason)
 
     @try {
         settings_terminal_kexploit_cleanup_sync_internal(why);
+        // Round 40: before the process is reaped, give any in-flight RemoteCall
+        // helper thread a bounded window to RETURN from the kernel. If the app
+        // was closed mid-kill, a Cyanide helper can still be in a set_exception_
+        // ports / MIG trap; terminating with it live leaves an un-reaped corpse
+        // → black screen on reopen (live 41). Bounded (3 s) to stay well under
+        // the UIKit termination watchdog; if it does not drain it is wedged
+        // in-kernel (irreducible) and we exit anyway — no worse than before.
+        if (remote_call_inflight_count() != 0) {
+            printf("[SETTINGS] termination: waiting for in-flight RemoteCall op(s) "
+                   "to drain before exit (count=%d)\n", remote_call_inflight_count());
+            for (int i = 0; i < 30 && remote_call_inflight_count() != 0; i++)
+                usleep(100000);   // up to 3 s
+            printf("[SETTINGS] termination: in-flight RemoteCall %s\n",
+                   remote_call_inflight_count() == 0
+                       ? "drained — clean exit"
+                       : "STILL live (wedged in-kernel) — exiting anyway");
+        }
     } @finally {
         __sync_lock_release(&g_settings_actions_running);
     }
@@ -5853,31 +5955,32 @@ void settings_application_did_enter_background(void)
     // kill's lazy warm-up queued behind pm_kill_lock sees the backgrounded
     // state and the teardown steals whatever it built. No-op when nothing is warm.
     //
-    // This runs SYNCHRONOUSLY here on purpose: iOS does not suspend the app
-    // until didEnterBackground RETURNS, so the teardown always completes inside
-    // the backgrounding grace window before suspension. (Round 32 briefly made
-    // this async-under-assertion on a flawed premise — that bought no window iOS
-    // wasn't already giving, and created a teardown↔foreground race on the
-    // shared RemoteCall state that stalled the UI on rapid sweep-kill-sweep. The
-    // teardown's own timings are sub-second; the real exposure is the async
-    // pre-warm arm-walk, addressed separately, not this synchronous path.)
+    // Round 40: open a safe-detach window (UIBackgroundTask assertion) around
+    // the teardown + KRW detach. The teardown still runs SYNCHRONOUSLY here
+    // (iOS waits for didEnterBackground to return, and keeping it synchronous
+    // avoids the round-32 teardown↔foreground race) — but afterwards we hold
+    // the assertion and drain any in-flight RemoteCall helper thread before
+    // letting iOS suspend us, so the process can never be frozen with a Cyanide
+    // thread mid-trap (the un-reaped-corpse → black-screen bug, live 41).
+    UIBackgroundTaskIdentifier safeDetach = settings_safe_detach_begin("backgrounding");
+
+    // Round 6: tear down the warm fastkill session on EVERY backgrounding —
+    // a suspended app is SIGKILLed without applicationWillTerminate
+    // (panic-full-2026-09-29-195243), so the trapped launchd thread must be
+    // restored while KRW is still live. No-op when nothing is warm.
     if (kFastKillTeardownOnBackground)
         pm_teardown_fastkill_session_for_terminate("backgrounding");
 
-    // KRW background survival. Under UIScene lifecycle the AppDelegate's
-    // applicationDidEnterBackground: does NOT fire — only this scene hook does —
-    // so the detach that hands the socket fds to launchd (letting the primitive
-    // survive device sleep) never ran when backgrounding without a live tweak.
-    // A suspended app holding live fds loses the socket on sleep (setsockopt
-    // then returns EINVAL/errno 22 and the next run falls back to the full
-    // exploit chain). The idle-park worker's 5 s detach can't cover it: the app
-    // is frozen before it fires. Detach here instead, but only when no live
-    // tweak needs the session in-process — those keep the primitive in-process
-    // by design (settings_krw_idle_detach_allowed() encodes exactly that gate).
-    // On return, the next kernel access re-makes the fds from launchd.
+    // KRW background survival: hand the socket fds to launchd so the primitive
+    // survives device sleep (a suspended app holding live fds loses the socket).
+    // Only when no live tweak needs the session in-process.
     if (settings_krw_idle_detach_allowed()) {
         settings_detach_krw_for_background();
     }
+
+    // Hold the window until Cyanide's in-flight RemoteCall ops have drained,
+    // then release it (background queue; passive poll — no shared-state touch).
+    settings_safe_detach_drain_and_end(safeDetach, "backgrounding");
 
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     BOOL themerLiveNeeded =
