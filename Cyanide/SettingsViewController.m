@@ -33,6 +33,7 @@
 #import <CoreMotion/CoreMotion.h>
 
 #import <objc/runtime.h>
+#import <objc/objc-sync.h>
 #import <sys/time.h>
 #import <sys/sysctl.h>
 #import <signal.h>
@@ -3129,21 +3130,48 @@ static BOOL settings_ensure_springboard_remote_call_locked(void)
     // establishment after an activation waits; the reuse path above and any
     // later user action (window already elapsed) are unaffected. Interruptible:
     // bail immediately on backgrounding/cleanup so we never hold across suspend.
+    //
+    // Round 41: the wait must NOT hold settings_rc_lock() — pre-41 this loop
+    // uslept up to the full window with the lock held, serializing every other
+    // SpringBoard-channel caller behind a multi-second sleep. Drop the lock
+    // for the wait (objc_sync_exit/enter balances the caller's @synchronized
+    // on the same recursive lock — all four call sites enter this function
+    // via @synchronized (settings_rc_lock())), then re-acquire and
+    // RE-VALIDATE: a concurrent caller may have opened the session while we
+    // waited, or a re-activation may have re-extended the window.
     uint64_t settleUntil = g_activation_settle_until_ns;
     uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     if (settleUntil > nowNs) {
         printf("[SETTINGS] SpringBoard hijack deferred ~%llu ms — waiting out the "
                "launch/activation settle window (runningboardd task_policy_set "
-               "ABBA avoidance)\n",
+               "ABBA avoidance; lock DROPPED for the wait)\n",
                (unsigned long long)((settleUntil - nowNs) / 1000000ULL));
+        NSObject *rcLock = settings_rc_lock();
+        objc_sync_exit(rcLock);
+        BOOL aborted = NO;
         while ((nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) < settleUntil) {
             if (g_app_in_background || settings_cleanup_in_progress() ||
                 excport_gate_blocked()) {
                 printf("[SETTINGS] SpringBoard hijack settle-wait aborted — app "
                        "backgrounding/cleanup; not arming now\n");
-                return NO;
+                aborted = YES;
+                break;
             }
             usleep(100000);   // 100 ms, re-checking the bail conditions
+        }
+        objc_sync_enter(rcLock);
+        if (aborted)
+            return NO;
+        // Re-validate after re-acquire (the world moved while we waited):
+        if (g_springboard_rc_ready) {
+            printf("[SETTINGS] SpringBoard session opened by another caller "
+                   "during our settle wait — reusing it\n");
+            return YES;
+        }
+        if (g_activation_settle_until_ns > clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) {
+            printf("[SETTINGS] activation settle window RE-EXTENDED during our "
+                   "wait (re-activation) — refusing to arm now; caller may retry\n");
+            return NO;
         }
         printf("[SETTINGS] activation settle window elapsed — proceeding with "
                "SpringBoard hijack\n");
@@ -9656,22 +9684,22 @@ static void pm_prewarm_fastkill_session(const char *reason)
         // on-demand kill warm hit the same window. The kill runs off-main (the
         // row already shows "terminating…"), so a bounded wait is just a brief
         // delay; bail if the app backgrounds mid-wait (never arm into a suspend).
+        //
+        // Round 41: the WAIT ITSELF moved to the unlocked entry
+        // (pmForceKillViaLaunchd) — it used to usleep here UNDER pm_kill_lock,
+        // serializing every other kill behind one kill's multi-second settle.
+        // Reaching this point with the window still pending means a fresh
+        // activation re-extended it in the last few ms — refuse rather than
+        // wait under the lock (nothing signalled; the automatic pre-warm
+        // re-warms after the window, and the kill can be retried).
         uint64_t settleUntil = g_activation_settle_until_ns;
         uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
         if (settleUntil > nowNs) {
-            printf("[PROCMGR] fastkill: kill warm deferred ~%llu ms — activation "
-                   "settle window (launchd-hijack ⇄ task_policy_set strand "
-                   "avoidance)\n",
-                   (unsigned long long)((settleUntil - nowNs) / 1000000ULL));
-            while ((nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) < settleUntil) {
-                if (g_app_in_background || excport_gate_blocked()) {
-                    printf("[PROCMGR] fastkill: kill warm aborted — app "
-                           "backgrounding during settle wait; not arming "
-                           "launchd\n");
-                    return -2;
-                }
-                usleep(100000);   // 100 ms, re-checking the bail conditions
-            }
+            printf("[PROCMGR] fastkill: REFUSING kill(%d) warm — activation "
+                   "settle window re-extended (%llu ms left) after the "
+                   "pre-lock wait; not arming launchd under pm_kill_lock\n",
+                   pid, (unsigned long long)((settleUntil - nowNs) / 1000000ULL));
+            return -2;
         }
     }
     BOOL warmed = (gPMKillSession != nil);
@@ -9846,6 +9874,29 @@ static void pm_prewarm_fastkill_session(const char *reason)
     // the session-rebuild retry). One full proc-list walk (~2 kreads/proc)
     // saved per kill; fail-closed semantics unchanged.
     if (!kexploit_krw_ready()) return -2;
+    // Round 41: wait out the activation settle window BEFORE taking
+    // pm_kill_lock. The round-39 wait lived inside pmForceKillViaLaunchdGated
+    // — UNDER the lock — so one kill's multi-second settle usleep serialized
+    // every other kill (and the backgrounding teardown) behind it. Same bail
+    // semantics: backgrounding mid-wait aborts the kill (nothing signalled).
+    // pmForceKillViaLaunchdGated re-checks under the lock and fail-fasts if
+    // a fresh activation re-extended the window in the gap.
+    uint64_t settleUntil = g_activation_settle_until_ns;
+    uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    if (settleUntil > nowNs) {
+        printf("[PROCMGR] fastkill: kill(%d) deferred ~%llu ms — activation "
+               "settle window, waited OUTSIDE pm_kill_lock (launchd-hijack ⇄ "
+               "task_policy_set strand avoidance)\n",
+               pid, (unsigned long long)((settleUntil - nowNs) / 1000000ULL));
+        while ((nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) < settleUntil) {
+            if (g_app_in_background || excport_gate_blocked()) {
+                printf("[PROCMGR] fastkill: kill(%d) aborted — app backgrounding "
+                       "during settle wait; not arming launchd\n", pid);
+                return -2;
+            }
+            usleep(100000);   // 100 ms, re-checking the bail conditions
+        }
+    }
     NSLock *lock = pm_kill_lock();
     // Round 7: if another kill's warm-up is in flight, ATTACH to it — wait on
     // pm_kill_lock once and use its result — rather than stacking a second
