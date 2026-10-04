@@ -1422,159 +1422,25 @@ static void rc_helper_slot_free(RCHelperSlot *slot)
     pthread_mutex_unlock(&g_rc_helpers_mutex);
 }
 
-// ---- Round 41: arm preflight — task_policy_set contention on OUR task ----
-// 184716 / 080209 / 082220 share one mechanism: our arming path enters the
-// exception-ports MIG trap (AMFI global entitlement lock, then our task
-// lock via the dummy thread) WHILE runningboardd / PerfPowerServices are
-// inside task_policy_set on OUR task holding our task lock — ABBA, helper
-// wedged in-kernel, rbd checkins stop, watchdog.
-//
-// There is no kernel symbol table on-device, so "is an rbd thread inside
-// task_policy_set" cannot be matched by PC. The honest KRW signal we DO
-// have is the OTHER half of the ABBA: OUR task's lock. In xnu, struct task
-// begins with lck_mtx_t lock (kern/task.h), so the first word (task+0x00)
-// is lck_mtx_data — 0 while unlocked, an owner/state word while held. A
-// task_policy_set on our task holds that word continuously for tens to
-// hundreds of ms; ordinary in-kernel traffic (mach_msg, thread ops) holds
-// it for µs. So: sample the word; if it is nonzero at EVERY sample across
-// ~300 ms, a foreign agent is camped on our task lock — defer this arm
-// candidate instead of entering the trap family underneath it.
-//
-// Bounds (never spin forever): ~300 ms per preflight, 900 ms cumulative per
-// init, then the preflight disables itself and the walk proceeds WITHOUT it
-// (fail-open, logged) — the preflight is an avoidance hint, not a gate the
-// whole init can hang on. If the word NEVER reads 0 across the first
-// several preflights the offset is wrong for this build (signal implausible)
-// and the preflight disables itself, also logged.
-
-// offsetof(task, lock.lck_mtx_data): xnu kern/task.h declares `struct task`
-// with lck_mtx_t lock as its FIRST member, so the lock's owner/state word
-// sits at task+0x00. Build-coupled in principle (a kernel that reorders the
-// task header would move it) — unlike the offsets.m table this value is NOT
-// per-version calibrated; it was validated against the two supported builds
-// (iPhone16,2 / iOS 17.3.1 21D61 and iPhone17,2 / iOS 18.5 22F76) by
-// observing the word read 0 when idle and a kernel-pointer-shaped owner word
-// under contention. The runtime implausibility guard in
-// rc_arm_preflight_should_defer (never reads 0 across the first 8 preflights
-// → disable, logged) covers a wrong offset on any other build: the preflight
-// fails OPEN, never stuck deferring.
-#define RC_TASK_LOCK_WORD_OFF 0x0
-#define RC_ARM_PREFLIGHT_BUDGET_NS (900ULL * 1000000ULL)
-
-typedef struct {
-    uint64_t spentNs;     // cumulative preflight time this init
-    bool     disabled;    // budget exhausted or signal implausible
-    char     holder[96];  // filled when deferring
-} RCArmPreflight;
-
-// Best-effort: name of the proc owning a task, via a bounded proc-list walk
-// matching proc_task(proc). Only called when contention is already
-// confirmed (once per deferral, never per sample).
-static void rc_proc_name_for_task(uint64_t task, char *buf, size_t len)
-{
-    buf[0] = 0;
-    if (!is_kaddr_valid(task)) return;
-    for (int dir = 0; dir < 2 && !buf[0]; dir++) {
-        uint32_t off = dir == 0 ? off_proc_p_list_le_next : off_proc_p_list_le_prev;
-        uint64_t proc = proc_self();
-        for (int i = 0; i < 4096 && is_kaddr_valid(proc); i++) {
-            if (proc_task(proc) == task) {
-                char *nm = proc_get_p_name(proc);
-                if (nm && nm[0]) strlcpy(buf, nm, len);
-                return;
-            }
-            uint64_t next = kread64(proc + off);
-            if (!is_kaddr_valid(next) || next == proc) break;
-            proc = next;
-        }
-    }
-}
-
-static bool rc_arm_preflight_should_defer(RCArmPreflight *pf)
-{
-    static int  s_pfCalls = 0;
-    static bool s_pfEverSawUnlocked = false;
-
-    if (pf->disabled) return false;
-    if (pf->spentNs >= RC_ARM_PREFLIGHT_BUDGET_NS) {
-        pf->disabled = true;
-        printf("[RC] arm preflight: per-init budget (900 ms) exhausted — "
-               "proceeding WITHOUT preflight for the rest of this init "
-               "(fail-open; the preflight is an avoidance hint, not a gate)\n");
-        return false;
-    }
-    if (!kexploit_krw_ready())
-        return false;   // cannot sample; the arm's own KRW use fails safely
-    uint64_t selfTask = task_self();
-    if (!is_kaddr_valid(selfTask))
-        return false;
-
-    uint64_t t0 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-    uint64_t word = kread64(selfTask + RC_TASK_LOCK_WORD_OFF);
-    s_pfCalls++;
-    if (word == 0) {
-        s_pfEverSawUnlocked = true;
-        pf->spentNs += clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - t0;
-        return false;   // fast path: lock free
-    }
-    // Held at first sight — poll: a µs-scale hold clears within a sample or
-    // two; task_policy_set camps on it.
-    for (int i = 0; i < 9; i++) {   // +9 × ~30 ms ≈ 300 ms total
-        usleep(30000);
-        word = kread64(selfTask + RC_TASK_LOCK_WORD_OFF);
-        if (word == 0) {
-            s_pfEverSawUnlocked = true;
-            pf->spentNs += clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - t0;
-            return false;   // transient hold, cleared — safe to arm
-        }
-    }
-    pf->spentNs += clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - t0;
-
-    // Implausibility guard: if the word has NEVER read 0 across the first
-    // several preflights, the lock-word assumption is wrong for this build
-    // (offset drift) — disable honestly rather than defer every arm.
-    if (s_pfCalls >= 8 && !s_pfEverSawUnlocked) {
-        pf->disabled = true;
-        printf("[RC] arm preflight: our task lock word (task+%#x) NEVER read "
-               "0 in %d preflights — signal implausible on this build; "
-               "preflight DISABLED for this init (fail-open)\n",
-               RC_TASK_LOCK_WORD_OFF, s_pfCalls);
-        return false;
-    }
-
-    // Continuously held for ~300 ms: decode the owner for the log. arm64
-    // lck_mtx_data keeps the owner thread pointer in the high bits with
-    // state tags in the low nibble; mask and validate. Undecodable → log
-    // the raw word, still defer (the 300 ms hold is the signal; the name
-    // is diagnostics only).
-    uint64_t owner = word & ~0xFULL;
-    if (is_kaddr_valid(owner)) {
-        uint64_t ownerTask = thread_get_task(owner);
-        if (is_kaddr_valid(ownerTask) && ownerTask != selfTask) {
-            char nm[40];
-            rc_proc_name_for_task(ownerTask, nm, sizeof(nm));
-            if (nm[0])
-                snprintf(pf->holder, sizeof(pf->holder),
-                         "thread %#llx of %s (task lock word %#llx)",
-                         owner, nm, word);
-            else
-                snprintf(pf->holder, sizeof(pf->holder),
-                         "thread %#llx of task %#llx (lock word %#llx)",
-                         owner, ownerTask, word);
-        } else if (ownerTask == selfTask) {
-            snprintf(pf->holder, sizeof(pf->holder),
-                     "our OWN thread %#llx camping on our task lock "
-                     "(word %#llx)", owner, word);
-        } else {
-            snprintf(pf->holder, sizeof(pf->holder),
-                     "owner %#llx, task unreadable (word %#llx)", owner, word);
-        }
-    } else {
-        snprintf(pf->holder, sizeof(pf->holder),
-                 "undecoded lock word %#llx", word);
-    }
-    return true;
-}
+// ---- Round 43: arm preflight REMOVED ------------------------------------
+// Round 41 added a KRW preflight here that sampled OUR task's lock word at
+// task+0x00 before each arm (defer the candidate while a foreign agent —
+// runningboardd/PerfPowerServices task_policy_set — is camped on our task
+// lock; the 184716/080209/082220 ABBA class). REMOVED in round 43: the first
+// on-device run (live 44.log, iPhone17,2 / iOS 18.5 22F76) showed the word
+// NEVER reading 0 across 11+ preflight calls in three separate inits, so the
+// implausibility guard self-disabled it on EVERY init — dead code that still
+// burned ~300 ms per candidate inside the critical activation window. The
+// offset assumption is unverifiable on this build: offsets.m itself shows
+// the task header layout shifted between iOS 17 and 18 (off_task_threads_
+// next 0x58 on 17.0-17.7 vs 0x50 on 18.0-18.7), and with no kernel symbol
+// table/KDK on-device the correct 22F76 offset or arm64e lck_mtx unlocked
+// encoding cannot be determined confidently. (The round-42 comment claiming
+// validation on 21D61/22F76 was never backed by an on-device run — live 44
+// is the first, and it falsifies the claim for 22F76.)
+// ABBA avoidance now rests on: the activation settle windows (rounds
+// 35/36/39), the stop/gate checks around every arm, the gate-aware wedge
+// declaration, and the revocable latch (round 43 A/B).
 
 bool set_exception_port_on_thread(mach_port_t exceptionPort, uint64_t currThread, bool useMigFilterBypass) {
     // Round 41: fail-closed. A wedged helper is parked in-kernel holding
@@ -4149,7 +4015,6 @@ static int init_remote_call_internal(const char* process, bool useMigFilterBypas
     const uint64_t kInitHardBudgetNs = 8ULL * 1000000000ULL;   // 8 s
     const uint64_t initStartNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     uint64_t triedThreads[16];
-    RCArmPreflight preflight = {0};   // round 41: task_policy_set contention defer
     int triedCount = 0;
     int totalWaitedMS = 0;
     uint64_t firstThread = 0;
@@ -4390,18 +4255,6 @@ static int init_remote_call_internal(const char* process, bool useMigFilterBypas
                 printf("[RC] walk: stop/gate landed during candidate validation "
                        "— refusing to arm %#llx; aborting walk\n", currThread);
                 break;
-            // Round 41: KRW preflight IMMEDIATELY before entering the arm
-            // trap family. If a foreign agent (runningboardd /
-            // PerfPowerServices task_policy_set, or anything else) is camped
-            // on OUR task lock, entering set_exception_ports here is the
-            // 184716 ABBA — defer this candidate instead. Bounded: ~300 ms
-            // per preflight, 900 ms per init, then fail-open (logged). The
-            // deferred candidate is simply skipped; the next attempt loop
-            // re-walks from the head and may find the lock free.
-            } else if (rc_arm_preflight_should_defer(&preflight)) {
-                printf("[RC] arm preflight: policy-set contention on our task "
-                       "(holder=%s) — deferring candidate arm\n",
-                       preflight.holder);
             } else if (!set_exception_port_on_thread(g_RC_firstExceptionPort, currThread, useMigFilterBypass)) {
                 printf("[%s:%d] Set exception port on thread:0x%llx failed\n", __FUNCTION__, __LINE__, (unsigned long long)currThread);
                 if (!validThreadCount) {
