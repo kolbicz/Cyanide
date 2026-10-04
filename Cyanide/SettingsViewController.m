@@ -8733,8 +8733,20 @@ static NSString *pm_chip_name(NSString *machine) {
     UIView *hdr = self.tableView.tableHeaderView;
     CGFloat w = self.tableView.bounds.size.width;
     if (hdr && w > 0 && hdr.frame.size.width != w) {
+        // Preserve the scroll position across the re-assign. Setting
+        // tableHeaderView makes UIKit snap contentOffset to (0,0) — i.e.
+        // "scrolled down by the safe-area inset" — which collapses the large
+        // title. On the FIRST push the header is built before the table has its
+        // real width, so this fires mid-transition and the title lands
+        // minimized/centered (and stays), while later entries (width already
+        // correct) don't trip it — the jumpy first-open. Re-pin to the top when
+        // we were at the top so the large title stays expanded.
+        CGFloat topY = -self.tableView.adjustedContentInset.top;
+        BOOL atTop = self.tableView.contentOffset.y <= topY + 1.0;
         hdr.frame = CGRectMake(0, 0, w, hdr.frame.size.height);
         self.tableView.tableHeaderView = hdr;   // re-assign to force relayout
+        if (atTop && self.tableView.contentOffset.y > topY)
+            self.tableView.contentOffset = CGPointMake(0, topY);
     }
 }
 
