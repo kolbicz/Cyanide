@@ -36,6 +36,7 @@ typedef NS_ENUM(NSInteger, SettingsSection) {
     SectionQuickLoader,
     SectionRepoTweaks,
     SectionLockScreenDuration,
+    SectionPasscodeTheme,
     SectionCount,
 };
 
@@ -67,6 +68,7 @@ extern NSString * const kSettingsSBCDockIcons;
 extern NSString * const kSettingsSBCCols;
 extern NSString * const kSettingsSBCRows;
 extern NSString * const kSettingsSBCHideLabels;
+extern NSString * const kSettingsSBCDockLabels;
 extern NSString * const kSettingsSBCArrangePages;
 extern NSString * const kSettingsSBCFirstPageIcons;
 extern NSString * const kSettingsSBCOtherPageIcons;
@@ -189,6 +191,11 @@ BOOL settings_hide_home_bar_hidden(void);
 void settings_note_hide_home_bar_respring_pending(void);
 BOOL settings_hide_home_bar_respring_pending(void);
 void settings_present_hide_home_bar_respring_prompt(UIViewController *host);
+
+// Applies the selected passcode style (apply == YES) or writes the backed-up
+// original keypad digits back (apply == NO). Runs the keypad file edits
+// immediately; returns YES when at least one digit was written and verified.
+BOOL settings_apply_passcode_theme_now(BOOL apply);
 
 void settings_run_actions(void);
 void settings_run_pending_actions(void);
