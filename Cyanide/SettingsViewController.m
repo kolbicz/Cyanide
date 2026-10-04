@@ -9422,6 +9422,24 @@ static NSString *pm_chip_name(NSString *machine) {
         cell.memL.textColor = [UIColor secondaryLabelColor];   // PMProcCell default
     }
 
+    // Round 44: a live spinner while a kill is in flight. The launchd force-quit
+    // can take a couple of seconds (session warm-up) — without an active
+    // indicator the dimmed row reads as "frozen". The spinner makes the wait
+    // legibly busy. Reset to nil on every non-terminating row so cell reuse
+    // never leaves a stray spinner.
+    if (terminating) {
+        UIActivityIndicatorView *spin = (UIActivityIndicatorView *)cell.accessoryView;
+        if (![spin isKindOfClass:UIActivityIndicatorView.class]) {
+            spin = [[UIActivityIndicatorView alloc]
+                        initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+            spin.color = [UIColor secondaryLabelColor];
+            cell.accessoryView = spin;
+        }
+        [spin startAnimating];
+    } else if ([cell.accessoryView isKindOfClass:UIActivityIndicatorView.class]) {
+        cell.accessoryView = nil;
+    }
+
     // Suspended rows stay selectable: they go through the normal quit/force-quit
     // dialog (SIGCONT + SIGTERM, or launchd SIGKILL which kills SSTOP outright).
     cell.selectionStyle = (protectedPid || terminating) ? UITableViewCellSelectionStyleNone
