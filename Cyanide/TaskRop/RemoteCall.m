@@ -1324,6 +1324,8 @@ typedef struct {
     pthread_t thread;          // helper pthread (trampoline looks itself up)
     volatile int exited;       // set by rc_helper_exit_trampoline
     int in_use;
+    int counted;               // counted in g_rc_helper_unaccounted (wedge
+                               // declared) — a late exit must decrement once
 } RCHelperSlot;
 static RCHelperSlot g_rc_helpers[RC_HELPER_SLOTS];
 static pthread_mutex_t g_rc_helpers_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -1337,17 +1339,57 @@ int remote_call_helper_unaccounted_count(void)
 
 // Runs as the helper's LR target: thread_set_exception_ports "returns" here
 // with its kern_return_t in x0. Marks the slot, then exits for real.
+// Round 43 (REVOCABLE latch): live 44 showed the round-41 latch firing on a
+// FALSE positive — the helper was merely DELAYED through the backgrounding
+// transition (rbd's task_policy_set holding our task lock + our threads
+// deprioritized mid-transition) and exited ~hundreds of ms after the 500 ms
+// join gave up. Nothing monitored the slot after latching, so one transient
+// delay disabled Force Quit for the whole session. Now every trampoline
+// exit re-checks: if the latch is set and this exit leaves NO unexited
+// counted helper, the wedge was transient — revoke the latch and re-enable
+// arms. A true in-kernel wedge never reaches the trampoline, so safety is
+// unchanged.
 static void rc_helper_exit_trampoline(void *ret)
 {
     pthread_t self = pthread_self();
+    bool revoke = false;
     pthread_mutex_lock(&g_rc_helpers_mutex);
     for (int i = 0; i < RC_HELPER_SLOTS; i++) {
         if (g_rc_helpers[i].in_use && g_rc_helpers[i].thread == self) {
             g_rc_helpers[i].exited = 1;
+            if (g_rc_helpers[i].counted) {
+                // Late exit AFTER a wedge declaration: hand the count back.
+                // (The slot itself is left allocated-but-exited; the creator
+                // may still be in its extended join reading ->exited — freeing
+                // here would race that read. Bounded leak, 64 slots.)
+                g_rc_helpers[i].counted = 0;
+                atomic_fetch_sub_explicit(&g_rc_helper_unaccounted, 1,
+                                          memory_order_acq_rel);
+            }
             break;
         }
     }
+    if (atomic_load_explicit(&g_rc_helper_wedged_latch, memory_order_acquire)) {
+        bool anyUnexited = false;
+        for (int i = 0; i < RC_HELPER_SLOTS; i++) {
+            if (g_rc_helpers[i].in_use && !g_rc_helpers[i].exited) {
+                anyUnexited = true;
+                break;
+            }
+        }
+        // While the latch is set no NEW helpers can be created (arms are
+        // refused), so an unexited in-use slot here is a genuinely still-
+        // stuck helper — revoke only when none remain.
+        if (!anyUnexited) {
+            atomic_store_explicit(&g_rc_helper_wedged_latch, false,
+                                  memory_order_release);
+            revoke = true;
+        }
+    }
     pthread_mutex_unlock(&g_rc_helpers_mutex);
+    if (revoke)
+        printf("[RC] tro-dance helper eventually exited — wedge was transient, "
+               "arms re-enabled\n");
     pthread_exit(ret);
 }
 
@@ -1359,6 +1401,7 @@ static RCHelperSlot *rc_helper_slot_alloc(pthread_t thread)
         if (!g_rc_helpers[i].in_use) {
             g_rc_helpers[i].in_use = 1;
             g_rc_helpers[i].exited = 0;
+            g_rc_helpers[i].counted = 0;
             g_rc_helpers[i].thread = thread;
             slot = &g_rc_helpers[i];
             break;
@@ -1809,6 +1852,7 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
     } else {
         int unaccounted = atomic_fetch_add_explicit(&g_rc_helper_unaccounted, 1,
                                                     memory_order_acq_rel) + 1;
+        helperSlot->counted = 1;   // round 43: a late trampoline exit hands the count back
         atomic_store_explicit(&g_rc_helper_wedged_latch, true, memory_order_release);
         printf("[RC] tro-dance helper WEDGED in-kernel — process must not exit; "
                "refusing further arms this session (helper pthread=%p "
