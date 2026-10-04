@@ -502,6 +502,83 @@ int sbcustomizer_hide_home_labels_in_session(void)
 // as soon as we observe the hook is no longer live (see the hook-active check).
 static uint64_t g_labels_shouldshow_old_imp = 0;
 
+// The mirror of the hide hook, for Dock Labels on iOS 17.
+//
+// -[NSObject isProxy] returns NO and -[NSProxy isProxy] returns YES: a
+// documented pair of real in-image functions with the same signature, so the
+// same method_setImplementation trick points _shouldShowLabel at either answer
+// with no gadget to hunt and no pointer to forge. SpringBoard signs the IMP
+// (PAC) itself, as it does for the NO direction above.
+//
+// Both directions write the SAME method, so Hide Labels and Dock Labels cannot
+// both hold it on iOS 17. The caller checks that; this just resolves.
+static int labels_resolve_show_hook(uint64_t *methodOut, uint64_t *trueIMPOut)
+{
+    uint64_t clsIconView   = r_class("SBIconView");
+    uint64_t selShouldShow = r_sel("_shouldShowLabel");
+    uint64_t NSProxy       = r_class("NSProxy");
+    uint64_t selTrue       = r_sel("isProxy");   // -[NSProxy isProxy] => YES
+    if (!r_is_objc_ptr(clsIconView) || !selShouldShow ||
+        !r_is_objc_ptr(NSProxy) || !selTrue) return 0;
+    uint64_t method = r_dlsym_call(R_TIMEOUT, "class_getInstanceMethod",
+                                   clsIconView, selShouldShow, 0, 0, 0, 0, 0, 0);
+    uint64_t trueMethod = r_dlsym_call(R_TIMEOUT, "class_getInstanceMethod",
+                                       NSProxy, selTrue, 0, 0, 0, 0, 0, 0);
+    uint64_t trueIMP = trueMethod
+        ? r_dlsym_call(R_TIMEOUT, "method_getImplementation",
+                       trueMethod, 0, 0, 0, 0, 0, 0, 0)
+        : 0;
+    if (!method || !trueIMP) return 0;
+
+    // Sanity: NSProxy's isProxy must be a DIFFERENT function from NSObject's,
+    // or we would be installing the NO answer while believing it is YES.
+    uint64_t NSObject = r_class("NSObject");
+    uint64_t falseMethod = NSObject
+        ? r_dlsym_call(R_TIMEOUT, "class_getInstanceMethod",
+                       NSObject, selTrue, 0, 0, 0, 0, 0, 0)
+        : 0;
+    uint64_t falseIMP = falseMethod
+        ? r_dlsym_call(R_TIMEOUT, "method_getImplementation",
+                       falseMethod, 0, 0, 0, 0, 0, 0, 0)
+        : 0;
+    if (falseIMP && falseIMP == trueIMP) {
+        printf("[SBC] dock labels: NSProxy/NSObject isProxy share an IMP; refusing to hook\n");
+        return 0;
+    }
+
+    if (methodOut)  *methodOut = method;
+    if (trueIMPOut) *trueIMPOut = trueIMP;
+    return 1;
+}
+
+// Install the YES answer. Only called once the probe has shown that this dock
+// icon's _shouldShowLabel really does answer NO -- that is the condition where
+// this is the right lever, and the only one where it is worth rewriting a
+// method table inside SpringBoard.
+int sbcustomizer_swizzle_labels_shown(void)
+{
+    uint64_t method = 0, trueIMP = 0;
+    if (!labels_resolve_show_hook(&method, &trueIMP)) {
+        printf("[SBC] dock labels: show hook unavailable (no session or selector missing)\n");
+        return 0;
+    }
+    // Same idempotence rule as the hide hook: never rewrite a live method table
+    // that already holds our IMP. Re-writing it (and flushing the cache) while
+    // SpringBoard animates icons can branch through a half-updated IMP.
+    uint64_t curIMP = r_dlsym_call(R_TIMEOUT, "method_getImplementation",
+                                   method, 0, 0, 0, 0, 0, 0, 0);
+    if (curIMP == trueIMP) {
+        printf("[SBC] dock labels: _shouldShowLabel already forced YES; leaving as-is\n");
+        return 1;
+    }
+    uint64_t oldIMP = r_dlsym_call(R_TIMEOUT, "method_setImplementation",
+                                   method, trueIMP, 0, 0, 0, 0, 0, 0);
+    if (oldIMP && oldIMP != trueIMP) g_labels_shouldshow_old_imp = oldIMP;
+    printf("[SBC] dock labels: swizzled SBIconView._shouldShowLabel -> YES oldIMP=0x%llx\n",
+           oldIMP);
+    return oldIMP != 0;
+}
+
 // Resolve the pieces once. Returns 0 (and leaves outs untouched) if unavailable
 // (e.g. no live SpringBoard session yet).
 static int labels_resolve_hook(uint64_t *methodOut, uint64_t *falseIMPOut)
@@ -582,10 +659,16 @@ int sbcustomizer_restore_home_labels(void)
     uint64_t method = 0, falseIMP = 0;
     if (!labels_resolve_hook(&method, &falseIMP)) return 0;
     // Only restore if OUR hook is still the current IMP; otherwise a respring already
-    // cleared it and the saved pointer is stale.
+    // cleared it and the saved pointer is stale. Either direction counts: Hide Labels
+    // installs the NO answer and Dock Labels the YES one, both over this same method.
+    uint64_t trueIMP = 0, showMethod = 0;
+    (void)labels_resolve_show_hook(&showMethod, &trueIMP);
     uint64_t curIMP = r_dlsym_call(R_TIMEOUT, "method_getImplementation",
                                    method, 0, 0, 0, 0, 0, 0, 0);
-    if (curIMP != falseIMP) { g_labels_shouldshow_old_imp = 0; return 0; }
+    if (curIMP != falseIMP && !(trueIMP && curIMP == trueIMP)) {
+        g_labels_shouldshow_old_imp = 0;
+        return 0;
+    }
     r_dlsym_call(R_TIMEOUT, "method_setImplementation",
                  method, g_labels_shouldshow_old_imp, 0, 0, 0, 0, 0, 0);
     printf("[SBC] labels: restored SBIconView._shouldShowLabel\n");
@@ -692,7 +775,7 @@ static bool set_shows_labels_for_location(uint64_t provider, const char *locName
 // Caveat on iOS 17: Hide Labels installs a process-wide _shouldShowLabel hook
 // that answers NO for every SBIconView, the dock included. While that hook is
 // up a rebuilt dock icon comes back unlabelled no matter what is set here.
-static int set_dock_icon_labels(uint64_t iconCtrl, bool show)
+static int set_dock_icon_labels(uint64_t iconCtrl, bool show, bool mayForceShowLabels)
 {
     uint64_t mgr = try_msg0(iconCtrl, "iconManager");
     if (!mgr) { printf("[SBC] dock labels: nil iconManager\n"); return 0; }
@@ -729,9 +812,45 @@ static int set_dock_icon_labels(uint64_t iconCtrl, bool show)
     if (n > 64) n = 64;   // a dock holds a handful of icons; cap a wild read
     uint64_t wantHidden = show ? 0 : 1;
     int changed = 0;
+    int probed = 0;
     for (uint64_t i = 0; i < n; i++) {
         uint64_t v = r_msg_main(subs, selObjAt, i, 0, 0, 0);
         if (!v || !r_msg_main(v, selKind, clsIconView, 0, 0, 0)) continue;
+
+        // Report what the first dock icon actually exposes. Clearing
+        // labelHidden on four real icon views changed nothing on iOS 17
+        // (chain log 20261004-113402), and the guess that fits both that and
+        // Hide Labels working is that _updateLabel computes
+        // "_shouldShowLabel && !labelHidden" -- NO for a dock icon either way.
+        // Print the pieces rather than keep inferring them.
+        if (!probed) {
+            probed = 1;
+            uint64_t selShouldShow = r_sel("_shouldShowLabel");
+            int responds = selShouldShow ? r_responds(v, "_shouldShowLabel") : 0;
+            uint64_t shouldShow = responds ? r_msg_main(v, selShouldShow, 0, 0, 0, 0) : 2;
+            printf("[SBC] dock labels: probe labelHidden=%llu _shouldShowLabel=%s"
+                   " labelView=%d _labelView=%d iconLabelView=%d alpha=%d\n",
+                   (unsigned long long)r_msg_main(v, selIsHidden, 0, 0, 0, 0),
+                   responds ? (shouldShow ? "YES" : "NO") : "absent",
+                   r_responds(v, "labelView"),
+                   r_responds(v, "_labelView"),
+                   r_responds(v, "iconLabelView"),
+                   r_responds(v, "setIconLabelAlpha:"));
+
+            // Clearing labelHidden is not enough when the icon itself answers
+            // "no label here": _updateLabel takes both into account. Force the
+            // answer to YES, but only on the evidence of this probe -- never
+            // speculatively, because this rewrites a method table inside a live
+            // SpringBoard.
+            if (show && mayForceShowLabels && responds && !shouldShow) {
+                if (sbcustomizer_swizzle_labels_shown()) {
+                    // The hook changes what _updateLabel computes, so the
+                    // per-view pass below now has something to build.
+                    printf("[SBC] dock labels: forced _shouldShowLabel=YES for this session\n");
+                }
+            }
+        }
+
         if (r_msg_main(v, selIsHidden, 0, 0, 0, 0) == wantHidden) continue;   // already right
         r_msg_main(v, selHidden, wantHidden, 0, 0, 0);
         r_msg_main(v, selUpdate, 0, 0, 0, 0);
@@ -746,12 +865,12 @@ static int set_dock_icon_labels(uint64_t iconCtrl, bool show)
 // Public entry point. Called as a late home-screen step, after the dock has been
 // resized and any auto-dock move has run, so every icon view that will exist is
 // there to be relabelled. Session must be open.
-int sbcustomizer_set_dock_labels_in_session(bool show)
+int sbcustomizer_set_dock_labels_in_session(bool show, bool mayForceShowLabels)
 {
     uint64_t cls = r_class("SBIconController");
     uint64_t iconCtrl = cls ? r_msg2(cls, "sharedInstance", 0, 0, 0, 0) : 0;
     if (!r_is_objc_ptr(iconCtrl)) { printf("[SBC] dock labels: no SBIconController\n"); return 0; }
-    return set_dock_icon_labels(iconCtrl, show);
+    return set_dock_icon_labels(iconCtrl, show, mayForceShowLabels);
 }
 
 static void patch_homescreen_grid(uint64_t iconCtrl, int cols, int rows, bool hideLabels)

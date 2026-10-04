@@ -7646,17 +7646,27 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                     // stock bare dock without needing a respring.
                     if ([d boolForKey:kSettingsSBCEnabled]) {
                         BOOL wantDockLabels = [d boolForKey:kSettingsSBCDockLabels];
-                        int nDock = sbcustomizer_set_dock_labels_in_session(wantDockLabels);
+                        BOOL hidingLabels = [d boolForKey:kSettingsSBCHideLabels];
+                        // Both toggles drive the same _shouldShowLabel method on
+                        // iOS 17, so only one may hold it. Hide Labels wins: it is
+                        // the older, broader setting, and it is already installed by
+                        // the block above.
+                        BOOL mayForce = !hidingLabels;
+                        int nDock = sbcustomizer_set_dock_labels_in_session(wantDockLabels, mayForce);
                         if (wantDockLabels) {
                             log_user("[OK] Dock labels shown on %d icon view(s).\n", nDock);
-                            if (settings_current_ios_major() < 18 &&
-                                [d boolForKey:kSettingsSBCHideLabels]) {
+                            if (hidingLabels) {
                                 // The iOS 17 Hide Labels hook answers NO for every
                                 // SBIconView, so a rebuilt dock icon loses the label
                                 // again. Say so rather than let it look flaky.
-                                log_user("[RUN] Note: Hide icon labels also hides dock labels on "
-                                         "iOS 17; turn it off to keep them.\n");
+                                log_user("[RUN] Note: Hide icon labels and Show dock labels use the "
+                                         "same SpringBoard switch; turn Hide icon labels off to keep "
+                                         "dock labels.\n");
                             }
+                        } else if (!hidingLabels) {
+                            // Turning dock labels off: drop the forced-YES hook if we
+                            // are the ones holding it, so the dock goes back to stock.
+                            sbcustomizer_restore_home_labels();
                         }
                         settings_mark_tweak_applied(kSettingsSBCDockLabels, wantDockLabels);
                     }

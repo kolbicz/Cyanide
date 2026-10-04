@@ -36,7 +36,17 @@ void sbcustomizer_forget_home_labels_hook_state(void);
 // them. Sets the dock icon location's showsLabels (durable on iOS 18) and
 // clears setLabelHidden: on the dock's own icon views (the only lever on
 // iOS 17, and an immediate repaint on both). Returns icon views changed.
-int sbcustomizer_set_dock_labels_in_session(bool show);
+// mayForceShowLabels: the caller's permission to install the process-wide
+// _shouldShowLabel=YES hook if the dock icons turn out to need it (iOS 17,
+// and Hide Labels not holding the same method). Ignored when show is false.
+int sbcustomizer_set_dock_labels_in_session(bool show, bool mayForceShowLabels);
+
+// iOS 17 Dock Labels: the mirror of sbcustomizer_swizzle_home_labels_hidden().
+// Points -[SBIconView _shouldShowLabel] at -[NSProxy isProxy] (YES) so dock
+// icons stop answering NO and their labels are built. Process-wide, so it
+// cannot be held at the same time as Hide Labels. restore_home_labels undoes
+// either direction. Session must be open.
+int sbcustomizer_swizzle_labels_shown(void);
 
 // Cheap current-page identity for the Hide Labels loop's change detection.
 uint64_t sbcustomizer_current_page_token(void);
