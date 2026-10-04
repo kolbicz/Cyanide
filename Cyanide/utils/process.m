@@ -115,6 +115,38 @@ bool procmgr_pid_is_protected(int pid) {
     return pid <= 1 || pid == (int)getpid();
 }
 
+// comm-based kill protection (round 5): a SpringBoard SIGKILL delivered from
+// inside launchd panicked the device with "initproc exited" at 19:45:45
+// (iOS 17.3.1) — whether through the target's role in launchd's bookkeeping or
+// a garbled dispatch, killing critical user-space processes through a hijacked
+// launchd thread is not survivable. Never offer or perform it.
+bool procmgr_comm_is_protected(const char *comm) {
+    if (!comm || !comm[0]) return false;
+    return strcmp(comm, "launchd") == 0 ||
+           strcmp(comm, "SpringBoard") == 0 ||
+           strcmp(comm, "backboardd") == 0;
+}
+
+// Resolve a pid's comm via KRW ("" on any failure). For the kill hard-stops;
+// a lookup failure is NOT proof of safety — callers must keep the pid checks.
+int procmgr_comm_for_pid(int pid, char *buf, size_t len) {
+    if (!buf || len == 0) return -1;
+    buf[0] = '\0';
+    if (pid <= 0) return -1;
+    if (!kexploit_krw_session_active()) return -1;
+    krw_set_nonfatal(true);
+    uint64_t proc = proc_find(pid);
+    if (procmgr_is_kern_ptr(proc)) {
+        char *nm = proc_get_p_name(proc);   // static buffer — copy out now
+        if (nm) {
+            strncpy(buf, nm, len - 1);
+            buf[len - 1] = '\0';
+        }
+    }
+    krw_set_nonfatal(false);
+    return buf[0] ? 0 : -1;
+}
+
 // Returns the proc's p_stat (PM_SRUN, PM_SSTOP, PM_SZOMB, ...) via libproc,
 // or -1 when proc_pidinfo can't inspect the pid. Read-only, never crashes.
 int procmgr_pstat(int pid) {
@@ -123,6 +155,124 @@ int procmgr_pstat(int pid) {
     int rc = proc_pidinfo(pid, PM_PROC_PIDTBSDINFO, 0, &bi, (int)sizeof(bi));
     if (rc < 8) return -1;  // needs at least pbi_flags + pbi_status
     return (int)bi.pbi_status;
+}
+
+// Same p_stat (PM_SRUN, PM_SSTOP, PM_SZOMB, ...) but read straight out of
+// struct proc via KRW — kernel ground truth. libproc's pbi_status can lag or
+// stay SRUN for a suspended process, and after a kill() issued through a
+// remote session this is the authoritative check of whether the pid is really
+// gone (SZOMB counts as dead). -1 when KRW or the pid is unavailable.
+int procmgr_pstat_krw(int pid) {
+    if (!off_proc_p_stat) return -1;
+    if (!kexploit_krw_ready()) return -1;
+    krw_set_nonfatal(true);
+    int rc = -1;
+    uint64_t proc = proc_find(pid);
+    if (procmgr_is_kern_ptr(proc)) {
+        // p_stat is a char; reading 32 bits is safe inside struct proc.
+        uint32_t v = kread32(proc + off_proc_p_stat);
+        rc = (int)(v & 0xFF);
+    }
+    krw_set_nonfatal(false);
+    return rc;
+}
+
+// Round 13: ONE allproc walk for both kill-verdict inputs — present (still in
+// the list) and p_stat. The verdict loop and the UI's post-kill check used to
+// walk twice per checkpoint (procmgr_pid_alive + procmgr_pstat_krw), and each
+// walk is 2 kreads per proc until the pid is found. Semantics match the old
+// pair exactly: present=false when KRW is down or the pid is gone; pstat=-1
+// when KRW/the offset/the pid is unavailable (so "present + pstat=-1" is the
+// old alive=true + kst=-1 inconclusive case).
+int procmgr_pid_status_krw(int pid, bool *outPresent) {
+    if (outPresent) *outPresent = false;
+    if (!kexploit_krw_ready()) return -1;
+    krw_set_nonfatal(true);
+    int stat = -1;
+    uint64_t proc = proc_find(pid);
+    if (procmgr_is_kern_ptr(proc)) {
+        if (outPresent) *outPresent = true;
+        if (off_proc_p_stat) {
+            // p_stat is a char; reading 32 bits is safe inside struct proc.
+            uint32_t v = kread32(proc + off_proc_p_stat);
+            stat = (int)(v & 0xFF);
+        }
+    }
+    krw_set_nonfatal(false);
+    return stat;
+}
+
+// --- task->bsd_info back-pointer (TOCTOU guard, round 14) -------------------
+// Every proc->task path in the poll loop has the same race: the process can
+// exit between proc_find() and the task dereference, leaving us reading a
+// freed — or worse, REALLOCATED — task. A reallocated task still passes the
+// kern-ptr range check, and a freed task on a zone page trimmed after the
+// (one-time) ksafe snapshot faults the kernel synchronously on the first
+// read. xnu keeps a back-pointer from the task to its proc (bsd_info);
+// comparing it against the proc we started from catches reuse (names another
+// proc) and teardown (cleared to NULL). The offset is calibrated by scanning
+// OUR OWN task for the qword equal to our own proc pointer, cross-checked
+// against launchd's task (must point back at launchd's proc); a UNIQUE match
+// is required. Uncalibrated -> callers keep the old kern-ptr-only behavior
+// (fail-open, exactly as before this guard existed).
+static uint32_t g_pm_off_task_bsdinfo = 0;
+static int      g_pm_bsdinfo_attempts = 0;
+#define PM_BSDINFO_MAX_ATTEMPTS 3   // then give up for the session (log-quiet)
+
+static void pm_calibrate_bsdinfo(void) {
+    if (g_pm_off_task_bsdinfo) return;
+    if (g_pm_bsdinfo_attempts >= PM_BSDINFO_MAX_ATTEMPTS) return;
+    g_pm_bsdinfo_attempts++;
+    if (!kexploit_krw_ready()) return;
+
+    krw_set_nonfatal(true);
+    uint64_t selfProc = proc_self();
+    uint64_t task = proc_task(selfProc);
+    uint32_t cap = procmgr_is_kern_ptr(task) ? pm_scan_cap(task, 0x800) : 0;
+    uint64_t lproc = proc_find(1);
+    uint64_t ltask = procmgr_is_kern_ptr(lproc) ? proc_task(lproc) : 0;
+    bool haveLaunchd = procmgr_is_kern_ptr(ltask);
+
+    uint32_t found = 0;
+    int matches = 0;
+    if (cap >= 0x40 + 8) {
+        uint8_t tb[0x800];
+        kreadbuf(task, tb, cap);
+        for (uint32_t off = 0x40; off + 8 <= cap; off += 8) {
+            if (*(uint64_t *)(tb + off) != selfProc) continue;   // == our proc
+            if (haveLaunchd && kread64(ltask + off) != lproc) continue;
+            matches++;
+            found = off;
+        }
+    }
+    krw_set_nonfatal(false);
+
+    if (found && matches == 1) {
+        g_pm_off_task_bsdinfo = found;
+        printf("[PROCMGR] bsd_info calibrated: task=+0x%x (launchd xcheck=%d)\n",
+               found, haveLaunchd ? 1 : 0);
+    } else {
+        printf("[PROCMGR] bsd_info calibration failed (attempt %d/%d, matches=%d "
+               "launchd=%d) — proc->task guards stay kern-ptr-only\n",
+               g_pm_bsdinfo_attempts, PM_BSDINFO_MAX_ATTEMPTS, matches,
+               haveLaunchd ? 1 : 0);
+    }
+}
+
+// 1 = task's bsd_info back-pointer still names proc; 0 = mismatch (freed or
+// reallocated — do NOT dereference the task further); -1 = uncalibrated, no
+// verdict (callers fall through to the pre-guard behavior).
+static int pm_task_matches_proc(uint64_t task, uint64_t proc) {
+    if (!g_pm_off_task_bsdinfo) return -1;
+    // This is the liveness guard, but kread64(task + bsdinfo) is itself the
+    // FIRST dereference of `task` — gate it with ksafe first, like
+    // pm_kernel_stats and the kutils thread path do. Caller's procmgr_is_kern_ptr
+    // is only a VA-range check; a stale task pointer into a never-committed zone
+    // window would fault the kernel here (nonfatal can't intercept a kernel data
+    // abort). Treat an unmapped task as "no match" so callers skip the read.
+    if (ksafe_available() && !kaddr_is_mapped(task, g_pm_off_task_bsdinfo + 8))
+        return 0;
+    return kread64(task + g_pm_off_task_bsdinfo) == proc ? 1 : 0;
 }
 
 // --- task->suspend_count: is a process task-suspended (preloaded)? -----------
@@ -230,13 +380,25 @@ int procmgr_suspend_count(int pid) {
     uint64_t proc = proc_find(pid);
     if (procmgr_is_kern_ptr(proc)) {
         uint64_t task = proc_task(proc);
-        if (procmgr_is_kern_ptr(task)) {
+        // TOCTOU guard (round 14): the proc can exit between the walk and
+        // this read; require the task's bsd_info back-pointer to still name
+        // this proc (uncalibrated -> no verdict, read as before).
+        if (procmgr_is_kern_ptr(task) && pm_task_matches_proc(task, proc) != 0) {
             uint32_t sc = kread32(task + g_pm_off_task_suspcount);
             if (sc <= 64) rc = (int)sc;     // >64 is implausible: torn/bad read
         }
     }
     krw_set_nonfatal(false);
     return rc;
+}
+
+// offsetof(task, thread_count) from the suspend_count calibration (the three
+// counters are consecutive: thread_count, active, suspend_count). Runs the
+// calibration on first use; -1 when it can't calibrate this session.
+int procmgr_task_thread_count_offset(void) {
+    if (!g_pm_off_task_suspcount) pm_calibrate_suspcount();
+    if (!g_pm_off_task_suspcount) return -1;
+    return (int)g_pm_off_task_suspcount - 8;
 }
 
 // --- task category role (foreground / background app vs daemon) -------------
@@ -285,7 +447,9 @@ int procmgr_task_role(int pid) {
     uint64_t proc = proc_find(pid);
     if (procmgr_is_kern_ptr(proc)) {
         uint64_t task = proc_task(proc);
-        if (procmgr_is_kern_ptr(task)) {
+        // TOCTOU guard (round 14): same freed/reused-task race as
+        // procmgr_stats — verify the bsd_info back-pointer first.
+        if (procmgr_is_kern_ptr(task) && pm_task_matches_proc(task, proc) != 0) {
             uint64_t v = kread64(task + g_pm_off_role);
             role = (int)((v >> g_pm_role_shift) & g_pm_role_mask);
         }
@@ -298,6 +462,133 @@ bool procmgr_role_is_foreground(int role) { return role == TASK_FOREGROUND_APPLI
 bool procmgr_role_is_switcher(int role)   { return role == TASK_BACKGROUND_APPLICATION; }
 bool procmgr_role_is_app(int role) {
     return role == TASK_FOREGROUND_APPLICATION || role == TASK_BACKGROUND_APPLICATION;
+}
+
+// --- app vs service classification via executable path (KRW) -----------------
+// proc->p_textvp is the vnode of the process's executable; walking v_parent up
+// to a filesystem root and joining v_name components reconstructs its path.
+// User-facing apps (the app-switcher kind) live under
+// .../containers/Bundle/Application/ (third-party; possibly mount-truncated
+// where the walk stops at the /var filesystem root) or /Applications/ (system
+// apps). Everything else — /usr/libexec, /usr/sbin, /System/..., SpringBoard
+// itself — counts as a background service.
+//
+// This replaces the task-category-role route for telling apps from daemons:
+// pm_calibrate_task_role is disabled by design (task_policy_set deadlocked the
+// system — see its comment), so the role field was never calibrated and NO
+// row was ever marked on iOS 18. The path route is read-only and never touches
+// task policy. Classification is cached per pid for the app run: a live pid's
+// executable never changes (a recycled pid could be mislabeled; accepted —
+// the viewer is cosmetic).
+
+// Read a NUL-terminated string from the kernel a few bytes at a time, never
+// past the end of the current page (a name string at a page edge whose next
+// page is unmapped would fault the KERNEL — same rule as pm_scan_cap), and
+// through the ksafe map when it is up.
+static size_t pm_kread_cstr(uint64_t kaddr, char *out, size_t cap) {
+    if (!cap) return 0;
+    size_t total = 0;
+    uint64_t pageMask = (uint64_t)vm_page_size - 1;
+    while (total < cap - 1) {
+        size_t pageLeft = (size_t)((uint64_t)vm_page_size - ((kaddr + total) & pageMask));
+        size_t chunk = MIN((size_t)16, MIN(pageLeft, cap - 1 - total));
+        // kreadbuf moves 8-byte units (krw.m:171 early_kread64), so a chunk of
+        // 9-15 would read up to 7 bytes PAST the range kaddr_is_mapped just
+        // validated — possibly into an unmapped next page (kernel fault).
+        // Round DOWN to a multiple of 8 so reads never span past validated bytes.
+        chunk &= ~(size_t)7;
+        if (chunk < 8) break;               // kreadbuf moves 8-byte units
+        if (ksafe_available() && !kaddr_is_mapped(kaddr + total, chunk)) break;
+        char tmp[16] = {0};
+        kreadbuf(kaddr + total, tmp, chunk);
+        memcpy(out + total, tmp, chunk);
+        total += chunk;
+        if (memchr(tmp, 0, chunk)) break;
+    }
+    out[MIN(total, cap - 1)] = '\0';
+    return strnlen(out, cap);
+}
+
+static bool pm_vnode_name(uint64_t vp, char *out, size_t cap) {
+    uint64_t namep = kread64(vp + off_vnode_v_name);   // same raw read as vnode_get_v_name()
+    if (!namep || !procmgr_is_kern_ptr(namep)) return false;
+    return pm_kread_cstr(namep, out, cap) > 0;
+}
+
+// Reconstruct the executable path for a proc. Components whose names were
+// purged from the namecache come out empty and are skipped; the result may be
+// mount-truncated (missing the "/private/var" prefix when /var is its own
+// filesystem) — classifiers must substring-match, not prefix-match.
+static bool pm_exe_path_for_proc(uint64_t proc, char *buf, size_t buflen) {
+    if (!off_proc_p_textvp || !off_vnode_v_name || !off_vnode_v_parent) return false;
+    uint64_t vp = xpaci(kread64(proc + off_proc_p_textvp));
+    if (!procmgr_is_kern_ptr(vp)) return false;
+
+    char comps[24][65];
+    int nc = 0;
+    for (int depth = 0; depth < 24; depth++) {
+        if (!procmgr_is_kern_ptr(vp)) break;
+        // v_name (0xb8) and v_parent (0xc0) both live in the first 0xd0 bytes.
+        if (ksafe_available() && !kaddr_is_mapped(vp, 0xd0)) break;
+        char name[65] = {0};
+        pm_vnode_name(vp, name, sizeof(name));
+        uint64_t parent = xpaci(kread64(vp + off_vnode_v_parent));
+        if (parent == vp || !procmgr_is_kern_ptr(parent)) break;   // filesystem root
+        if (name[0] && nc < 24) {
+            strncpy(comps[nc], name, 64);
+            comps[nc][64] = '\0';
+            nc++;
+        }
+        vp = parent;
+    }
+    if (!nc) return false;
+    size_t pos = 0;
+    buf[0] = '\0';
+    for (int i = nc - 1; i >= 0 && pos + 2 < buflen; i--) {
+        int w = snprintf(buf + pos, buflen - pos, "/%s", comps[i]);
+        if (w < 0) break;
+        pos += MIN((size_t)w, buflen - 1 - pos);
+    }
+    return buf[0] != '\0';
+}
+
+static int pm_classify_path(const char *path) {
+    if (strstr(path, "/containers/Bundle/Application/")) return PM_KIND_APP;   // third-party apps
+    if (strncmp(path, "/Applications/", 14) == 0) return PM_KIND_APP;          // system apps
+    return PM_KIND_SERVICE;
+}
+
+static NSMutableDictionary<NSNumber *, NSNumber *> *g_pm_kind_cache = nil;
+static pthread_mutex_t g_pm_kind_lock = PTHREAD_MUTEX_INITIALIZER;
+
+int procmgr_exe_kind(int pid) {
+    pthread_mutex_lock(&g_pm_kind_lock);
+    NSNumber *hit = g_pm_kind_cache[@(pid)];
+    pthread_mutex_unlock(&g_pm_kind_lock);
+    if (hit) return hit.intValue;
+
+    // Cheap liveness only: reloadProcs already validated the session this pass,
+    // and kexploit_krw_ready() per pid would add ~500 setsockopt validations.
+    if (!kexploit_krw_session_active()) return PM_KIND_SERVICE;
+
+    krw_set_nonfatal(true);
+    char path[1024];
+    path[0] = '\0';
+    bool ok = false;
+    uint64_t proc = proc_find(pid);
+    if (procmgr_is_kern_ptr(proc))
+        ok = pm_exe_path_for_proc(proc, path, sizeof(path));
+    krw_set_nonfatal(false);
+
+    int kind = ok ? pm_classify_path(path) : PM_KIND_SERVICE;   // unreadable -> muted
+    pthread_mutex_lock(&g_pm_kind_lock);
+    if (!g_pm_kind_cache) g_pm_kind_cache = [NSMutableDictionary dictionary];
+    if (g_pm_kind_cache.count > 2048) [g_pm_kind_cache removeAllObjects];  // bound it
+    g_pm_kind_cache[@(pid)] = @(kind);
+    pthread_mutex_unlock(&g_pm_kind_lock);
+    printf("[PROCMGR] classify: pid %d -> %s (%s)\n", pid,
+           kind == PM_KIND_APP ? "app" : "service", ok ? path : "no path");
+    return kind;
 }
 
 // Read one proc's pid+name into an entry. Returns false if the proc looks bogus.
@@ -325,6 +616,10 @@ int procmgr_list(procmgr_entry_t *entries, int max) {
     if (!procmgr_is_kern_ptr(self)) { krw_set_nonfatal(false); return -1; }
 
     int n = 0;
+    // Round 13: one krwLock hold + one final repark for the whole list walk
+    // (~6 kreads/proc — the per-op repark was a third syscall on every read of
+    // every poll). procmgr_fill_entry() is pure kreads, so this is batch-safe.
+    bool batched = krw_batch_begin();
     // The proc list is a doubly-linked LIST anchored at allproc. p_list.le_next
     // sits at offset 0 of proc, so le_prev conveniently reads back as the prior
     // proc pointer (same trick kutils uses). Walk both ways from self.
@@ -347,6 +642,7 @@ int procmgr_list(procmgr_entry_t *entries, int max) {
         if (pv == p) break;
         p = pv;
     }
+    if (batched) krw_batch_end();
 
     krw_set_nonfatal(false);
     return n;
@@ -739,6 +1035,11 @@ static void pm_recount_read_sums(uint64_t th, uint32_t off, uint32_t ts,
                                  uint32_t ls, uint32_t cnt,
                                  uint64_t *uMach, uint64_t *sMach) {
     uint64_t P = kread64(th + off);
+    // A failed read zero-fills (fail-safe early_kread), and P=0 would make the
+    // loop below read 0x8, 0x8+ls, … — garbage sums at best. Treat a non-kernel
+    // P as "no data this pass"; the value-match against thread_info rejects the
+    // candidate either way.
+    if (!procmgr_is_kern_ptr(P)) { *uMach = 0; *sMach = 0; return; }
     uint64_t u = 0, s = 0;
     for (uint32_t i = 0; i < cnt; i++) {
         uint64_t b = P + (uint64_t)i * ts;
@@ -782,6 +1083,13 @@ static bool pm_calibrate_thread_recount(uint64_t th, uint32_t scanLen) {
         {1,3,1},{1,3,0},{1,2,1},{1,2,0},{0,3,1},{0,3,0},{0,2,1},{0,2,0},
     };
     for (uint32_t off = 0x100; off + 8 <= scanLen; off += 8) {
+        // Mid-pass bail: the scan runs long (burns + sleeps per candidate) and
+        // a background detach can land mid-pass. With the sockets gone every
+        // read zero-fills; bail instead of burning seconds on garbage.
+        if (!kexploit_krw_session_active()) {
+            printf("[PROCMGR] recount calib: aborted mid-pass (KRW detached)\n");
+            return false;
+        }
         uint64_t P = kread64(th + off);
         if ((P & 0xF) != 0) continue;
         uint64_t band32 = P >> 32;
@@ -1528,11 +1836,32 @@ static void pm_validate_cache(void) {
 // reads, no writes. Failures just leave the feature disabled until the next
 // refresh retries. Runs on a background queue from reloadProcs.
 int procmgr_calibrate(void) {
+    // Gate the WHOLE pass on a live session: the sub-calibrators below
+    // (suspend_count, task role, cache validation) read kernel memory BEFORE
+    // the kexploit_krw_ready() check further down, so a detached session used
+    // to reach them un-gated — the 18:50:56 crash pass started exactly like
+    // that. Cheap probe only (session_active does not reattach or log); the
+    // caller's start-gate already ran the authoritative ready() check.
+    static bool sCalibSkipLogged = false;   // edge-triggered: one line per outage
+    if (!kexploit_krw_session_active()) {
+        if (!sCalibSkipLogged) {
+            sCalibSkipLogged = true;
+            printf("[PROCMGR] calibrate: pass skipped (KRW not ready/detached) — "
+                   "further skips quiet until a pass runs\n");
+        }
+        return 0;
+    }
+    sCalibSkipLogged = false;
+
     // suspend_count offset calibration is independent of the stat calibrations
     // below and manages its own nonfatal window, so run it first (its exit
     // reset would otherwise silently end the window the stages below rely on).
     if (!g_pm_off_task_suspcount)
         pm_calibrate_suspcount();
+    // Same for the bsd_info back-pointer guard: independent, own nonfatal
+    // window, capped retries. Arms the TOCTOU check used by every proc->task
+    // path in the poll loop (stats / suspend_count / role).
+    pm_calibrate_bsdinfo();
     // App-switcher marking is disabled (see pm_calibrate_task_role) — call once
     // so the tried-flag is set, never per poll.
     if (!g_pm_role_tried)
@@ -1631,17 +1960,32 @@ int procmgr_stats(int pid, uint64_t *residentBytes, uint64_t *cpuNs) {
     // needed. pm_kernel_stats double-reads every counter and only reports
     // values that survived the consistency check; a torn cycle falls back to
     // the libproc value instead of flashing garbage in the UI. Nonfatal: a
-    // KRW hiccup during a UI poll must degrade, never crash.
+    // KRW hiccup during a UI poll must degrade, never crash. Gated on a live
+    // session: detached sockets would zero-fill every read and poison the
+    // deltas with garbage.
     krw_set_nonfatal(true);
-    if ((g_pm_mem_cal && ksafe_available()) || (g_pm_cpu_cal && g_pm_thr_cal)) {
+    if (kexploit_krw_session_active() &&
+        ((g_pm_mem_cal && ksafe_available()) || (g_pm_cpu_cal && g_pm_thr_cal))) {
         uint64_t proc = proc_find(pid);
         if (procmgr_is_kern_ptr(proc)) {
             uint64_t task = proc_task(proc);
-            if (procmgr_is_kern_ptr(task)) {
+            // TOCTOU guard (round 14): the process can exit between the
+            // allproc walk and this dereference. A freed-but-mapped task
+            // still passes the kern-ptr range check (and a reused one reads
+            // as valid garbage); a freed task on a zone page trimmed after
+            // the one-time ksafe snapshot faults the KERNEL synchronously on
+            // the first read. Verify the task's bsd_info back-pointer still
+            // names THIS proc before touching ledgers/threads (uncalibrated
+            // -> no verdict, read as before this guard existed).
+            if (procmgr_is_kern_ptr(task) && pm_task_matches_proc(task, proc) != 0) {
                 uint64_t kMem = 0, kCpu = 0;
                 int kv = pm_kernel_stats(task, &kMem, &kCpu);
-                if (kv & 1) mem = kMem;
-                if ((kv & 2) && kCpu) cpu = kCpu;
+                // Re-verify after the reads: a death mid-read with fast task
+                // reuse can tear past the double-read consistency checks.
+                if (pm_task_matches_proc(task, proc) != 0) {
+                    if (kv & 1) mem = kMem;
+                    if ((kv & 2) && kCpu) cpu = kCpu;
+                }
             }
         }
     }
@@ -1664,6 +2008,20 @@ bool procmgr_pid_alive(int pid) {
 int procmgr_kill(int pid) {
     if (procmgr_pid_is_protected(pid)) return -1;
     if (!kexploit_krw_ready()) return -2;
+    // Hard-stop by comm too (round 5): UI state is not the enforcement point.
+    // FAIL CLOSED: a failed comm lookup must REFUSE, not skip the check —
+    // SpringBoard/backboardd have ordinary pids, so a transient KRW read
+    // failure would otherwise re-open the proven "initproc exited" panic vector.
+    char killComm[64];
+    if (procmgr_comm_for_pid(pid, killComm, sizeof(killComm)) != 0) {
+        printf("[PROCMGR] kill: REFUSING pid %d — comm lookup failed, cannot "
+               "verify it is not a protected process\n", pid);
+        return -1;
+    }
+    if (procmgr_comm_is_protected(killComm)) {
+        printf("[PROCMGR] kill: REFUSING protected process pid %d (%s)\n", pid, killComm);
+        return -1;
+    }
 
     // Legit route: SIGKILL. The kernel terminates the process (including
     // suspended tasks) cleanly. This is the only stable force-quit.

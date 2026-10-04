@@ -16,6 +16,7 @@
 #import <stdlib.h>
 #import <stdint.h>
 #import <stdbool.h>
+#import <stdatomic.h>
 #import <string.h>
 #import <unistd.h>
 #import <pthread.h>
@@ -48,10 +49,14 @@ uint64_t g_MFB_migLockOff = 0;
 uint64_t g_MFB_migSbxMsgOff = 0;
 uint64_t g_MFB_migKernelStackLR = 0;
 
-volatile int32_t  g_MFB_runFlag = RUN_FLAG_PAUSE;
-volatile int32_t  g_MFB_isRunning = 0;
-volatile uint64_t g_MFB_monitorThread1 = 0;
-volatile uint64_t g_MFB_monitorThread2 = 0;
+// Round 15: _Atomic, not volatile — the control functions (start/stop/pause)
+// and the monitor thread read/write these lock-free across threads; volatile
+// made that a C11 data race (UB, no ordering). Plain loads/stores on the
+// _Atomic forms are seq_cst and make the stop/run signaling real.
+_Atomic int32_t  g_MFB_runFlag = RUN_FLAG_PAUSE;
+_Atomic int32_t  g_MFB_isRunning = 0;
+_Atomic uint64_t g_MFB_monitorThread1 = 0;
+_Atomic uint64_t g_MFB_monitorThread2 = 0;
  
 pthread_t g_MFB_thread = NULL;
 bool g_MFB_initialized = false;

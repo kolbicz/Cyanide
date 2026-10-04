@@ -9,6 +9,8 @@
 #define RemoteCall_h
 
 #import <mach/mach.h>
+#import <stdatomic.h>
+#import <time.h>
 #ifdef __OBJC__
 #import <Foundation/Foundation.h>
 #endif
@@ -42,6 +44,11 @@ typedef enum {
     RemoteCallInitFailureLocalThread,
     RemoteCallInitFailureNoTargetThreads,
     RemoteCallInitFailureFirstExceptionTimeout,
+    // Round 24: init refused (at entry) or aborted (mid-walk/mid-hijack)
+    // because the excport lifecycle gate was closed — backgrounded or
+    // terminating. Distinct from Other so the fastkill path can tell "try
+    // again" (transient) from "we were backgrounded" (deterministic).
+    RemoteCallInitFailureLifecycleGated,
     RemoteCallInitFailureOther,
 } RemoteCallInitFailure;
 
@@ -54,12 +61,27 @@ int disable_excguard_kill(uint64_t task);
 // need to target a specific one. Reset to 0 by init_remote_call.
 extern uint64_t g_RC_targetProcOverride;
 int init_remote_call(const char* process, bool useMigFilterBypass);
+// Round 7 warm-up telemetry: stats of the most recent init_remote_call —
+// injected thread count and the first-trap wait in ms (0/0 if none yet).
+int remote_call_last_init_injected(void);
+uint64_t remote_call_last_init_trap_ms(void);
+// Enable/disable verbose RemoteCall logging at runtime (Settings debug toggle).
+// Off by default; the per-call guard-acquire/release and RC_DEBUG lines only
+// print when this is on (they flood the log after a tweak apply otherwise).
+void remote_call_set_verbose(bool on);
 int init_remote_call_with_first_exception_timeout(const char* process, bool useMigFilterBypass, int firstExceptionTimeoutMS);
 int init_remote_call_original_thread_only_with_first_exception_timeout(const char* process, bool useMigFilterBypass, int firstExceptionTimeoutMS);
 uint64_t do_remote_call_stable(int timeout, const char *name, uint64_t x0, uint64_t x1, uint64_t x2, uint64_t x3, uint64_t x4, uint64_t x5, uint64_t x6, uint64_t x7);
 uint64_t do_remote_call_stable_addr(int timeout, uint64_t pcAddr, const char *name, uint64_t x0, uint64_t x1, uint64_t x2, uint64_t x3, uint64_t x4, uint64_t x5, uint64_t x6, uint64_t x7);
-void sign_state(uint64_t signingThread, arm_thread_state64_internal *state, uint64_t pc, uint64_t lr);
+// Signs pc/lr into a trapped thread's state. FALSE = signing failed (KRW lost
+// mid-call); the caller must reply with the UNMODIFIED trapped state instead
+// of dispatching — a garbage PC/LR inside launchd is fatal to the device.
+bool sign_state(uint64_t signingThread, arm_thread_state64_internal *state, uint64_t pc, uint64_t lr);
 uint64_t remote_pac(uint64_t remoteThreadAddr, uint64_t address, uint64_t modifier);
+// Round 17: session-cached PAC keys (captured at init while the trojan thread
+// is provably alive). remote_pac() prefers these over re-reading a possibly
+// dead thread. FALSE = no cached keys this session.
+bool rc_session_pac_keys(uint64_t *outA, uint64_t *outB);
 bool remote_read(uint64_t src, void *dst, uint64_t size);
 uint64_t remote_read64(uint64_t src);
 void remote_hexdump(uint64_t remoteAddr, size_t size);
@@ -81,6 +103,33 @@ int remote_call_set_stable_timeout_floor_ms(int timeoutMS);
 RemoteCallInitFailure remote_call_last_init_failure(void);
 uint32_t remote_call_last_init_failure_pid(void);
 const char *remote_call_init_failure_description(RemoteCallInitFailure failure);
+
+// In-flight guard. A RemoteCall operation (EXC_GUARD hijack, remote call, or
+// session teardown) holds corrupted/redirected threads inside the target
+// process — for launchd that means a thread whose restoration REQUIRES the
+// KRW sockets to stay alive. If the background/lock/idle detach path tears
+// the sockets down mid-flight, the trapped launchd thread is never put back
+// and the device watchdogs ~30 s later (live 9.log: 13:42:57, 16:24:58).
+// Detach paths MUST NOT run while remote_call_inflight_count() > 0; they
+// should call remote_call_request_stop() and remote_call_inflight_wait_drained_ms()
+// first, and skip the detach if the wait times out.
+int  remote_call_inflight_count(void);
+bool remote_call_inflight_wait_drained_ms(int timeoutMs);
+void remote_call_request_stop(const char *reason);   // ask in-flight ops to abort ASAP
+bool remote_call_stop_requested(void);
+
+// Detach gate: while held (acquire → detach → release), new RemoteCall
+// acquisitions fail-fast — closes the drain-wait → next-acquire race that let
+// a background detach land in the same millisecond as a kill call
+// (live 10.log, 17:50:30.483 → panic 17:50:55). acquire returns true with the
+// gate HELD CLOSED once in-flight ops have drained (caller detaches, then
+// releases); returns false with the gate re-opened on timeout (skip detach).
+bool remote_call_detach_gate_acquire(int timeoutMs, const char *reason);
+void remote_call_detach_gate_release(const char *reason);
+
+// External hold for composite ops (fastkill: warm-up + kill under ONE hold).
+bool remote_call_guard_acquire_external(const char *what);
+void remote_call_guard_release_external(const char *what);
 
 #ifdef __OBJC__
 @class RemotePointer;
@@ -128,6 +177,10 @@ const char *remote_call_init_failure_description(RemoteCallInitFailure failure);
 - (int)destroyRemoteCall;
 - (void)abandonRemoteCall;
 - (BOOL)hasLocalState;
+// Round 20: YES when the first-port responder saw a protocol park trap/crash
+// and exited — session has no responder and a parked launchd thread; tear it
+// down instead of reusing or keeping it warm.
+- (BOOL)isAnomalous;
 - (RemotePointer *)objectAtIndexedSubscript:(NSUInteger)address;
 
 @end

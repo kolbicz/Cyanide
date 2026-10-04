@@ -6,8 +6,10 @@
 //
 
 #import "SceneDelegate.h"
+#import "AppDelegate.h"            // round 31: cyanide_launch_trace
 #import "SettingsViewController.h"
 #import "UpdateChecker.h"
+#import "TaskRop/Exception.h"   // round 30: excport lifecycle gate (early close)
 
 @interface SceneDelegate ()
 @property (nonatomic, assign) BOOL didSelectInitialTab;
@@ -18,6 +20,7 @@
 
 
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
+    cyanide_launch_trace("scene willConnect: entry");
     UITabBarController *tab = (UITabBarController *)self.window.rootViewController;
     if ([tab isKindOfClass:UITabBarController.class] && tab.viewControllers.count > 1) {
         // iOS 26+: collapse the floating tab bar into a pill while the user
@@ -34,6 +37,7 @@
             [inv invoke];
         }
     }
+    cyanide_launch_trace("scene willConnect: exit");
 }
 
 - (void)selectInitialTabIfNeeded {
@@ -62,6 +66,7 @@
 }
 
 - (void)sceneDidBecomeActive:(UIScene *)scene {
+    cyanide_launch_trace("sceneDidBecomeActive: entry");
     [self selectInitialTabIfNeeded];
     settings_application_did_become_active();
     // Runs every foreground; UpdateChecker enforces a per-process + 24-hour
@@ -71,18 +76,35 @@
 
 
 - (void)sceneWillResignActive:(UIScene *)scene {
+    cyanide_launch_trace("sceneWillResignActive");
     // Called when the scene will move from an active state to an inactive state.
     // This may occur due to temporary interruptions (ex. an incoming phone call).
+    //
+    // Round 30 (panic-full-2026-10-03-184716): close the exception-port gate
+    // HERE, at the START of the resignation sequence — not at didEnterBackground.
+    // runningboardd policy-sets this task around the backgrounding transition;
+    // closing the gate now gives any in-flight arm/sign trap the whole
+    // resign->background interval (typically hundreds of ms) to clear before
+    // rbd touches our task locks. 184716: the user backgrounded 14 ms into the
+    // pre-warm arm loop; the gate was still open (didEnterBackground had not
+    // fired), a trap entered the kernel, and rbd deadlocked against it ->
+    // watchdog panic 180 s later. Re-opened by didBecomeActive /
+    // willEnterForeground, so transient interruptions (control center, call
+    // banner) only cost a few refused ops.
+    excport_gate_set_backgrounded(true);
 }
 
 
 - (void)sceneWillEnterForeground:(UIScene *)scene {
+    cyanide_launch_trace("sceneWillEnterForeground");
     settings_application_will_enter_foreground();
 }
 
 
 - (void)sceneDidEnterBackground:(UIScene *)scene {
+    cyanide_launch_trace("sceneDidEnterBackground: entry");
     settings_application_did_enter_background();
+    cyanide_launch_trace("sceneDidEnterBackground: exit");
 }
 
 

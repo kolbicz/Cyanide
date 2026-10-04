@@ -4,6 +4,7 @@
 //
 
 #import "SettingsViewController.h"
+#import "AppDelegate.h"   // round 31: cyanide_launch_trace
 #import "VPhoneDebug.h"
 #import "kexploit/kexploit_opa334.h"
 #import "kexploit/offsets.h"
@@ -41,6 +42,7 @@
 #import <mach/host_info.h>
 #import "DSKeepAlive.h"
 #import "TaskRop/RemoteCall.h"
+#import "TaskRop/Exception.h"   // round 21: excport lifecycle gate
 #import "kexploit/kutils.h"
 #import "utils/process.h"
 #import "LogViewController.h"
@@ -2067,8 +2069,26 @@ static void settings_krw_follow_screen_transition(void)
         // in-process (seen in live 2.log: screen asleep 19:00:56 -> nothing ->
         // errno 22 on wake at 19:03:36). Only when live loops must be stopped
         // off-main do we defer to the queue.
-        if (settings_krw_idle_detach_allowed()) {
+        if (settings_krw_idle_detach_allowed() && remote_call_inflight_count() <= 0) {
             settings_detach_krw_for_background();   // synchronous, completes now
+        } else if (settings_krw_idle_detach_allowed()) {
+            // Round 25 (D): an RC op (pre-warm hijack / kill) is in flight, so
+            // the synchronous detach would park THIS observer callback — the
+            // main queue — on the detach gate for up to 4 s (the pre-warm holds
+            // the guard for its whole 1.4-2.5 s init; round-7-class UI freeze,
+            // search bar unusable while the screen transition is processed).
+            // Defer to the serial queue: the gate wait is harmless there, and
+            // the detach still lands before suspension in the common case
+            // (warm-up is ~2 s, suspension grace is longer). If iOS suspends
+            // first, the gate's 4 s bound expires and the detach is SKIPPED —
+            // the SOF_NODEFUNCT-parked primitive survives in-process, which is
+            // exactly the fallback the synchronous path documents above.
+            printf("[SETTINGS] background: RC op in flight — deferring detach "
+                   "to serial queue (main thread stays responsive)\n");
+            dispatch_async(q, ^{
+                if (settings_screen_awake_cached()) return;   // woke before we ran
+                settings_detach_krw_for_background();
+            });
         } else {
             dispatch_async(q, ^{
                 if (settings_screen_awake_cached()) return;   // woke before we ran
@@ -2898,6 +2918,10 @@ static BOOL settings_krw_available_without_exploit(void)
 // footprint from the live staging mapping). A query must never cost that.
 static BOOL settings_ensure_kexploit_for_read(void)
 {
+    // Round 31: trace the parked-KRW restore boundaries — this is the one
+    // launch-adjacent path that talks to the launchd-anchored primitive, and
+    // it must never wedge the caller without a trace of where it stopped.
+    cyanide_launch_trace("ensure_kexploit_for_read: entry");
     if (!settings_device_supported()) {
         printf("[SETTINGS] unsupported device: %s\n", settings_unsupported_message().UTF8String);
         return NO;
@@ -2913,7 +2937,11 @@ static BOOL settings_ensure_kexploit_for_read(void)
         settings_notify_remote_call_state_changed();
     }
 
-    if (kexploit_opa334_recover_only() != 0) {
+    cyanide_launch_trace("recover_only: entry");
+    int recoverRC = kexploit_opa334_recover_only();
+    cyanide_launch_trace(recoverRC == 0 ? "recover_only: exit ok"
+                                        : "recover_only: exit none");
+    if (recoverRC != 0) {
         printf("[SETTINGS] read-only action: no parked session to recover; not re-exploiting\n");
         return NO;
     }
@@ -3059,6 +3087,41 @@ static void settings_prepare_for_respring_sync(void)
     usleep(300000);
 }
 
+// Round 6: warm fastkill session lifetime policy.
+//
+// kFastKillSelfParking — the "self-parking command page polled by a loop
+// inside launchd" design is INFEASIBLE on arm64e: the loop would be executable
+// code, and we cannot inject code into launchd (anonymous RW pages are not
+// executable; unsigned code cannot run; the PAC machinery here signs whole
+// thread states, not multi-gadget ROP chains). Every no-code variant fails
+// too: pause()/sigsuspend() cannot be woken without a signal we cannot send;
+// a one-shot usleep cannot loop (one signed lr = one more call, and the
+// callee's return value clobbers x0, so any chain degenerates into a busy or
+// error spin); KRW-rewriting a blocked thread's saved state only takes effect
+// when its syscall returns. The trojan thread's resting state IS a trap wait
+// on OUR exception port (its start routine is the PAC-signed bogus PC
+// FAKE_PC_TROJAN — TaskRop/RemoteCall.m), so there is nothing to "park".
+// Kept as a flag so the design question stays answered in code.
+//
+// kFastKillTeardownOnBackground — the accepted fallback: a suspended app is
+// SIGKILLed WITHOUT applicationWillTerminate, so the warm session must not
+// outlive ANY backgrounding/screen-blank — its trapped thread orphaned at app
+// death watchdogs launchd ~22 s later (panic-full-2026-09-29-195243:
+// swipe-kill of the suspended app at ~19:52:21, panic 19:52:43; the round-3
+// terminate teardown never ran). Tear down synchronously on the background/
+// screen-blank path while KRW is still live; the session is rebuilt LAZILY by
+// the first kill after each foreground return (round 8: pre-warm removed —
+// per-cycle hijack churn caused panic-full-2026-09-29-215904).
+static const BOOL kFastKillSelfParking __attribute__((unused)) = NO;
+static const BOOL kFastKillTeardownOnBackground = YES;
+
+static BOOL pm_fastkill_warm_session_exists(void);
+static void pm_teardown_fastkill_session_for_terminate(const char *reason);
+// Round 13: pm_prewarm_fastkill_session is BACK, viewer-scoped and debounced
+// (the round-8 churn problem was per-CYCLE hijack+teardown; one debounced
+// hijack per viewer-open is the rate the lazy first kill would pay anyway).
+static void pm_prewarm_fastkill_session(const char *reason);
+
 static void settings_terminal_kexploit_cleanup_sync_internal(const char *reason)
 {
     log_user("[CLEANUP] Tearing down live tweaks and releasing KRW state...\n");
@@ -3078,6 +3141,17 @@ static void settings_terminal_kexploit_cleanup_sync_internal(const char *reason)
         }
     }
 
+    // The Process Viewer's warm fastkill session holds a hijacked launchd
+    // thread TRAPPED at our exception port between kills. If the app dies with
+    // the session warm, the port dies with it, the pending exception escalates
+    // to launchd's default handler, and launchd EXITS ~22 s later
+    // ("initproc exited" — live 11.log: swipe-kill 18:31:37, panic 18:31:59).
+    // Background/idle detach only parks the KRW sockets; it never touches this
+    // session, so app termination is the one path that orphaned it. Tear it
+    // down FIRST — the thread restore needs live KRW, which
+    // kexploit_terminal_cleanup() is about to park.
+    pm_teardown_fastkill_session_for_terminate(reason ?: "terminal KRW cleanup");
+
     if (!g_kexploit_done) {
         printf("[SETTINGS] terminal KRW cleanup skipped: no local KRW session\n");
         log_user("[CLEANUP] Nothing to clean up — no active KRW session.\n");
@@ -3090,9 +3164,21 @@ static void settings_terminal_kexploit_cleanup_sync_internal(const char *reason)
 
     bool parked = kexploit_terminal_cleanup();
     printf("[SETTINGS] terminal KRW cleanup result parked=%d\n", parked);
+    // Round 17: "parked" alone does NOT mean recoverable — recovery needs the
+    // NSUserDefaults primitive + launchd anchor saved THIS boot, and the
+    // 12:34:43 cleanup parked kernel state with no saved primitive (the
+    // boot's anchor attempt had failed at 12:33:26 and was never retried),
+    // then told the user "next Run will recover in seconds". The next run
+    // found nothing and had to re-exploit. Say what will actually happen.
+    bool recoverable = parked && krw_persistence_has_saved_recovery();
+    if (parked && !recoverable)
+        printf("[SETTINGS] terminal cleanup: parked in-kernel but NO saved "
+               "recovery primitive this boot — next run must re-exploit\n");
     log_user("%s Clean Up complete. %s\n",
-             parked ? "[OK]" : "[WARN]",
-             parked ? "KRW parked — next Run will recover in seconds." : "KRW not parked — next Run will re-exploit.");
+             recoverable ? "[OK]" : "[WARN]",
+             recoverable ? "KRW parked — next Run will recover in seconds."
+                         : (parked ? "KRW parked in-kernel, but no recovery anchor was saved this boot — next Run will re-exploit."
+                                   : "KRW not parked — next Run will re-exploit."));
     g_kexploit_done = NO;
     g_springboard_rc_ready = 0;
     g_springboard_sandbox_escaped = 0;
@@ -3167,6 +3253,12 @@ static void settings_queue_terminal_kexploit_cleanup(const char *reason)
 
 void settings_best_effort_termination_cleanup(const char *reason)
 {
+    // Round 21: from here on, no NEW own-process exception-port trap may
+    // start — the process is dying and runningboardd's exit-time policy
+    // management of this task is exactly the ABBA counterparty of panics 1+3.
+    // In-flight operations finish under the gate mutex; the teardown below
+    // drains/restores what they armed.
+    excport_gate_set_terminating();
     if (__sync_lock_test_and_set(&g_settings_termination_cleanup_started, 1)) {
         printf("[SETTINGS] termination cleanup already attempted%s%s\n",
                reason ? ": " : "", reason ?: "");
@@ -3187,7 +3279,12 @@ void settings_best_effort_termination_cleanup(const char *reason)
     // packet, so once the thread dies the kernel reads freed memory: a
     // use-after-free in the threads zone, hours or days later, with Cyanide
     // long gone.
-    if (!settings_has_active_termination_live_tweak() && !g_kexploit_done) {
+    // Also run when ONLY the fastkill warm session survives: it can outlive
+    // g_kexploit_done (respring prep resets the flag without touching the
+    // session) and its trapped launchd thread is precisely what must not be
+    // orphaned at app death.
+    if (!settings_has_active_termination_live_tweak() && !g_kexploit_done &&
+        !pm_fastkill_warm_session_exists()) {
         printf("[SETTINGS] termination cleanup skipped: no live tweaks and no KRW session\n");
         log_user("[CLEANUP] No live tweaks and no KRW session — nothing to tear down.\n");
         return;
@@ -3266,19 +3363,68 @@ BOOL settings_krw_reattach_suppressed(void)
 void settings_detach_krw_for_background(void)
 {
     if (!g_kexploit_done) return;
+    // Round 25 (A): hold the exception-port teardown bypass for the WHOLE
+    // background-detach episode — the fastkill teardown below, the stop
+    // request, the gate drain-wait, and the detach itself. The responder's
+    // re-park/dispatch signs funnel through excport_gate_blocked_for_caller(),
+    // which consults the process-wide depth, so holding it here lets late
+    // traps be re-parked (signed) instead of refused → replied-unmodified →
+    // re-fault ping-pong (live 28.log 15:16:48.360-.363: 16 crash-backlog
+    // messages from exactly that refusal window). Depth-counted, so the
+    // destroy/abandon internal bypass nests harmlessly.
+    excport_teardown_bypass_begin("background-detach");
+    // Round 6: a suspended app is SIGKILLed without applicationWillTerminate,
+    // so the warm fastkill session must not outlive ANY backgrounding or screen
+    // blank — its trapped thread, orphaned at app death, watchdogs launchd ~22 s
+    // later (panic-full-2026-09-29-195243: swipe-kill of the suspended app, no
+    // terminate cleanup ran). Tear it down HERE, while KRW is still live; the
+    // session is rebuilt LAZILY by the first kill after each foreground return
+    // (round 8: pre-warm removed — per-cycle hijack churn caused
+    // panic-full-2026-09-29-215904; self-parking inside launchd is infeasible
+    // on arm64e, see kFastKillSelfParking). Runs BEFORE the
+    // already-detached early return on purpose: the teardown force-reattaches
+    // idle-detached sockets, and the flow below then re-parks them — end state
+    // unchanged (sockets resting in launchd, filter parked).
+    if (kFastKillTeardownOnBackground)
+        pm_teardown_fastkill_session_for_terminate("backgrounding/screen-blank");
     if (kexploit_krw_sockets_detached()) {
         // The idle parker already handed the fds over; nothing left to do.
         printf("[SETTINGS] background: KRW already detached to launchd\n");
+        excport_teardown_bypass_end("background-detach");
         return;
     }
     settings_request_all_live_loops_stop("background KRW detach");
     settings_wait_live_loops_stopped_for_switch("background KRW detach");
-    if (krw_persistence_detach_for_background()) {
-        printf("[SETTINGS] background: KRW sockets detached to launchd\n");
+    // A Process Viewer launchd kill (or its one-time warm-up hijack) is NOT a
+    // registered live loop, so the wait above does not cover it. Detaching the
+    // KRW sockets underneath an in-flight hijack strands a corrupted thread
+    // inside launchd and black-screens the device (live 9.log; and live 10.log
+    // 17:50:30 proved a drain-wait alone still races the NEXT acquisition —
+    // the kill acquired the guard in the same millisecond the detach ran).
+    //
+    // Gate protocol: CLOSE the detach gate first — new RemoteCall acquisitions
+    // fail-fast from here, so no kill can slip into the drain→detach gap —
+    // then wait (bounded; warm-up is ~2 s) for the in-flight op to finish
+    // restoring launchd's thread, then detach while the gate is still held.
+    // If it can't finish in 4 s, DO NOT detach: the SOF_NODEFUNCT-parked
+    // primitive survives backgrounding in-process, and the in-flight op keeps
+    // the sockets it needs to put launchd's thread back.
+    remote_call_request_stop("background KRW detach");
+    if (remote_call_detach_gate_acquire(4000, "background KRW detach")) {
+        if (krw_persistence_detach_for_background()) {
+            printf("[SETTINGS] background: KRW sockets detached to launchd\n");
+        } else {
+            bool parked = kexploit_krw_park_filter_safe();
+            printf("[SETTINGS] background: detach unavailable; filter park=%d\n", parked);
+        }
+        remote_call_detach_gate_release("background KRW detach (done)");
     } else {
         bool parked = kexploit_krw_park_filter_safe();
-        printf("[SETTINGS] background: detach unavailable; filter park=%d\n", parked);
+        printf("[SETTINGS] background: RemoteCall STILL in flight after 4 s — "
+               "SKIPPING detach (parked=%d); KRW stays in-process so the "
+               "hijacked launchd thread can be restored\n", parked);
     }
+    excport_teardown_bypass_end("background-detach");
 }
 
 // Deliberately does NOT pull the fds back on wake any more.
@@ -5646,6 +5792,11 @@ static void settings_apply_axonlite_once_async(const char *reason)
 
 void settings_application_did_enter_background(void)
 {
+    // Round 21: refuse NEW own-process exception-port traps from this moment
+    // (runningboardd starts policy-managing this task around the transition —
+    // the ABBA deadlock window of panics 1+3). In-flight operations finish
+    // under the gate mutex; the round-6 teardown below handles the rest.
+    excport_gate_set_backgrounded(true);
     if (__sync_lock_test_and_set(&g_app_in_background, 1)) return;
 
     // Make the live log panic-durable up to this point (cheap; every line is
@@ -5654,6 +5805,26 @@ void settings_application_did_enter_background(void)
     log_live_flush();
 
     if (settings_cleanup_in_progress()) return;
+
+    // Round 6: tear down the warm fastkill session on EVERY backgrounding —
+    // even when a live tweak keeps KRW in-process and the detach below is
+    // skipped. A suspended app is SIGKILLed without applicationWillTerminate
+    // (panic-full-2026-09-29-195243: swipe-kill of the suspended app → launchd
+    // exited ~22 s later), so the trapped launchd thread must be restored
+    // while KRW is still live. g_app_in_background was already set above, so a
+    // kill's lazy warm-up queued behind pm_kill_lock sees the backgrounded
+    // state and the teardown steals whatever it built. No-op when nothing is warm.
+    //
+    // This runs SYNCHRONOUSLY here on purpose: iOS does not suspend the app
+    // until didEnterBackground RETURNS, so the teardown always completes inside
+    // the backgrounding grace window before suspension. (Round 32 briefly made
+    // this async-under-assertion on a flawed premise — that bought no window iOS
+    // wasn't already giving, and created a teardown↔foreground race on the
+    // shared RemoteCall state that stalled the UI on rapid sweep-kill-sweep. The
+    // teardown's own timings are sub-second; the real exposure is the async
+    // pre-warm arm-walk, addressed separately, not this synchronous path.)
+    if (kFastKillTeardownOnBackground)
+        pm_teardown_fastkill_session_for_terminate("backgrounding");
 
     // KRW background survival. Under UIScene lifecycle the AppDelegate's
     // applicationDidEnterBackground: does NOT fire — only this scene hook does —
@@ -5721,8 +5892,18 @@ void settings_application_did_enter_background(void)
 
 void settings_application_will_enter_foreground(void)
 {
-    if (!settings_app_state_is_foreground()) return;
+    // Round 31: gate ops moved ABOVE the foreground-state early return.
+    // settings_app_state_is_foreground() reads UIApplicationState, which is
+    // still Background when willEnterForeground fires — so this function used
+    // to return BEFORE re-opening the exception-port gate, leaving
+    // didBecomeActive as the ONLY re-open path on the scene lifecycle. The
+    // gate is a lifecycle fact, not a foreground-work item: open it (and
+    // clear the background flag) unconditionally, then gate the rest.
     g_app_in_background = 0;
+    // Round 21: own-process exception-port traps are allowed again (pair of
+    // the backgrounded gate set in settings_application_did_enter_background).
+    excport_gate_set_backgrounded(false);
+    if (!settings_app_state_is_foreground()) return;
     settings_end_statbar_background_task_async("foreground");
     if (settings_cleanup_in_progress()) return;
     settings_apply_statbar_once_async("will enter foreground");
@@ -5739,8 +5920,14 @@ void settings_application_will_enter_foreground(void)
 
 void settings_application_did_become_active(void)
 {
-    if (!settings_app_state_is_foreground()) return;
+    // Round 31: same reorder as will_enter_foreground — the gate re-open must
+    // not depend on the UIApplicationState early return.
     g_app_in_background = 0;
+    // Round 21: belt-and-braces pair of the backgrounded gate — covers the
+    // become-active-without-will-enter-foreground edge (e.g. control-center
+    // overlay dismiss after an inactive spell).
+    excport_gate_set_backgrounded(false);
+    if (!settings_app_state_is_foreground()) return;
     if (settings_cleanup_in_progress()) return;
     settings_apply_statbar_once_async("became active");
     settings_apply_nsbar_once_async("became active");
@@ -6747,6 +6934,8 @@ static void settings_schedule_live_apply_for_key(NSString *key)
     });
 }
 
+static NSString * const kSettingsVerboseLoggingEnabled = @"VerboseLoggingEnabled";
+
 void settings_register_defaults(void)
 {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
@@ -6996,6 +7185,11 @@ void settings_register_defaults(void)
         [defaults synchronize];
     }
     settings_install_screen_awake_observers();
+
+    // Apply the persisted verbose-logging choice (default off) so the Settings
+    // debug toggle survives relaunch and the RemoteCall guard/RC_DEBUG spam
+    // stays suppressed unless explicitly enabled.
+    remote_call_set_verbose([defaults boolForKey:kSettingsVerboseLoggingEnabled]);
 }
 
 static void settings_run_actions_internal(BOOL pendingOnly)
@@ -7817,6 +8011,11 @@ typedef NS_ENUM(NSInteger, PMSortKey) { PMSortPID = 0, PMSortCPU, PMSortMem, PMS
 @property (nonatomic, copy)   NSString *filter;
 @property (nonatomic, assign) BOOL krwReady;
 @property (nonatomic, assign) BOOL arming;
+// Round 8: routine foreground restore in flight (KRW detached, anchored in
+// launchd). Separate from arming so the viewer keeps its rows and the neutral
+// "Restoring kernel access…" prompt — "Arming kernel access…" is reserved for
+// an actual user-facing arm/exploit run.
+@property (nonatomic, assign) BOOL silentRestoring;
 @property (nonatomic, assign) BOOL statsAvailable;
 @property (nonatomic, assign) PMSortKey sortKey;
 @property (nonatomic, strong) NSMutableDictionary<NSNumber *, NSNumber *> *prevCpu;  // pid -> cumulative cpu ns
@@ -7830,6 +8029,9 @@ typedef NS_ENUM(NSInteger, PMSortKey) { PMSortPID = 0, PMSortCPU, PMSortMem, PMS
 @property (nonatomic, assign) uint64_t prevCpuBusyTicks;
 @property (nonatomic, assign) uint64_t prevCpuTotalTicks;
 @property (nonatomic, assign) BOOL havePrevCpuTicks;
+// Pids with a kill in flight — rows are dimmed and non-selectable until the
+// single-pid verify removes the row (or the failure path un-marks it).
+@property (nonatomic, strong) NSMutableSet<NSNumber *> *terminatingPids;
 @end
 
 static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeconds";
@@ -7844,6 +8046,7 @@ static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeco
     self.procs = @[];
     self.filter = @"";
     self.prevCpu = [NSMutableDictionary dictionary];
+    self.terminatingPids = [NSMutableSet set];
     UIBarButtonItem *refreshItem =
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
                                                       target:self
@@ -7871,6 +8074,35 @@ static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeco
 
     [self buildSummaryHeader];
     [self reloadProcs];
+
+    // Suspend the auto-refresh timer while backgrounded. viewWillDisappear does
+    // NOT fire when the app merely backgrounds under UIScene, so the timer used
+    // to keep firing into a detached KRW session (reloadProcs self-guards, but
+    // an in-flight pass started just before backgrounding was the 18:50:56
+    // crash). Tie the timer to app-state notifications directly.
+    NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
+    [nc addObserver:self selector:@selector(stopAutoRefreshTimer)
+               name:UIApplicationDidEnterBackgroundNotification object:nil];
+    [nc addObserver:self selector:@selector(pm_foregroundRefresh)
+               name:UIApplicationWillEnterForegroundNotification object:nil];
+}
+
+// Back in the foreground with the viewer on screen: restart the suspended
+// auto-refresh timer and take a fresh snapshot (the lazy reattach re-makes the
+// fds on the first kernel access).
+- (void)pm_foregroundRefresh
+{
+    if (!self.isViewLoaded || !self.view.window) return;
+    [self startAutoRefreshTimerIfNeeded];
+    [self reloadProcs];
+    // Round 13: pre-warm on foreground return with the viewer visible. Slightly
+    // deferred so the scene hook clears g_app_in_background first (the pre-warm
+    // refuses to warm into a backgrounded state); debounced + single-flight,
+    // and torn down again by round 6 if the app backgrounds before any kill.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+                   dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        pm_prewarm_fastkill_session("foreground return, viewer visible");
+    });
 }
 
 // --- summary header: live system info above the process list -----------------
@@ -8043,6 +8275,12 @@ static NSString *pm_chip_name(NSString *machine) {
         // Returning to the viewer (e.g. after opening another app): refresh so
         // newly-launched processes appear instead of showing a stale snapshot.
         [self reloadProcs];
+        // Round 13: pre-warm the fastkill launchd session while the viewer is
+        // open (debounced, single-flight) so the first kill is on the ~ms warm
+        // path instead of paying the 1.4-2.5 s hijack.
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            pm_prewarm_fastkill_session("viewer visible");
+        });
     }
 }
 
@@ -8058,6 +8296,7 @@ static NSString *pm_chip_name(NSString *machine) {
 
 - (void)dealloc
 {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
     [self stopAutoRefreshTimer];
 }
 
@@ -8109,6 +8348,20 @@ static NSString *pm_chip_name(NSString *machine) {
             [self startAutoRefreshTimerIfNeeded];
         }]];
     }
+
+    // Debug: intense RemoteCall logging. Off by default — the per-call guard
+    // acquire/release and RC_DEBUG lines flood the log after a tweak apply.
+    BOOL verbose = [NSUserDefaults.standardUserDefaults boolForKey:kSettingsVerboseLoggingEnabled];
+    [ac addAction:[UIAlertAction
+        actionWithTitle:(verbose ? @"Verbose logging: On ✓" : @"Verbose logging: Off")
+                  style:UIAlertActionStyleDefault
+                handler:^(UIAlertAction *a) {
+        BOOL now = !verbose;
+        [NSUserDefaults.standardUserDefaults setBool:now forKey:kSettingsVerboseLoggingEnabled];
+        remote_call_set_verbose(now);
+        printf("[SETTINGS] verbose RemoteCall logging %s\n", now ? "ENABLED" : "disabled");
+    }]];
+
     [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
 
     ac.popoverPresentationController.barButtonItem = sender;
@@ -8119,6 +8372,37 @@ static NSString *pm_chip_name(NSString *machine) {
 {
     self.sortKey = (PMSortKey)seg.selectedSegmentIndex;
     [self applyFilter];
+}
+
+// Present the "KRW not live" UI. MUST run on the main thread. Split out of
+// reloadProcs (round 7) so both the main-thread triage and the background
+// block's authoritative re-check can reach it without duplicating logic.
+- (void)pm_presentKrwNotReadyUI
+{
+    // Detached-but-anchored (resting in launchd; reattach flapping or in
+    // progress) is NOT "gone": keep the current rows, show a neutral
+    // restoring state, and kick the silent restore — never empty the list
+    // or flash the arm cell for a transient (the "rearm during usage"
+    // complaint). Only genuinely-gone state falls through to the arm UI.
+    if (kexploit_krw_sockets_detached() &&
+        (krw_persistence_launchd_holds_krw() || krw_persistence_has_saved_recovery())) {
+        printf("[PROCMGR] refresh: skipped (KRW detached, anchored in "
+               "launchd — restoring)\n");
+        self.navigationItem.prompt = @"Restoring kernel access…";
+        [self.refreshControl endRefreshing];
+        // Round 8: routine restore must NOT flash "Arming kernel access…" —
+        // it goes through restoreKRWSilently (no arming state; the neutral
+        // prompt above stays). "Arming…" is reserved for an actual exploit.
+        if (!self.arming && !self.silentRestoring) [self restoreKRWSilently];
+        return;
+    }
+    self.krwReady = NO;
+    self.allProcs = @[];
+    self.procs = @[];
+    [self.tableView reloadData];
+    [self.refreshControl endRefreshing];
+    self.navigationItem.prompt = nil;
+    [self updateSummaryHeader];
 }
 
 - (void)reloadProcs
@@ -8136,14 +8420,16 @@ static NSString *pm_chip_name(NSString *machine) {
         [self.refreshControl endRefreshing];
         return;
     }
-    if (!kexploit_krw_ready()) {
-        self.krwReady = NO;
-        self.allProcs = @[];
-        self.procs = @[];
-        [self.tableView reloadData];
-        [self.refreshControl endRefreshing];
-        self.navigationItem.prompt = nil;
-        [self updateSummaryHeader];
+    // Round 7: NEVER call kexploit_krw_ready() on the main thread. It
+    // serializes on krwReattachLock and can itself run bootstrap_look_up for
+    // seconds — during arming, the background recovery holds that lock through
+    // its retry/backoff loop, and the 1 s auto-refresh timer + viewWillAppear
+    // calling reloadProcs on main then froze the whole UI behind it (search
+    // bar unusable for seconds). Peek (atomic/cached state only, no lock, no
+    // reattach); the background block below re-verifies authoritatively and
+    // falls back to the not-ready UI if the session died in between.
+    if (!kexploit_krw_peek_live()) {
+        [self pm_presentKrwNotReadyUI];
         return;
     }
     self.krwReady = YES;
@@ -8165,6 +8451,18 @@ static NSString *pm_chip_name(NSString *machine) {
         // poll can't race the background detach and re-arm the socket it just
         // parked in launchd.
         if (g_app_in_background != 0 || !settings_screen_awake_cached()) return;
+        // Authoritative readiness re-check OFF the main thread (round 7): the
+        // main-thread peek above can pass on a session that died microseconds
+        // later, and the lazy reattach (bootstrap_look_up, seconds when
+        // flapping) belongs here where blocking is harmless.
+        if (!kexploit_krw_ready()) {
+            printf("[PROCMGR] refresh: peek passed but authoritative check "
+                   "failed — presenting not-ready UI\n");
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self pm_presentKrwNotReadyUI];
+            });
+            return;
+        }
         // Read-only route: self-calibrate the kernel-struct offsets from our own
         // process, then read every process's memory from the kernel ledger. No
         // writes anywhere, so none of the 18.5 write mitigations apply.
@@ -8173,15 +8471,52 @@ static NSString *pm_chip_name(NSString *machine) {
         int cap = 4096;
         procmgr_entry_t *buf = calloc((size_t)cap, sizeof(procmgr_entry_t));
         int n = buf ? procmgr_list(buf, cap) : -1;
+        // One-time sanity check of the derived p_stat offset: our own process
+        // is certainly SRUN, so the KRW read must agree with libproc. If these
+        // ever diverge the offset derivation is wrong for this build and
+        // suspend-dimming / post-kill verdicts must not be trusted.
+        static BOOL sPstatSelfChecked = NO;
+        if (!sPstatSelfChecked) {
+            sPstatSelfChecked = YES;
+            int selfKrw = procmgr_pstat_krw((int)getpid());
+            int selfLib = procmgr_pstat((int)getpid());
+            printf("[PROCMGR] suspend: self-check krw=%d libproc=%d (off_p_stat=0x%x)%s\n",
+                   selfKrw, selfLib, off_proc_p_stat,
+                   (selfKrw == selfLib) ? "" : " — MISMATCH, p_stat offset suspect");
+        }
         NSMutableArray<NSDictionary *> *rows = [NSMutableArray array];
         NSMutableDictionary<NSNumber *, NSNumber *> *newCpu = [NSMutableDictionary dictionary];
         int statCount = 0;
         for (int i = 0; i < n; i++) {
+            // Mid-pass bail: a background detach can land while we walk rows —
+            // the 18:50:56 crash pass kept reading detached sockets for ~10 s
+            // after the app backgrounded. Every per-row stat below is a kernel
+            // read; stop the pass and keep the previous snapshot instead.
+            if (g_app_in_background != 0 || !settings_screen_awake_cached() ||
+                !kexploit_krw_session_active()) {
+                printf("[PROCMGR] refresh: aborted mid-pass at row %d/%d "
+                       "(backgrounded or KRW detached)\n", i, n);
+                if (buf) free(buf);
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self.refreshControl endRefreshing];
+                });
+                return;
+            }
             int pid = buf[i].pid;
             NSMutableDictionary *row = [@{ @"pid": @(pid),
                                           @"name": [NSString stringWithUTF8String:buf[i].name] } mutableCopy];
+            // p_stat FIRST (round 14): stats used to run before this check, so
+            // a process that died between the allproc walk and its row had its
+            // (freed or reallocated) task dereferenced for ledger/thread
+            // stats. A zombie's task is already torn down, and a p_stat
+            // outside SIDL..SZOMB (1..7) is mid-reap garbage (same convention
+            // as the kill-verdict loop). Both skip the stats read entirely and
+            // render dimmed with "—". kst == -1 means KRW unavailable — fall
+            // through and let procmgr_stats' own gates decide, as before.
+            int kst = procmgr_pstat_krw(pid);
+            BOOL exiting = (kst == PM_SZOMB) || (kst >= 0 && (kst < 1 || kst > 7));
             uint64_t mem = 0, cpu = 0;
-            if (procmgr_stats(pid, &mem, &cpu) == 0) {
+            if (!exiting && procmgr_stats(pid, &mem, &cpu) == 0) {
                 statCount++;
                 row[@"mem"] = @(mem);
                 newCpu[@(pid)] = @(cpu);
@@ -8193,12 +8528,16 @@ static NSString *pm_chip_name(NSString *machine) {
                     row[@"cpu"] = @(pct);
                 }
             }
-            // Suspended/zombie rows: preloaded apps sit task-suspended and
-            // never run, so the crash-trick force-quit can't reach them.
-            // Kernel-side suspend_count is the reliable signal; libproc p_stat
-            // (PM_SSTOP/PM_SZOMB) is kept as a fallback.
-            int st = procmgr_pstat(pid);
-            BOOL suspended = (st == PM_SSTOP || st == PM_SZOMB || procmgr_suspend_count(pid) > 0);
+            if (exiting) row[@"exiting"] = @YES;
+            // Suspended rows are dimmed in the UI. Ground truth is the proc's
+            // p_stat read straight from struct proc via KRW (libproc's
+            // pbi_status can stay SRUN for a suspended app); the calibrated
+            // task suspend_count is kept as a fallback. One cheap KRW read per
+            // pid — no calibration, no task_policy_set (that path deadlocked
+            // the kernel against PerfPowerServices and stays disabled).
+            int lst = procmgr_pstat(pid);
+            int sc  = procmgr_suspend_count(pid);
+            BOOL suspended = (kst == PM_SSTOP || kst == PM_SZOMB || sc > 0);
             // Mach task role marks GUI apps (like CocoaTop): foreground = the
             // frontmost app, switcher = a backgrounded UI app in the app
             // switcher. A GUI app is a real, user-facing process the user may
@@ -8209,6 +8548,14 @@ static NSString *pm_chip_name(NSString *machine) {
             else if (procmgr_role_is_switcher(role))  row[@"approle"] = @"switcher";
             if (suspended && !procmgr_role_is_app(role))
                 row[@"suspended"] = @YES;
+            // Verbose, repeat-capped diagnostics so a mis-dimmed (or
+            // not-dimmed) row can be traced to its signal values.
+            static int sSuspendLogCount = 0;
+            if (suspended && sSuspendLogCount < 40) {
+                sSuspendLogCount++;
+                printf("[PROCMGR] suspend: pid %d (%s) dimmed — krw_pstat=%d libproc=%d suspcount=%d\n",
+                       pid, buf[i].name, kst, lst, sc);
+            }
             [rows addObject:row];
         }
         if (buf) free(buf);
@@ -8278,10 +8625,19 @@ static NSString *pm_chip_name(NSString *machine) {
         }
     }];
 
-    self.navigationItem.prompt = (q.length == 0)
-        ? [NSString stringWithFormat:@"%lu processes", (unsigned long)self.allProcs.count]
-        : [NSString stringWithFormat:@"%lu of %lu", (unsigned long)self.procs.count,
-           (unsigned long)self.allProcs.count];
+    if (q.length == 0) {
+        NSUInteger total = self.allProcs.count, suspended = 0;
+        for (NSDictionary *p in self.allProcs)
+            if ([p[@"suspended"] boolValue]) suspended++;
+        NSUInteger active = total - suspended;
+        self.navigationItem.prompt =
+            [NSString stringWithFormat:@"%lu active · %lu suspended",
+             (unsigned long)active, (unsigned long)suspended];
+    } else {
+        self.navigationItem.prompt =
+            [NSString stringWithFormat:@"%lu of %lu", (unsigned long)self.procs.count,
+             (unsigned long)self.allProcs.count];
+    }
     [self.tableView reloadData];
 }
 
@@ -8306,9 +8662,28 @@ static NSString *pm_chip_name(NSString *machine) {
 
 - (void)armKRW
 {
-    if (self.arming) return;
-    self.arming = YES;
-    [self.tableView reloadData];
+    [self armKRWInternalSilent:NO];
+}
+
+// Round 8: routine foreground restore (KRW merely detached, anchored in
+// launchd — the normal return-to-viewer path). Same recovery flow, but it must
+// NOT take the arming state: the viewer keeps its rows and the neutral
+// "Restoring kernel access…" prompt; the "Arming kernel access…" cell state is
+// reserved for an actual user-facing arm/exploit run.
+- (void)restoreKRWSilently
+{
+    [self armKRWInternalSilent:YES];
+}
+
+- (void)armKRWInternalSilent:(BOOL)silent
+{
+    if (self.arming || self.silentRestoring) return;
+    if (silent) {
+        self.silentRestoring = YES;
+    } else {
+        self.arming = YES;
+        [self.tableView reloadData];
+    }
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         // Recover parked KRW via the shared helper, NOT kexploit_opa334_recover_only()
@@ -8319,22 +8694,66 @@ static NSString *pm_chip_name(NSString *machine) {
         // to launchd before the app suspended and the socket died (errno 22 on wake).
         // This is why tweak runs (which go through settings_ensure_kexploit) survived
         // sleep but the Process Viewer did not.
+        // Retry with backoff ONLY while a parked state actually exists —
+        // bootstrap_look_up of the parked service flaps for seconds at a time
+        // (live 11.log: failed 18:27:11→16, escalation recovered 18:27:16), and
+        // the arm flow must ride that out. When there is NO parked state, offer
+        // the full exploit IMMEDIATELY, exactly as before the retry loop
+        // existed: on a fresh boot, recover's boot-session guard forgets the
+        // stale cross-boot save on attempt 1, so the predicate flips false and
+        // we stop waiting (live 11.log: 18:26:27→35 burned 8 s delivering news
+        // we already had). Each attempt runs the heavy NSUserDefaults recovery
+        // via settings_ensure_kexploit_for_read() → kexploit_opa334_recover_only()
+        // → krw_persistence_recover(), so the lazy-reattach escalation is
+        // shared, not duplicated here. The in-flight flag (arming, or
+        // silentRestoring on the round-8 routine-restore path) stays set
+        // throughout, so a non-silent cell keeps showing "Arming kernel
+        // access…" instead of flashing the alert during a flap.
         BOOL ok = settings_ensure_kexploit_for_read() || kexploit_krw_ready();
+        for (int attempt = 2; attempt <= 5 && !ok; attempt++) {
+            if (!krw_persistence_has_saved_recovery()) {
+                printf("[PROCMGR] arm: no parked state exists — offering full "
+                       "exploit without further retries\n");
+                break;
+            }
+            printf("[PROCMGR] arm: parked-state restore attempt %d/5 after flap\n",
+                   attempt);
+            [NSThread sleepForTimeInterval:2.0];
+            ok = settings_ensure_kexploit_for_read() || kexploit_krw_ready();
+        }
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (ok && kexploit_krw_ready()) {
+            // Peek, don't kexploit_krw_ready(): this is the main thread, and
+            // ready() can block on krwReattachLock behind a background recovery
+            // for seconds (round 7 UI freeze). The reloadProcs below re-verifies
+            // authoritatively on its background block, so a stale peek degrades
+            // to the not-ready UI instead of a freeze.
+            if (ok && kexploit_krw_peek_live()) {
                 self.arming = NO;
+                self.silentRestoring = NO;
                 [self reloadProcs];
+                // Round 13: KRW is live and the viewer is open — pre-warm the
+                // fastkill session now (debounced, single-flight) so the first
+                // kill doesn't pay the 1.4-2.5 s warm-up.
+                dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                    pm_prewarm_fastkill_session("KRW armed in viewer");
+                });
                 return;
             }
             // No parked state to recover — a full exploit is the only way, and on
             // A18/M4 that can reboot the device. Ask before doing it.
+            printf("[PROCMGR] arm: showing full-exploit alert (reason=%s)\n",
+                   krw_persistence_has_saved_recovery()
+                       ? "parked state exists but restore failed after all retries"
+                       : "no parked kernel state");
             UIAlertController *ac = [UIAlertController
                 alertControllerWithTitle:@"No parked kernel state"
                                  message:@"Kernel access couldn't be restored from a parked state. Running the full exploit can reboot the device on A18/M4. Continue?"
                           preferredStyle:UIAlertControllerStyleAlert];
             [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel
                                                  handler:^(UIAlertAction *a) {
-                self.arming = NO; [self.tableView reloadData];
+                self.arming = NO;
+                self.silentRestoring = NO;
+                [self.tableView reloadData];
             }]];
             [ac addAction:[UIAlertAction actionWithTitle:@"Run Full Exploit"
                                                    style:UIAlertActionStyleDefault
@@ -8344,13 +8763,34 @@ static NSString *pm_chip_name(NSString *machine) {
                 UINavigationController *lnav = [[UINavigationController alloc] initWithRootViewController:log];
                 [self presentViewController:lnav animated:YES completion:^{
                     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                        settings_ensure_kexploit();   // sets g_kexploit_done on success
+                        BOOL ran = settings_ensure_kexploit();   // sets g_kexploit_done on success
+                        BOOL ready = ran && kexploit_krw_ready();
                         dispatch_async(dispatch_get_main_queue(), ^{
                             self.arming = NO;
-                            if (self.presentedViewController == lnav) {
-                                [self dismissViewControllerAnimated:YES completion:^{ [self reloadProcs]; }];
+                            self.silentRestoring = NO;
+                            if (ready) {
+                                // Success: drop the user straight into the working
+                                // Process Viewer. Dismiss from the window root —
+                                // an equality check against lnav is too fragile
+                                // (anything chained on top of the log defeats it
+                                // and the log then stays up forever).
+                                printf("[PROCMGR] exploit succeeded from viewer prompt — "
+                                       "dismissing log, entering Process Viewer\n");
+                                UIViewController *root = self.view.window.rootViewController;
+                                if (root.presentedViewController) {
+                                    [root dismissViewControllerAnimated:YES completion:^{
+                                        [self reloadProcs];
+                                    }];
+                                } else {
+                                    [self reloadProcs];
+                                }
+                                // Round 8: no pre-warm after the exploit either —
+                                // first kill warms up lazily (churn reduction).
                             } else {
-                                [self reloadProcs];
+                                // Failure: keep the log up so the reason stays visible.
+                                printf("[PROCMGR] exploit from viewer prompt did not yield KRW — "
+                                       "leaving log on screen\n");
+                                [self.tableView reloadData];
                             }
                         });
                     });
@@ -8398,15 +8838,33 @@ static NSString *pm_chip_name(NSString *machine) {
 
     NSDictionary *p = self.procs[indexPath.row];
     int pid = [p[@"pid"] intValue];
-    BOOL protectedPid = procmgr_pid_is_protected(pid);
+    // Protected = pid (kernel_task/launchd/self) OR comm (launchd/SpringBoard/
+    // backboardd): shown in the list but never killable — same treatment as
+    // the existing self-protection (round 5: a SpringBoard kill from inside
+    // launchd panicked iOS 17.3.1 with "initproc exited").
+    BOOL protectedPid = procmgr_pid_is_protected(pid) ||
+                        procmgr_comm_is_protected([p[@"name"] UTF8String]);
     BOOL suspended = [p[@"suspended"] boolValue];
+    BOOL exiting = [p[@"exiting"] boolValue];   // zombie / mid-reap: stats skipped
+    BOOL terminating = [self.terminatingPids containsObject:@(pid)];
 
     cell.nameL.text = p[@"name"];
-    cell.nameL.textColor = suspended ? [UIColor tertiaryLabelColor]
+    // Only suspended/exiting rows are dimmed (KRW p_stat ground truth);
+    // everything else gets normal label color.
+    // Priority: terminating > exiting > suspended > protected > normal.
+    cell.nameL.textColor = terminating ? [UIColor tertiaryLabelColor]
+                           : exiting ? [UIColor tertiaryLabelColor]
+                           : suspended ? [UIColor tertiaryLabelColor]
                            : protectedPid ? [UIColor secondaryLabelColor]
                                           : [UIColor labelColor];
     NSString *approle = p[@"approle"];   // "foreground" / "switcher" / nil
-    if (suspended) {
+    if (terminating) {
+        cell.pidL.text = [NSString stringWithFormat:@"PID %d · terminating…", pid];
+        cell.pidL.textColor = [UIColor tertiaryLabelColor];
+    } else if (exiting) {
+        cell.pidL.text = [NSString stringWithFormat:@"PID %d · exiting", pid];
+        cell.pidL.textColor = [UIColor tertiaryLabelColor];
+    } else if (suspended) {
         cell.pidL.text = [NSString stringWithFormat:@"PID %d · suspended", pid];
         cell.pidL.textColor = [UIColor tertiaryLabelColor];
     } else if ([approle isEqualToString:@"foreground"]) {
@@ -8426,7 +8884,7 @@ static NSString *pm_chip_name(NSString *machine) {
                          : @"—";
     NSNumber *cpu = p[@"cpu"];
     cell.cpuL.text = cpu ? [NSString stringWithFormat:@"%.1f%%", cpu.doubleValue] : @"—";
-    if (suspended) {
+    if (suspended || exiting) {
         cell.cpuL.textColor = [UIColor secondaryLabelColor];
         cell.memL.textColor = [UIColor secondaryLabelColor];
     } else {
@@ -8435,7 +8893,9 @@ static NSString *pm_chip_name(NSString *machine) {
         cell.memL.textColor = [UIColor secondaryLabelColor];   // PMProcCell default
     }
 
-    cell.selectionStyle = (protectedPid || suspended) ? UITableViewCellSelectionStyleNone
+    // Suspended rows stay selectable: they go through the normal quit/force-quit
+    // dialog (SIGCONT + SIGTERM, or launchd SIGKILL which kills SSTOP outright).
+    cell.selectionStyle = (protectedPid || terminating) ? UITableViewCellSelectionStyleNone
                                                       : UITableViewCellSelectionStyleDefault;
     return cell;
 }
@@ -8453,20 +8913,13 @@ static NSString *pm_chip_name(NSString *machine) {
     NSDictionary *p = self.procs[indexPath.row];
     int pid = [p[@"pid"] intValue];
     NSString *name = p[@"name"];
-    if (procmgr_pid_is_protected(pid)) return;
+    if (procmgr_pid_is_protected(pid) || procmgr_comm_is_protected(name.UTF8String)) return;
+    if ([self.terminatingPids containsObject:@(pid)]) return;   // kill already in flight
 
-    // Suspended (preloaded/backgrounded) processes are never offered a force-quit:
-    // they aren't really running, and the crash-trick can't land on a thread that
-    // never resumes. Just explain and stop.
-    if ([p[@"suspended"] boolValue]) {
-        UIAlertController *info = [UIAlertController
-            alertControllerWithTitle:name
-                             message:@"This process is suspended (preloaded/backgrounded by iOS and not actually running), so it can't be force-quit."
-                      preferredStyle:UIAlertControllerStyleAlert];
-        [info addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-        [self presentViewController:info animated:YES completion:nil];
-        return;
-    }
+    // Suspended rows go through the normal dialog like everything else: the
+    // Quit path resumes the target (SIGCONT) so its pending SIGTERM lands, and
+    // the launchd SIGKILL path kills a stopped (SSTOP) process outright. The
+    // honest post-kill alive-check reports the outcome either way.
 
     BOOL isSystem = (pid < 100);   // low pids are core daemons — warn harder
     NSString *msg = isSystem
@@ -8479,14 +8932,33 @@ static NSString *pm_chip_name(NSString *machine) {
     [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
 
     // Clean termination via SIGTERM — only when we hold signal permission for
-    // this pid (probed with kill(pid, 0); suspended rows without permission
-    // already got the informational alert above). SIGTERM can be caught or
-    // ignored by the target, so verify like the force-quit path does.
+    // this pid (probed with kill(pid, 0)). SIGTERM can be caught or ignored by
+    // the target, so verify like the force-quit path does.
     BOOL canSignal = (kill(pid, 0) == 0);
     if (canSignal) {
         [ac addAction:[UIAlertAction actionWithTitle:@"Quit"
                                                style:UIAlertActionStyleDefault
                                              handler:^(UIAlertAction *a) {
+            // FAIL CLOSED like every other kill entry point: the pid may have
+            // exited and been RECYCLED — even to SpringBoard — between the
+            // dialog and this tap. Re-verify the comm before signalling; a
+            // failed lookup refuses (comm lookup failed = cannot prove the
+            // target is not a protected process).
+            char quitComm[64];
+            if (procmgr_comm_for_pid(pid, quitComm, sizeof(quitComm)) != 0 ||
+                procmgr_comm_is_protected(quitComm)) {
+                printf("[PROCMGR] kill: REFUSING pid %d — %s\n", pid,
+                       quitComm[0]
+                           ? "protected process (pid recycled since dialog?)"
+                           : "comm lookup failed, cannot verify it is not a protected process");
+                UIAlertController *err = [UIAlertController
+                    alertControllerWithTitle:@"Couldn't Quit"
+                                     message:@"The process identity couldn't be verified (it may have exited), so nothing was signalled."
+                              preferredStyle:UIAlertControllerStyleAlert];
+                [err addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                [self presentViewController:err animated:YES completion:nil];
+                return;
+            }
             if (kill(pid, SIGTERM) != 0) {
                 UIAlertController *err = [UIAlertController
                     alertControllerWithTitle:@"Couldn't Quit"
@@ -8496,18 +8968,35 @@ static NSString *pm_chip_name(NSString *machine) {
                 [self presentViewController:err animated:YES completion:nil];
                 return;
             }
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
+            // A suspended (SSTOP) process never runs its signal handlers, so
+            // SIGTERM just sits pending while the app keeps showing in the
+            // switcher. Nudge it with SIGCONT: the resume delivers the pending
+            // SIGTERM and the app exits cleanly. Harmless if it wasn't stopped.
+            kill(pid, SIGCONT);
+            printf("[PROCMGR] fastkill: quit(%d) sent SIGTERM + SIGCONT\n", pid);
+            [self.terminatingPids addObject:@(pid)];
+            [self applyFilter];   // dim the row immediately (cheap, no KRW)
+            // Verify just this one pid after a short moment; only fall back to
+            // a full rescan when the single-pid check says it's still alive.
+            // A zombie counts as dead — its task is gone, reap is pending.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
                            dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                BOOL alive = procmgr_pid_alive(pid);
+                bool krwPresent = false;
+                int krwStat = procmgr_pid_status_krw(pid, &krwPresent);   // ONE walk (round 13)
+                BOOL alive = krwPresent && krwStat != PM_SZOMB;
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    if (alive) {
-                        UIAlertController *nope = [UIAlertController
-                            alertControllerWithTitle:@"Didn't terminate"
-                                             message:[NSString stringWithFormat:@"%@ (PID %d) is still running — it caught or ignored SIGTERM. Use Force Quit instead.", name, pid]
-                                      preferredStyle:UIAlertControllerStyleAlert];
-                        [nope addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-                        [self presentViewController:nope animated:YES completion:nil];
+                    [self.terminatingPids removeObject:@(pid)];
+                    if (!alive) {
+                        [self pmRemoveRowForPid:pid];
+                        return;
                     }
+                    printf("[PROCMGR] fastkill: pid %d still alive after quit (SIGTERM+SIGCONT)\n", pid);
+                    UIAlertController *nope = [UIAlertController
+                        alertControllerWithTitle:@"Didn't terminate"
+                                         message:[NSString stringWithFormat:@"%@ (PID %d) is still running — it caught or ignored SIGTERM. Use Force Quit instead.", name, pid]
+                                  preferredStyle:UIAlertControllerStyleAlert];
+                    [nope addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                    [self presentViewController:nope animated:YES completion:nil];
                     [self reloadProcs];
                 });
             });
@@ -8517,9 +9006,12 @@ static NSString *pm_chip_name(NSString *machine) {
     [ac addAction:[UIAlertAction actionWithTitle:@"Force Quit"
                                            style:UIAlertActionStyleDestructive
                                          handler:^(UIAlertAction *a) {
-        // Run off-main: a plain SIGKILL is instant, but the launchd fallback
-        // sets up a remote call (thread hijack) that must not block the UI.
+        // Optimistic: dim the row NOW so the kill feels instant, then run the
+        // kill off-main (a plain SIGKILL is instant; the launchd fallback uses
+        // a warm RemoteCall session — one hijack ever, milliseconds per kill).
         // Pause the KRW poll while we do it so the two don't contend.
+        [self.terminatingPids addObject:@(pid)];
+        [self applyFilter];   // reflect "terminating…" without a KRW rescan
         [self stopAutoRefreshTimer];
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             int rc = procmgr_kill(pid);
@@ -8533,6 +9025,8 @@ static NSString *pm_chip_name(NSString *machine) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self startAutoRefreshTimerIfNeeded];
                 if (rc != 0) {
+                    [self.terminatingPids removeObject:@(pid)];
+                    [self applyFilter];   // un-dim the row
                     NSString *msg;
                     switch (rc) {
                         case -3:
@@ -8540,6 +9034,19 @@ static NSString *pm_chip_name(NSString *machine) {
                             break;
                         case -6:
                             msg = @"The system denied the force-quit signal, and killing it from launchd didn't take either, so it's left running.";
+                            break;
+                        case -7:
+                            // Warm-up failure (launchd hijack didn't take) —
+                            // NOT a dead process. Say so and invite a retry;
+                            // round 13's arm-attempt retry makes the next tap
+                            // very likely to succeed.
+                            msg = @"The kernel session into launchd couldn't be established (the warm-up hijack didn't take), so nothing was signalled. Try again.";
+                            break;
+                        case -9:
+                            // Round 24: the lifecycle gate was closed (app
+                            // backgrounded/locked mid-kill). Deterministic —
+                            // retrying while backgrounded cannot work.
+                            msg = @"Cyanide was backgrounded or the screen locked mid-force-quit, so nothing was signalled and the process is still running. Reopen Cyanide and try again.";
                             break;
                         default:
                             msg = [NSString stringWithFormat:@"Error %d (the process may have already exited).", rc];
@@ -8553,21 +9060,30 @@ static NSString *pm_chip_name(NSString *machine) {
                     [self presentViewController:err animated:YES completion:nil];
                     return;
                 }
-                // Verify termination after a short moment and say so honestly
-                // instead of silently leaving it in the list. Kept short so the
-                // row disappears quickly after a successful kill.
+                // Verify just this pid after a short moment. Dead -> drop the
+                // row surgically (no ~500-pid KRW rescan); still alive -> say
+                // so honestly and rescan as the fallback.
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
                                dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                    BOOL alive = procmgr_pid_alive(pid);
+                    // Authoritative verdict: only drop the row when the pid is
+                    // really gone (a zombie counts as dead — task reaped,
+                    // collection pending). Still alive = honest failure path.
+                    bool krwPresent = false;
+                int krwStat = procmgr_pid_status_krw(pid, &krwPresent);   // ONE walk (round 13)
+                BOOL alive = krwPresent && krwStat != PM_SZOMB;
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        if (alive) {
-                            UIAlertController *nope = [UIAlertController
-                                alertControllerWithTitle:@"Didn't terminate"
-                                                 message:[NSString stringWithFormat:@"%@ (PID %d) is still running.", name, pid]
-                                          preferredStyle:UIAlertControllerStyleAlert];
-                            [nope addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-                            [self presentViewController:nope animated:YES completion:nil];
+                        [self.terminatingPids removeObject:@(pid)];
+                        if (!alive) {
+                            [self pmRemoveRowForPid:pid];
+                            return;
                         }
+                        printf("[PROCMGR] fastkill: pid %d still alive after kill rc=%d\n", pid, rc);
+                        UIAlertController *nope = [UIAlertController
+                            alertControllerWithTitle:@"Didn't terminate"
+                                             message:[NSString stringWithFormat:@"%@ (PID %d) is still running.", name, pid]
+                                      preferredStyle:UIAlertControllerStyleAlert];
+                        [nope addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                        [self presentViewController:nope animated:YES completion:nil];
                         [self reloadProcs];
                     });
                 });
@@ -8577,33 +9093,533 @@ static NSString *pm_chip_name(NSString *machine) {
     [self presentViewController:ac animated:YES completion:nil];
 }
 
+// Remove one pid's row from both the snapshot and the visible list without a
+// KRW rescan — the fast path after a confirmed kill.
+- (void)pmRemoveRowForPid:(int)pid
+{
+    NSIndexSet *idx = [self.allProcs indexesOfObjectsPassingTest:
+        ^BOOL(NSDictionary *r, NSUInteger i, BOOL *stop) {
+            return [r[@"pid"] intValue] == pid;
+        }];
+    if (idx.count) {
+        NSMutableArray *all = [self.allProcs mutableCopy];
+        [all removeObjectsAtIndexes:idx];
+        self.allProcs = all;
+    }
+    [self applyFilter];
+    printf("[PROCMGR] fastkill: pid %d row dropped surgically (no full rescan)\n", pid);
+}
+
 // Force-quit a process that our own SIGKILL can't reach (the app sandbox blocks
 // signalling other apps). Run kill(pid, SIGKILL) *inside launchd* — pid 1 is
-// root and unsandboxed, so it can signal anything. A scoped RemoteCallSession
-// keeps its own private remote-call state, so this never disturbs a live
-// SpringBoard tweak session sharing the default state. Returns 0 on success,
-// negative otherwise. Must be called off the main thread (it hijacks a launchd
-// thread). NOTE: no memory corruption anywhere — a clean privileged syscall, so
-// none of the old saved-state crash-trick's panic risk.
+// root and unsandboxed, so it can signal anything.
+//
+// WARM SESSION: instead of building a fresh RemoteCallSession per kill
+// (EXC_GUARD hijack + synthetic thread + cleanup ≈ 2.2 s), we hijack launchd
+// ONCE and keep the session parked between kills — each kill is then just
+// "set args, run, read result" (milliseconds). The session object is a plain
+// retained RemoteCallSession; its push/pop state design makes repeated calls
+// safe, and all KRW access underneath goes through krw_lock_for_access(), so
+// the KRW idle park/detach lifecycle is unaffected (reattach is automatic on
+// the next access). We deliberately do NOT register as a persistent-session
+// user anywhere: idle detach must stay allowed so the primitive still rests
+// in launchd across backgrounding.
+//
+// If a warm call fails while the target is still alive, the session is
+// suspect (primitive hiccup, wedged thread): tear it down — symmetric
+// destroy when KRW is up, abandon when it isn't (destroy IPCs the remote task
+// and would hang) — rebuild once, and retry once. No memory corruption
+// anywhere — a clean privileged syscall, so none of the old saved-state
+// crash-trick's panic risk. Must be called off the main thread.
+static RemoteCallSession *gPMKillSession = nil;
+
+// Round 7: count of warm-up hijacks currently in flight (a kill's own lazy
+// warm-up; runs under pm_kill_lock, so this is 0 or 1). A second kill that
+// arrives while it is non-zero ATTACHES to the in-flight warm-up — waits on
+// pm_kill_lock once and uses its result — instead of stacking a second hijack.
+static volatile int gPMWarmupInFlight = 0;
+
+static NSLock *pm_kill_lock(void) {
+    static NSLock *l = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ l = [NSLock new]; });
+    return l;
+}
+
+static BOOL pm_fastkill_warm_session_exists(void)
+{
+    NSLock *lock = pm_kill_lock();
+    [lock lock];
+    BOOL exists = (gPMKillSession != nil);
+    [lock unlock];
+    return exists;
+}
+
+// Tear down the warm launchd session. Two drivers:
+//  (a) the APP itself is exiting (applicationWillTerminate / SIGTERM /
+//      WillTerminateNotification) — the round-3 backstop;
+//  (b) the app is BACKGROUNDING or the screen blanked (round 6) — a suspended
+//      app is SIGKILLed without applicationWillTerminate, so the session must
+//      not outlive the foreground; see kFastKillTeardownOnBackground.
+// Between kills the session's hijacked launchd thread sits TRAPPED at our
+// exception port; if the process dies with the session warm, the port dies
+// too, the pending exception escalates to launchd's default handler, and
+// launchd EXITS ~22 s later ("initproc exited" — live 11.log: swipe-kill
+// 18:31:37, panic 18:31:59; panic-full-2026-09-29-195243: swipe-kill of the
+// SUSPENDED app ~19:52:21, panic 19:52:43, terminate cleanup never ran).
+// Background/lock cycles were safe precisely because the app — and its ports
+// — stayed alive; only app death orphans the thread. Round 6 closes the
+// suspended-swipe-kill vector by making app death with a warm session
+// impossible: any swipe-kill happens from a backgrounded state, and the
+// background path tears the session down before suspension.
+//
+// The destroy path needs live KRW (stub-page munmap + PAC re-sign), but at
+// terminate time the sockets are usually parked in launchd and lazy reattach
+// is SUPPRESSED while backgrounded/screen-off — force it. Called BEFORE
+// kexploit_terminal_cleanup() parks KRW. Runs off the main thread (the
+// terminate cleanup is dispatched to a background queue / runs in the
+// SIGTERM handler context).
+static void pm_teardown_fastkill_session_for_terminate(const char *reason)
+{
+    // Round 25 (A): hold the exception-port teardown bypass for the WHOLE
+    // teardown episode — including the PRE-LOCK stop + un-arm below and every
+    // concurrent responder re-park/dispatch sign while it runs. All signing
+    // funnels through excport_gate_blocked_for_caller(), which consults the
+    // process-wide depth, so the responder needs no code change: it passes the
+    // gate for the episode's duration (live 28.log 15:16:48.359-.363: the
+    // pre-lock stop ran OUTSIDE the round-24 bypass, the responder's re-park
+    // signs were refused, and the thread re-fault ping-pong filled the crash
+    // backlog the dead-KRW abandon then could not repair). Depth-counted —
+    // nests with the destroy/abandon internal bypass and with the
+    // "background-detach" episode hold on the call paths that have one.
+    excport_teardown_bypass_begin("fastkill-teardown");
+    // Round 20: the pre-warm now HOLDS pm_kill_lock across its whole init
+    // (single-flight). An in-flight warm-up must still be interrupted
+    // promptly — issue the stop BEFORE taking the lock (idempotent), or this
+    // teardown would queue behind the very init it is trying to abort.
+    if (__sync_add_and_fetch(&gPMWarmupInFlight, 0) > 0) {
+        printf("[PROCMGR] fastkill: %s with warm-up IN FLIGHT — requesting "
+               "stop + un-arm of the partially-armed init (pre-lock)\n",
+               reason ?: "terminate");
+        remote_call_request_stop(reason ?: "terminate warm-up");
+    }
+    NSLock *lock = pm_kill_lock();
+    [lock lock];
+    RemoteCallSession *session = gPMKillSession;
+    gPMKillSession = nil;
+    BOOL warmupInFlight = (__sync_add_and_fetch(&gPMWarmupInFlight, 0) > 0);
+    [lock unlock];
+    if (!session) {
+        // Round 10: mid-init warm-up has no session object to tear down yet,
+        // but its already-armed launchd threads are the detonator — the
+        // 17:45:56 warm-up went silent 145 ms into its trap-wait with one
+        // thread armed and this teardown was a no-op because gPMKillSession
+        // was still nil. remote_call_request_stop() now un-arms any armed
+        // thread via KRW (RemoteCall.m snapshot) and the in-flight init
+        // aborts at its next stop checkpoint (walk top / heartbeat slice /
+        // post-trap), so coverage starts at warm-up START, not at init
+        // completion.
+        if (warmupInFlight) {
+            printf("[PROCMGR] fastkill: %s with warm-up IN FLIGHT — requesting "
+                   "stop + un-arm of the partially-armed init\n",
+                   reason ?: "terminate");
+            remote_call_request_stop(reason ?: "terminate warm-up");
+        }
+        excport_teardown_bypass_end("fastkill-teardown");
+        return;
+    }
+
+    printf("[PROCMGR] fastkill: tearing down warm session on %s — restoring "
+           "launchd thread before KRW park\n", reason ?: "terminate");
+    BOOL krwUp = kexploit_krw_ready() || kexploit_krw_force_reattach_for_teardown();
+    if (krwUp) {
+        [session destroyRemoteCall];   // symmetrical: restores the trojan thread
+        printf("[PROCMGR] fastkill: warm session torn down on %s "
+               "(thread restored=YES)\n", reason ?: "terminate");
+    } else {
+        // KRW genuinely gone: destroy IPCs the remote task and would hang on
+        // dead sockets. Abandoning leaves the thread trapped in launchd — the
+        // exact round-3 panic vector — but with no primitive there is nothing
+        // left to restore it with. Log loudly so the next panic log names it.
+        printf("[PROCMGR] fastkill: KRW unrecoverable on %s — abandoning "
+               "warm session (thread restored=NO — residual initproc-exit risk)\n",
+               reason ?: "terminate");
+        [session abandonRemoteCall];
+    }
+    excport_teardown_bypass_end("fastkill-teardown");
+}
+
+// Round 8: pre-warm was REMOVED (pm_prewarm_fastkill_session deleted). Rounds
+// 6+7 made the launchd thread hijack+teardown run on EVERY background/
+// foreground cycle, and each hijack's thread-list walk read freed thread slots
+// with at least one partially-failed write — repeated cycles left a dangling
+// thread reference the kernel later tripped on (panic-full-2026-09-29-215904:
+// threads zone use-after-free, 25 s after a pre-warm hijack that walked 10
+// dead slots). The warm session is now created LAZILY by the first kill of a
+// foreground session (pmForceKillViaLaunchdGated below) and still torn down on
+// every backgrounding (round 6), so a hijack exists only while the app is
+// foregrounded and only when the user actually kills. First kill per
+// foreground pays the ~2-3 s hijack; subsequent kills stay ~ms warm.
+
+// Round 13: PRE-WARM is back — viewer-scoped and debounced. The round-8
+// removal was about CHURN (hijack+teardown on every background/foreground
+// cycle); one debounced hijack per viewer-open is the same rate the lazy
+// first kill would pay anyway, and the user's real workflow (kill →
+// background to check the switcher → foreground → kill) otherwise pays the
+// full 1.4-2.5 s warm-up on EVERY kill because round 6 tears the session
+// down on each backgrounding. Called ONLY from Process Viewer trigger points
+// (viewWillAppear / armKRW success / foreground-return-while-visible), never
+// from another tab's foregrounding. Runs on a background thread (callers
+// dispatch).
+//
+// Single-flight: gPMKillSession/gPMWarmupInFlight are checked and set under
+// pm_kill_lock, and a user-tapped kill ATTACHES to an in-flight pre-warm via
+// the round-7 mechanism (waits on pm_kill_lock once, then uses the warmed
+// session) — a kill never stacks a second hijack behind a pre-warm.
+//
+// Background-mid-warm: g_app_in_background is set BEFORE the round-6 teardown
+// runs, and both the teardown and this install take pm_kill_lock — so either
+// the teardown lands first (requests stop; the init aborts at a walk/wait
+// checkpoint, or completes and is refused by the suppressed re-check below
+// and destroyed) or the install lands first and the teardown steals the
+// session. No warm session outlives the foreground (195243-class).
+static void pm_prewarm_fastkill_session(const char *reason)
+{
+    if (settings_krw_reattach_suppressed()) return;   // backgrounded/screen-off
+    if (!kexploit_krw_ready()) return;   // also lazy-reattaches a parked primitive
+    NSLock *lock = pm_kill_lock();
+    [lock lock];
+    if (gPMKillSession != nil || __sync_add_and_fetch(&gPMWarmupInFlight, 0) > 0) {
+        [lock unlock];
+        return;   // already warm, or a warm-up (a kill's or ours) is in flight
+    }
+    if (!remote_call_guard_acquire_external("fastkill-prewarm")) {
+        [lock unlock];
+        printf("[PROCMGR] fastkill: pre-warm skipped (%s) — detach gate closed "
+               "(backgrounding in progress)\n", reason);
+        return;
+    }
+    __sync_add_and_fetch(&gPMWarmupInFlight, 1);
+    printf("[PROCMGR] fastkill: pre-warming launchd RemoteCall session (%s)…\n", reason);
+    uint64_t w0 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    // Round 20 (A): HOLD pm_kill_lock across the whole init + install. The
+    // round-13 pre-warm used to drop the lock here and re-take it for the
+    // install — but the round-7 kill attach path "waits" for an in-flight
+    // warm-up BY ACQUIRING pm_kill_lock, so with the lock free mid-init a
+    // kill attached and concluded "warm-up failed" in the SAME millisecond
+    // (07:13:40.679), then stacked a second hijack behind ours: two inits
+    // armed the same launchd threads with different ports, sabotaged each
+    // other, and the surviving session kept a launchd XPC worker parked with
+    // no responder — watchdogd turnstile-blocked on it and the device
+    // panicked "watchdog timeout" at 07:16:02. Holding the lock restores the
+    // round-7 invariant the attach path was built on ("every warm-up runs
+    // under this lock"): an attaching kill now genuinely waits for this
+    // init's outcome, then uses the installed session or warms once itself.
+    // A backgrounding teardown that needs this lock first issues an
+    // optimistic remote_call_request_stop (idempotent) so the init aborts at
+    // its next checkpoint instead of holding the lock for its full length.
+    RemoteCallSession *session =
+        [[RemoteCallSession alloc] initWithProcess:@"launchd"
+                                 useMigFilterBypass:NO
+                            firstExceptionTimeoutMS:10000];
+    uint64_t warmMs = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - w0) / 1000000ULL;
+    __sync_sub_and_fetch(&gPMWarmupInFlight, 1);
+    // Install only if still foregrounded and no kill's warm-up beat us to it
+    // (the decrement happens inside the lock so an attaching kill sees the
+    // in-flight count until the install decision is made).
+    BOOL install = (session != nil && gPMKillSession == nil &&
+                    !settings_krw_reattach_suppressed());
+    if (install)
+        gPMKillSession = session;
+    [lock unlock];
+    // Round 25 (B): release the guard ONLY AFTER any not-installed teardown
+    // has COMPLETED. The background detach gate drains the in-flight count
+    // before touching the sockets — releasing first let the count hit 0 with
+    // this teardown still pending, so settings_detach_krw_for_background()
+    // detached the KRW sockets UNDER the subsequent destroy/abandon
+    // (live 28.log 15:16:48.363: "guard release (fastkill-prewarm)" →
+    // "sockets detached" → teardown ran on dead KRW → abandon chosen: un-arm
+    // audit SKIPPED for 4 armed threads, exc_guard restore IMPOSSIBLE, and
+    // the 15:17:14 initproc panic ~26 s after the jetsam). Holding the guard
+    // across the teardown makes any pending detach wait until ALL RemoteCall
+    // teardown has finished; destroy/abandon's internal acquisitions nest
+    // safely via their bypassGate.
+    if (install) {
+        printf("[PROCMGR] fastkill: pre-warm ready (%s, launchd pid=%d) in %llu ms "
+               "— kills are on the warm path now\n",
+               reason, session.pid, (unsigned long long)warmMs);
+    } else if (session) {
+        // Backgrounded mid-warm, or a kill's own warm-up installed first —
+        // never keep a second/orphaned session: tear it down symmetrically.
+        printf("[PROCMGR] fastkill: pre-warm (%s) not installed (backgrounded "
+               "mid-warm or a kill won the race) — tearing down\n", reason);
+        if (kexploit_krw_ready()) [session destroyRemoteCall];
+        else                      [session abandonRemoteCall];
+    } else {
+        printf("[PROCMGR] fastkill: pre-warm failed (%s): %s — the first kill "
+               "will warm up on demand\n", reason,
+               remote_call_init_failure_description(remote_call_last_init_failure()));
+    }
+    remote_call_guard_release_external("fastkill-prewarm");
+}
+
+- (int)pmForceKillViaLaunchdLocked:(int)pid allowRebuild:(BOOL)allowRebuild
+{
+    // ONE guard hold across warm-up + kill + verdict: a pending detach waits
+    // for the count to drain AND closes the gate first, but without this hold
+    // there is a release(init-hijack) → acquire(call-stable) gap the detach
+    // slips into (live 10.log 17:50:30.483 — same-millisecond interleave,
+    // device panicked "initproc exited" at 17:50:55). Fail-fast when a detach
+    // is already pending: better an honest abort than a kill on dying sockets.
+    if (!remote_call_guard_acquire_external("fastkill")) {
+        printf("[PROCMGR] fastkill: detach gate closed (backgrounding in progress) — "
+               "aborting kill(%d) before touching launchd\n", pid);
+        return -2;
+    }
+    int rc = [self pmForceKillViaLaunchdGated:pid allowRebuild:allowRebuild];
+    remote_call_guard_release_external("fastkill");
+    return rc;
+}
+
+- (int)pmForceKillViaLaunchdGated:(int)pid allowRebuild:(BOOL)allowRebuild
+{
+    // Deepest refusal, at the layer that builds the remote-call args (round 5):
+    // pid <= 1 must NEVER reach a launchd-internal kill() — kill(0, …) from
+    // pid 1 is a process-group kill that ends launchd itself (instant
+    // "initproc exited"). This fires even if every caller above forgot to check.
+    if (pid <= 1) {
+        printf("[PROCMGR] fastkill: REFUSING to dispatch kill for pid %d "
+               "(call-layer hard-stop)\n", pid);
+        return -1;
+    }
+    // Round 24 (142628): never warm a session or dispatch a kill while the
+    // lifecycle gate is closed — the init is refused (round-24 fail-fast) or,
+    // pre-24, storm-retried for ~9 s and the kill silently never happened
+    // while the UI hung on a dimmed row. Fail fast and loudly; rc -9 gives
+    // the UI a distinct "process is still alive" message.
+    if (excport_gate_blocked()) {
+        printf("[PROCMGR] fastkill: REFUSING kill(%d) — lifecycle gate closed "
+               "(app backgrounded/terminating); the process is still alive, "
+               "nothing was signalled\n", pid);
+        log_user("[PROCMGR] kill(%d) refused: app backgrounded mid-kill — "
+                 "process still alive, nothing signalled\n", pid);
+        return -9;
+    }
+    // Same layer, comm hard-stop — FAIL CLOSED like every other kill entry
+    // point: a failed lookup refuses (SpringBoard/backboardd have ordinary
+    // pids; a transient KRW read failure must not re-open the panic vector).
+    char gComm[64];
+    if (procmgr_comm_for_pid(pid, gComm, sizeof(gComm)) != 0) {
+        printf("[PROCMGR] kill: REFUSING pid %d — comm lookup failed, cannot "
+               "verify it is not a protected process\n", pid);
+        return -1;
+    }
+    if (procmgr_comm_is_protected(gComm)) {
+        printf("[PROCMGR] fastkill: REFUSING protected process pid %d (%s) "
+               "(call-layer hard-stop)\n", pid, gComm);
+        return -1;
+    }
+    uint64_t t0 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    // Round 20 (C): never reuse or keep an ANOMALOUS warm session — its
+    // first-port responder saw a protocol park trap and exited, leaving a
+    // launchd thread parked on that port with no owner (071602: watchdogd
+    // turnstile-blocked on exactly such a parked worker → watchdog timeout).
+    if (gPMKillSession && [gPMKillSession isAnomalous]) {
+        printf("[PROCMGR] fastkill: warm session is ANOMALOUS (responder exited "
+               "on a protocol park trap — a launchd thread is parked on its "
+               "first port) — tearing it down with invariant repair and "
+               "warming a fresh session\n");
+        if (kexploit_krw_ready()) [gPMKillSession destroyRemoteCall];
+        else                      [gPMKillSession abandonRemoteCall];
+        gPMKillSession = nil;
+    }
+    BOOL warmed = (gPMKillSession != nil);
+    if (!gPMKillSession) {
+        printf("[PROCMGR] fastkill: warming launchd RemoteCall session "
+               "(one-time hijack)…\n");
+        __sync_add_and_fetch(&gPMWarmupInFlight, 1);
+        uint64_t w0 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        // Round 10: 10 s first-trap cap (was the 120 s session default).
+        // Historical traps arrive in 0.5-2.5 s; a trap that takes longer is
+        // never coming (armed candidate died mid-walk or is unparkable), and
+        // every extra second is time an orphaned armed thread can detonate
+        // against our dead ports if the app leaves the foreground
+        // (17:45:56: silence 145 ms into the 120 s wait, panic <60 s).
+        gPMKillSession = [[RemoteCallSession alloc] initWithProcess:@"launchd"
+                                                 useMigFilterBypass:NO
+                                            firstExceptionTimeoutMS:10000];
+        uint64_t warmMs = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - w0) / 1000000ULL;
+        __sync_sub_and_fetch(&gPMWarmupInFlight, 1);
+        if (!gPMKillSession) {
+            printf("[PROCMGR] fastkill: could not open remote-call session "
+                   "(init failure=%s)\n",
+                   remote_call_init_failure_description(remote_call_last_init_failure()));
+            return -7;
+        }
+        printf("[PROCMGR] fastkill: warm session ready (launchd pid=%d) — warm-up "
+               "took %llu ms (injected=%d, trap at %llu ms)\n",
+               gPMKillSession.pid, (unsigned long long)warmMs,
+               remote_call_last_init_injected(),
+               (unsigned long long)remote_call_last_init_trap_ms());
+    }
+    uint64_t r = [gPMKillSession doRemoteCallStableWithTimeout:2000
+                                                  functionName:"kill"
+                                                            x0:(uint64_t)pid
+                                                            x1:(uint64_t)SIGKILL
+                                                            x2:0 x3:0 x4:0 x5:0 x6:0 x7:0];
+    uint64_t ms = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - t0) / 1000000ULL;
+    printf("[PROCMGR] fastkill: kill(%d, SIGKILL) via %s session returned %d "
+           "in %llu ms\n", pid, warmed ? "warm" : "fresh", (int)r,
+           (unsigned long long)ms);
+    // Park the RW filter right after our kernel accesses — same hygiene as the
+    // reloadProcs poll — so the socket never rests armed between kills.
+    if (kexploit_krw_session_active() && !kexploit_krw_sockets_detached())
+        kexploit_krw_park_filter_safe();
+
+    // Verdict with grace. The remote return slot is NOT proof (a wedged warm
+    // session funnels into `return 0` inside RemoteCall.m), and kill() rc=0
+    // only means the signal was DELIVERED — a mid-reap proc reads p_stat=14
+    // garbage (live 10.log: kill(346) rc=0, verdict +5 ms p_stat=14, but the
+    // process was genuinely dying; that bogus "STILL ALIVE" caused the
+    // teardown/re-hijack churn). Kernel-is-witness, polled over ~500 ms:
+    // gone/SZOMB at any checkpoint = success; p_stat outside 1..7 (mid-reap)
+    // or unreadable = INCONCLUSIVE — keep polling, never tear down on it.
+    static const int kVerdictCheckMS[] = { 50, 150, 300, 500 };
+    BOOL gone = NO;
+    BOOL lastPresent = NO, lastValidStat = NO;
+    BOOL sawOpError = NO;
+    int lastKst = -2;
+    uint64_t v0 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    // Round 15: the latch is sticky and process-wide — clear it so it reflects
+    // only THIS verdict's reads, then consult it before crediting "not found".
+    krw_op_error_clear();
+    for (int i = 0; i < 4; i++) {
+        uint64_t elapsedMS = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - v0) / 1000000ULL;
+        if ((int)elapsedMS < kVerdictCheckMS[i])
+            usleep((useconds_t)(kVerdictCheckMS[i] - (int)elapsedMS) * 1000);
+        bool presentNow = false;
+        lastKst = procmgr_pid_status_krw(pid, &presentNow);   // ONE walk (round 13)
+        lastPresent = presentNow;
+        uint64_t atMS = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - v0) / 1000000ULL;
+        // "Not in the list" is only proof of death if the walk's reads really
+        // happened. With crash→zero-fill, a transient socket failure zero-fills
+        // every read and the walk reports not-found for a LIVE process — that
+        // false "GONE" is exactly what krw_op_error() exists to catch.
+        if (!lastPresent && krw_op_error()) {
+            sawOpError = YES;
+            printf("[PROCMGR] fastkill: verdict poll %d/4 at +%llu ms: pid %d not "
+                   "found BUT KRW op-error latched (reads zero-filled) — "
+                   "inconclusive, keep polling\n",
+                   i + 1, (unsigned long long)atMS, pid);
+            continue;
+        }
+        if (!lastPresent || lastKst == PM_SZOMB) {
+            gone = YES;
+            printf("[PROCMGR] fastkill: verdict poll %d/4 at +%llu ms: pid %d GONE "
+                   "(present=%d p_stat=%d) — kill confirmed dead\n",
+                   i + 1, (unsigned long long)atMS, pid, lastPresent, lastKst);
+            break;
+        }
+        lastValidStat = (lastKst >= 1 && lastKst <= 7);   // SIDL..SZOMB; >7 is mid-reap garbage
+        printf("[PROCMGR] fastkill: verdict poll %d/4 at +%llu ms: pid %d present, "
+               "p_stat=%d (%s)\n",
+               i + 1, (unsigned long long)atMS, pid, lastKst,
+               lastValidStat ? "valid — alive" : "invalid — inconclusive, keep polling");
+    }
+    if (gone)
+        return 0;
+
+    // Signal failure with ESRCH = the process was already gone to the killer —
+    // success regardless of what the proc-list walk says. Read launchd's errno
+    // via the session (cheap second call) when kill returned -1.
+    if ((int)r == -1) {
+        uint64_t errPtr = [gPMKillSession doRemoteCallStableWithTimeout:100
+                                                           functionName:"__error"
+                                                                     x0:0 x1:0 x2:0 x3:0
+                                                                     x4:0 x5:0 x6:0 x7:0];
+        int remoteErr = errPtr ? (int)[gPMKillSession remoteRead64:errPtr] : -1;
+        printf("[PROCMGR] fastkill: kill rc=-1, remote errno=%d (%s)\n",
+               remoteErr, remoteErr == ESRCH ? "ESRCH — already gone" : "other");
+        if (remoteErr == ESRCH) {
+            printf("[PROCMGR] fastkill: kill(%d) confirmed dead via ESRCH\n", pid);
+            return 0;
+        }
+    }
+
+    if ((lastPresent && !lastValidStat) || (!lastPresent && sawOpError)) {
+        // INCONCLUSIVE: proc still in the list but its state never read clean
+        // (mid-reap or KRW hiccup), OR it read as not-found while the op-error
+        // latch says the walk's reads zero-filled (no proof either way). NOT
+        // proof of a stale session — keep the session, report tentative
+        // success on rc=0 (the UI's 0.4 s alive-check re-verifies with fresh
+        // eyes) or an honest soft failure otherwise.
+        // Round 20 (C): …unless the session went ANOMALOUS mid-kill (its
+        // responder exited on a park trap — kill(745) at 07:14:21.432). A
+        // warm session with a dead responder and a parked launchd thread is
+        // the watchdog-timeout bomb; tear it down instead of keeping it.
+        if ([gPMKillSession isAnomalous]) {
+            printf("[PROCMGR] fastkill: session went ANOMALOUS during kill(%d) "
+                   "(responder exited on a park trap) — tearing down instead "
+                   "of keeping it warm\n", pid);
+            if (kexploit_krw_ready()) [gPMKillSession destroyRemoteCall];
+            else                      [gPMKillSession abandonRemoteCall];
+            gPMKillSession = nil;
+        }
+        printf("[PROCMGR] fastkill: verdict INCONCLUSIVE for pid %d after 500 ms "
+               "grace (rc=%d, present=%d, p_stat=%d, opError=%d) — session kept, %s\n",
+               pid, (int)r, lastPresent, lastKst, sawOpError,
+               (int)r == 0 ? "deferring to UI alive-check" : "reporting soft failure");
+        return ((int)r == 0) ? 0 : -8;
+    }
+
+    // CONFIRMED alive: proc present + valid p_stat after the full grace window.
+    printf("[PROCMGR] fastkill: pid %d CONFIRMED alive after 500 ms grace "
+           "(rc=%d, p_stat=%d) — warm session is genuinely stale\n",
+           pid, (int)r, lastKst);
+    if (!allowRebuild) {
+        printf("[PROCMGR] fastkill: pid %d still alive after kill rc=%d "
+               "(rebuild already attempted — giving up)\n", pid, (int)r);
+        return -8;
+    }
+    printf("[PROCMGR] fastkill: warm session suspect (rc=%d, pid %d alive) — "
+           "tearing down and rebuilding once\n", (int)r, pid);
+    if (kexploit_krw_ready()) [gPMKillSession destroyRemoteCall];   // symmetrical
+    else                     [gPMKillSession abandonRemoteCall];    // KRW down: no IPC
+    gPMKillSession = nil;
+    return [self pmForceKillViaLaunchdGated:pid allowRebuild:NO];
+}
+
 - (int)pmForceKillViaLaunchd:(int)pid
 {
-    if (pid <= 1) return -1;
-    if (!kexploit_krw_ready()) return -2;
-
-    RemoteCallSession *s = [[RemoteCallSession alloc] initWithProcess:@"launchd"
-                                                  useMigFilterBypass:NO];
-    if (!s) {
-        printf("[PROCMGR] launchd kill: could not open remote-call session\n");
-        return -7;
+    if (pid <= 1) {
+        printf("[PROCMGR] fastkill: REFUSING protected pid %d (kernel_task/launchd)\n", pid);
+        return -1;
     }
-    uint64_t r = [s doRemoteCallStableWithTimeout:2000
-                                     functionName:"kill"
-                                               x0:(uint64_t)pid
-                                               x1:(uint64_t)SIGKILL
-                                               x2:0 x3:0 x4:0 x5:0 x6:0 x7:0];
-    printf("[PROCMGR] launchd kill(%d, SIGKILL) returned %d\n", pid, (int)r);
-    // kill() returns 0 on success, -1 on failure.
-    return ((int)r == 0) ? 0 : -8;
+    // Round 13: the comm hard-stop that used to stand here was REMOVED as
+    // redundant — it was the second of three identical allproc walks per kill
+    // (procmgr_kill checks before its own kill(); pmForceKillViaLaunchdGated
+    // checks again AFTER pm_kill_lock, which is the only check that cannot go
+    // stale behind a queued warm-up, and it fires for every dispatch including
+    // the session-rebuild retry). One full proc-list walk (~2 kreads/proc)
+    // saved per kill; fail-closed semantics unchanged.
+    if (!kexploit_krw_ready()) return -2;
+    NSLock *lock = pm_kill_lock();
+    // Round 7: if another kill's warm-up is in flight, ATTACH to it — wait on
+    // pm_kill_lock once and use its result — rather than stacking a second
+    // hijack behind it. gPMWarmupInFlight is 0 or 1 by construction (every
+    // warm-up runs under this lock).
+    BOOL attachToInflight = (__sync_add_and_fetch(&gPMWarmupInFlight, 0) > 0);
+    if (attachToInflight)
+        printf("[PROCMGR] fastkill: warm-up in flight — kill(%d) attaches to it "
+               "(waits once; no second hijack stacked)\n", pid);
+    [lock lock];
+    if (attachToInflight)
+        printf("[PROCMGR] fastkill: in-flight warm-up finished — kill(%d) uses %s\n",
+               pid, gPMKillSession ? "the warmed session"
+                                   : "no session (warm-up failed; warming now)");
+    int rc = [self pmForceKillViaLaunchdLocked:pid allowRebuild:YES];
+    [lock unlock];
+    return rc;
 }
 
 @end

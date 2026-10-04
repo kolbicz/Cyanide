@@ -56,10 +56,28 @@ bool procmgr_pid_alive(int pid);
 // or -1 when proc_pidinfo can't inspect the pid. Read-only, never crashes.
 int procmgr_pstat(int pid);
 
+// Same p_stat but read directly from struct proc via KRW — kernel ground
+// truth (libproc can lag or misreport suspended apps). -1 when KRW or the
+// pid is unavailable. Read-only.
+int procmgr_pstat_krw(int pid);
+
+// Round 13: both kill-verdict inputs from ONE allproc walk — *outPresent gets
+// whether the pid is still in the proc list, and the return value is its
+// p_stat (-1 when KRW/the offset/the pid is unavailable). Replaces a
+// procmgr_pid_alive + procmgr_pstat_krw pair (two walks) on the kill path.
+int procmgr_pid_status_krw(int pid, bool *outPresent);
+
 // Runtime-calibrated task->suspend_count for pid. Returns -1 when
 // uncalibrated/unavailable, else the count (>0 means the task is suspended:
 // iOS-preloaded or background-suspended apps). Read-only.
 int procmgr_suspend_count(int pid);
+
+// Runtime-calibrated offsetof(task, thread_count), or -1 when uncalibrated.
+// Derived by the suspend_count calibration above (task layout: thread_count,
+// active_thread_count, suspend_count consecutive, so thread_count sits at
+// suspend_count - 8), which proves the offset unique against our own task and
+// cross-checks it against launchd's — never a hardcoded guess. Read-only.
+int procmgr_task_thread_count_offset(void);
 
 // Mach task-category role for pid: TASK_UNSPECIFIED(0) for daemons,
 // TASK_FOREGROUND_APPLICATION(1) for the frontmost UI app,
@@ -72,6 +90,15 @@ bool procmgr_role_is_foreground(int role);  // frontmost UI app
 bool procmgr_role_is_switcher(int role);    // backgrounded UI app (in switcher)
 bool procmgr_role_is_app(int role);         // either of the above (a GUI app)
 
+// Classify a process by its executable path, read via KRW (proc->p_textvp →
+// vnode v_parent/v_name walk) and cached per pid for the app run.
+// Returns PM_KIND_APP for user-facing apps (.../containers/Bundle/Application/
+// or /Applications/), PM_KIND_SERVICE for daemons/services — also the default
+// when the path can't be read. Read-only, never crashes.
+#define PM_KIND_APP     1
+#define PM_KIND_SERVICE 0
+int procmgr_exe_kind(int pid);
+
 // Force-quit a process by pid via thread saved-state corruption (KRW). Returns
 // 0 on success; negative on refusal/error:
 //   -1 protected pid (0/1)  -2 KRW not ready  -3 proc not found
@@ -81,6 +108,15 @@ int procmgr_kill(int pid);
 // A pid that must never be force-quit (kernel_task, launchd) — the UI greys
 // these out. Returns true if pid is in the protected set.
 bool procmgr_pid_is_protected(int pid);
+
+// comm-based kill protection (round 5): launchd / SpringBoard / backboardd.
+// A SpringBoard kill delivered from inside launchd panicked an iOS 17.3.1
+// device with "initproc exited" — never offer or perform these kills.
+bool procmgr_comm_is_protected(const char *comm);
+
+// Resolve a pid's comm via KRW into buf ("" on failure, returns -1). A failed
+// lookup is not proof of safety — keep the pid checks regardless.
+int procmgr_comm_for_pid(int pid, char *buf, size_t len);
 
 // Borrow launchd's credentials (root + unsandboxed) by pointing our own
 // proc_ro->p_ucred at them, so libproc can read stats for every process. Saves
