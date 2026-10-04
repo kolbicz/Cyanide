@@ -9740,6 +9740,10 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
 
 - (NSArray<NSDictionary *> *)sbcRows
 {
+    // Show dock labels is unavailable while Hide icon labels is on: the dock
+    // follows the home screen, so offering the switch would promise something
+    // the run will not do.
+    BOOL hidingLabels = [NSUserDefaults.standardUserDefaults boolForKey:kSettingsSBCHideLabels];
     return @[
         @{ @"kind": @"stepper", @"key": kSettingsSBCDockIcons,  @"title": @"Dock icons", @"min": @4, @"max": @7, @"default": @(kSBCDefaultDockIcons) },
         @{ @"kind": @"toggle",  @"key": kSettingsSBCAutoDockApp, @"title": @"Auto-add selected app to Dock",
@@ -9751,7 +9755,8 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         @{ @"kind": @"stepper", @"key": kSettingsSBCRows,       @"title": @"Home rows", @"min": @4, @"max": @8, @"default": @(kSBCDefaultRows) },
         @{ @"kind": @"toggle",  @"key": kSettingsSBCHideLabels, @"title": @"Hide icon labels" },
         @{ @"kind": @"toggle",  @"key": kSettingsSBCDockLabels, @"title": @"Show dock labels",
-           @"subtitle": @"Draws app names under the dock icons, which stock iOS leaves off. Hide icon labels takes precedence: with that on, the dock stays bare too." },
+           @"disabled": @(hidingLabels),
+           @"subtitle": @"Draws app names under the dock icons, which stock iOS leaves off. Unavailable while Hide icon labels is on \u2014 the dock follows the home screen." },
         @{ @"kind": @"toggle",  @"key": kSettingsSBCArrangePages, @"title": @"Arrange icons by page" },
         @{ @"kind": @"stepper", @"key": kSettingsSBCFirstPageIcons, @"title": @"First page icons", @"min": @12, @"max": @49, @"default": @(kSBCDefaultFirstPageIcons) },
         @{ @"kind": @"stepper", @"key": kSettingsSBCOtherPageIcons, @"title": @"Other page icons", @"min": @12, @"max": @49, @"default": @(kSBCDefaultOtherPageIcons) },
@@ -13782,6 +13787,21 @@ void cyanide_present_contact(UIViewController *host)
         if (!sender.isOn) settings_mark_tweak_applied(key, NO);
         settings_notify_package_queue_changed_async();
     }
+    if ([key isEqualToString:kSettingsSBCHideLabels]) {
+        // Mutually exclusive with Show dock labels. Clear it rather than leave a
+        // switch on that the run will ignore, and redraw either way so the dock
+        // row greys out or comes back live immediately.
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        if (sender.isOn && [defaults boolForKey:kSettingsSBCDockLabels]) {
+            [defaults setBool:NO forKey:kSettingsSBCDockLabels];
+            printf("[SETTINGS] toggle %s=0 (cleared by %s)\n",
+                   kSettingsSBCDockLabels.UTF8String, kSettingsSBCHideLabels.UTF8String);
+            settings_note_package_configuration_changed(kSettingsSBCDockLabels);
+            settings_mark_tweak_applied(kSettingsSBCDockLabels, NO);
+        }
+        [self.tableView reloadData];
+    }
+
     settings_schedule_live_apply_for_key(key);
     [self presentApplyLogIfRunning];
 }
