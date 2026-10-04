@@ -9329,9 +9329,37 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
 // checkpoint, or completes and is refused by the suppressed re-check below
 // and destroyed) or the install lands first and the teardown steals the
 // session. No warm session outlives the foreground (195243-class).
+static volatile int g_prewarm_defer_pending = 0;
+
 static void pm_prewarm_fastkill_session(const char *reason)
 {
     if (settings_krw_reattach_suppressed()) return;   // backgrounded/screen-off
+    // Round 36 (panic-full-2026-10-04-080209 "unexpected SIGKILL of launchd"):
+    // the AUTOMATIC pre-warm hijacks launchd (set_exception_ports → AMFI global
+    // lock) and fires at the activation edge (0.25 s after foreground / on
+    // armKRW / viewWillAppear). Arming launchd there — while runningboardd /
+    // PerfPowerServices run task_policy_set on our task — strands a launchd
+    // thread → SIGKILL of launchd ~30 s later (08:01:38 pre-warm → 08:02:09
+    // panic). Round 35 gated the SpringBoard hijack this way; the launchd
+    // pre-warm needs the same gate. Defer (reschedule once, single-flight) past
+    // the settle window — do it BEFORE any lock so a USER-initiated kill
+    // (pmForceKillViaLaunchdGated, deliberately ungated) is never blocked.
+    uint64_t settleUntil = g_activation_settle_until_ns;
+    uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    if (settleUntil > nowNs) {
+        if (__sync_lock_test_and_set(&g_prewarm_defer_pending, 1))
+            return;   // a deferred pre-warm is already scheduled — don't stack
+        uint64_t remainNs = (settleUntil - nowNs) + 150ULL * 1000000ULL; // +150ms
+        printf("[PROCMGR] fastkill: pre-warm deferred ~%llu ms to activation "
+               "settle (launchd-hijack ⇄ task_policy_set strand avoidance)\n",
+               (unsigned long long)(remainNs / 1000000ULL));
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)remainNs),
+                       dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            __sync_lock_release(&g_prewarm_defer_pending);
+            pm_prewarm_fastkill_session("deferred past activation settle");
+        });
+        return;
+    }
     if (!kexploit_krw_ready()) return;   // also lazy-reattaches a parked primitive
     NSLock *lock = pm_kill_lock();
     [lock lock];
