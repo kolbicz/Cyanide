@@ -844,11 +844,11 @@ static int set_dock_icon_labels(uint64_t iconCtrl, bool show, bool mayForceShowL
             // SpringBoard.
             if (show && responds && !shouldShow) {
                 if (!mayForceShowLabels) {
-                    // Hide icon labels is holding this same method at NO. Say so
-                    // plainly: the dock follows the home screen by design, it is
-                    // not a failure to find the lever.
-                    printf("[SBC] dock labels: _shouldShowLabel=NO and forcing not allowed "
-                           "(Hide icon labels holds it); dock follows the home screen\n");
+                    // Caller withheld permission (Hide icon labels holds this same
+                    // method). Today the caller also passes show=false in that case,
+                    // so this is belt and braces rather than a path you should see.
+                    printf("[SBC] dock labels: _shouldShowLabel=NO and forcing not allowed; "
+                           "dock follows the home screen\n");
                 } else if (sbcustomizer_swizzle_labels_shown()) {
                     // The hook changes what _updateLabel computes, so the
                     // per-view pass below now has something to build.

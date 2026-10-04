@@ -7647,23 +7647,26 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                     if ([d boolForKey:kSettingsSBCEnabled]) {
                         BOOL wantDockLabels = [d boolForKey:kSettingsSBCDockLabels];
                         BOOL hidingLabels = [d boolForKey:kSettingsSBCHideLabels];
-                        // Hide icon labels wins. On iOS 17 both settings drive the one
-                        // _shouldShowLabel method, which cannot answer NO and YES at
-                        // once; rather than poll to paper over that, the dock follows
-                        // the home screen and stays bare. On iOS 18 the two are
-                        // separate icon locations with their own layout configs, so
-                        // both apply and nothing is suppressed.
-                        BOOL mayForce = !hidingLabels;
-                        int nDock = sbcustomizer_set_dock_labels_in_session(wantDockLabels, mayForce);
-                        if (wantDockLabels) {
-                            if (nDock > 0) {
-                                log_user("[OK] Dock labels shown on %d icon view(s).\n", nDock);
-                            } else if (hidingLabels) {
-                                log_user("[RUN] Dock labels skipped: Hide icon labels is on, and the "
-                                         "dock follows it.\n");
-                            } else {
-                                log_user("[OK] Dock labels: nothing to change.\n");
-                            }
+                        // Hide icon labels wins, on every version. iOS 17 leaves no
+                        // choice -- both settings drive the one _shouldShowLabel
+                        // method, which cannot answer NO and YES at once. iOS 18 could
+                        // do both, since root and dock are separate icon locations with
+                        // their own layout configurations, but a bare home screen next
+                        // to a labelled dock is not a combination anyone asks for, and
+                        // one rule beats two behaviours to explain. So the dock follows
+                        // the home screen either way.
+                        //
+                        // Note this applies the OFF state rather than just skipping:
+                        // on iOS 18 a previous run's dock labels live in the dock's
+                        // layout configuration, so they have to be actively cleared or
+                        // they would survive turning Hide icon labels on.
+                        BOOL showDock = wantDockLabels && !hidingLabels;
+                        int nDock = sbcustomizer_set_dock_labels_in_session(showDock, !hidingLabels);
+                        if (wantDockLabels && hidingLabels) {
+                            log_user("[RUN] Dock labels skipped: Hide icon labels is on, and the "
+                                     "dock follows it.\n");
+                        } else if (wantDockLabels) {
+                            log_user("[OK] Dock labels shown on %d icon view(s).\n", nDock);
                         } else if (!hidingLabels) {
                             // Turning dock labels off: drop the forced-YES hook if we
                             // are the ones holding it, so the dock goes back to stock.
@@ -9748,7 +9751,7 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         @{ @"kind": @"stepper", @"key": kSettingsSBCRows,       @"title": @"Home rows", @"min": @4, @"max": @8, @"default": @(kSBCDefaultRows) },
         @{ @"kind": @"toggle",  @"key": kSettingsSBCHideLabels, @"title": @"Hide icon labels" },
         @{ @"kind": @"toggle",  @"key": kSettingsSBCDockLabels, @"title": @"Show dock labels",
-           @"subtitle": @"Draws app names under the dock icons, which stock iOS leaves off. On iOS 17, Hide icon labels takes precedence and the dock stays bare; on iOS 18 both apply." },
+           @"subtitle": @"Draws app names under the dock icons, which stock iOS leaves off. Hide icon labels takes precedence: with that on, the dock stays bare too." },
         @{ @"kind": @"toggle",  @"key": kSettingsSBCArrangePages, @"title": @"Arrange icons by page" },
         @{ @"kind": @"stepper", @"key": kSettingsSBCFirstPageIcons, @"title": @"First page icons", @"min": @12, @"max": @49, @"default": @(kSBCDefaultFirstPageIcons) },
         @{ @"kind": @"stepper", @"key": kSettingsSBCOtherPageIcons, @"title": @"Other page icons", @"min": @12, @"max": @49, @"default": @(kSBCDefaultOtherPageIcons) },
