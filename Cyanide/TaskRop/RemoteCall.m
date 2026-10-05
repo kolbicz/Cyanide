@@ -69,7 +69,7 @@ uint64_t g_RC_targetProcOverride = 0;
 uint64_t g_RC_gadgetPacia = 0;
 
 // Round 41: one-shot arm-candidate cap consumed by the next init (see
-// RemoteCall.h for the fastkill-2 vs anchoring-6 rationale).
+// RemoteCall.h for the fastkill-4 (round 46) vs anchoring-6 rationale).
 #define RC_DEFAULT_TARGET_INJECTED_THREADS 6
 static char g_RC_nextInitTargetProcess[32];
 static int g_RC_nextInitTargetThreads = 0;
@@ -3940,11 +3940,13 @@ static int init_remote_call_internal(const char* process, bool useMigFilterBypas
     // post-trap drain, late traps answered by the first-port responder for the
     // session's life, residual traps drained at teardown (round-5 symmetry).
     // (Round 41: this is now the DEFAULT; the fastkill launchd sessions cap
-    // themselves to 2 via remote_call_set_next_init_target_threads.)
+    // themselves via remote_call_set_next_init_target_threads — 4 since
+    // round 46, 2 before.)
     int targetInjectedThreadCount = RC_DEFAULT_TARGET_INJECTED_THREADS;
     // Round 41: consume a caller-scoped one-shot cap (fastkill launchd
-    // sessions arm 2 candidates, not 6 — fewer armed launchd threads that can
-    // be stranded if the app dies mid-session; see RemoteCall.h). The value
+    // sessions arm 4 candidates since round 46 — was 2, but the first-trap
+    // wait measured 1–4.8 s on-device; 4 should land in ~0.5–1 s while
+    // staying under the anchoring's 6 — see RemoteCall.h). The value
     // is cleared on THIS init whether or not the process name matches, so it
     // can never leak into a later unrelated init (e.g. the PERSIST launchd
     // anchoring, which keeps the default 6).
@@ -3957,7 +3959,7 @@ static int init_remote_call_internal(const char* process, bool useMigFilterBypas
         if (process && strcmp(process, pendingProcess) == 0) {
             targetInjectedThreadCount = pending;
             printf("[RC] init: caller-scoped arm candidate cap for %s: %d "
-                   "(round 41 — reduced strand surface)\n",
+                   "(round 46 — faster first trap, bounded strand surface)\n",
                    process, targetInjectedThreadCount);
         } else {
             printf("[RC] init: DISCARDING one-shot arm candidate cap (%s, %d) — "

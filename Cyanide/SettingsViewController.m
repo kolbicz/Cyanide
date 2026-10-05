@@ -9951,8 +9951,11 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
         // every extra second is time an orphaned armed thread can detonate
         // against our dead ports if the app leaves the foreground
         // (17:45:56: silence 145 ms into the 120 s wait, panic <60 s).
-        // Round 41: same 2-candidate cap as the pre-warm (strand surface).
-        remote_call_set_next_init_target_threads("launchd", 2);
+        // Round 46: arm 4 candidates (was round-41's 2). With 2, the
+        // first-trap wait measured 1–4.8 s on-device; the min over 4
+        // injected threads should land in ~0.5–1 s. Strand surface stays
+        // bounded (anchoring keeps 6; we stay under it).
+        remote_call_set_next_init_target_threads("launchd", 4);
         gPMKillSession = [[RemoteCallSession alloc] initWithProcess:@"launchd"
                                                  useMigFilterBypass:NO
                                             firstExceptionTimeoutMS:10000];
