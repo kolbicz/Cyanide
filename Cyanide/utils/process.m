@@ -655,9 +655,9 @@ int procmgr_list(procmgr_entry_t *entries, int max) {
 // fail-safe KRW skips the write (no panic — the old "panics on 18.4+" comment
 // was right about the write being impossible, wrong about it panicking) and
 // the self-check backs off cleanly, but every attempt still burns two failing
-// kwrites + op-error latch noise. The Force Quit middle rung uses
-// procmgr_unsandbox() instead (zone-safe write to our own cred label, which
-// IS writable). Kept for reference; do not re-add to the kill path on 18.4+.
+// kwrites + op-error latch noise. Round 45's unsandbox rung hit the same
+// wall (MAC labels in read-only kalloc on SPTM — round 46 removed it too).
+// Kept for reference; do not re-add to the kill path on 18.4+.
 
 static uint64_t g_pm_saved_cred = 0;      // our original p_ucred value
 static uint64_t g_pm_ucred_slot = 0;      // &(self proc_ro).p_ucred
@@ -707,6 +707,14 @@ bool procmgr_is_escalated(void) {
 }
 
 // --- light unsandbox (clear the sandbox slot in our cred label) --------------
+//
+// Round 46: UNUSED — proven dead on BOTH supported builds (live 46/47): the
+// kwrite to the label's sandbox slot EFAULTs (errno 14) on 21D61 AND 22F76 —
+// MAC labels live in read-only kalloc on SPTM devices, so the zone-safe write
+// below cannot take; reads of the label succeed (only the write is blocked).
+// Same wall as proc_ro (procmgr_escalate, round 44/45): kernel memory holding
+// credentials is write-protected on 18.4+. The launchd RemoteCall is the only
+// privileged kill path. Kept for reference; do not re-add to the kill path.
 
 static uint64_t g_pm_sb_slot = 0;
 static uint64_t g_pm_sb_saved = 0;
@@ -2043,16 +2051,13 @@ int procmgr_kill(int pid) {
     // "Mutex is unexpectedly not owned by thread" (lock_mtx.c) on 18.5. There is
     // no safe way to gate that from userspace, so it is DISABLED for stability.
     // Report permission-denied instead of risking a reboot; the caller
-    // (SettingsViewController Force Quit) then tries the round-45 unsandbox
-    // rung: procmgr_unsandbox() clears our own label's sandbox slot (zone-safe
-    // write, read-back + kill(pid,0) probe self-checks, unconditional
-    // re-sandbox) and retries the direct kill with the sandbox MAC hook off
-    // us. Round 44's ucred-swap rung — which exercised the proc_ro p_ucred
-    // write this comment once claimed "panics on 18.4+" — was REMOVED after
-    // live 46 (22F76): the write doesn't panic (the fail-safe KRW catches it)
-    // but EFAULTs, so proc_ro IS write-protected on 18.4+ and escalation via
-    // p_ucred is impossible there. The launchd RemoteCall session remains the
-    // final fallback.
+    // (SettingsViewController Force Quit) falls back to the launchd
+    // RemoteCall session. Both middle rungs are proven dead on-device and
+    // were removed: round 44's ucred-swap (proc_ro write-protected on 18.4+)
+    // and round 45's unsandbox (MAC labels in read-only kalloc on SPTM
+    // devices; the kwrite EFAULTs on 21D61 AND 22F76 — live 46/47).
+    // Credential-adjacent kernel memory is not writable on 18.4+; the
+    // launchd RemoteCall is the only privileged kill path.
     static const bool kEnableCrashKill = false;
     if (!kEnableCrashKill) return -6;   // no safe way to force-quit this one
 

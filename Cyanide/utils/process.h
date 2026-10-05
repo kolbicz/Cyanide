@@ -133,9 +133,12 @@ bool procmgr_is_escalated(void);
 
 // Temporarily remove our own sandbox so proc_pidinfo can read OTHER same-user
 // processes (the sandbox process-info gate blocks it otherwise). This writes the
-// sandbox slot in our cred LABEL to 0 — the label is normal writable memory, NOT
-// the read-only proc_ro that crashed the device. Saves the original; resandbox
+// sandbox slot in our cred LABEL to 0. Saves the original; resandbox
 // restores it. Returns 0 on success, negative on failure. Idempotent.
+// Round 46: UNUSED — proven dead on-device (live 46/47): MAC labels live in
+// read-only kalloc on SPTM devices; the kwrite EFAULTs (errno 14) on BOTH
+// 21D61 and 22F76 (reads succeed — only the write is blocked). Kept for
+// reference; do not re-add to the kill path on 18.4+.
 int procmgr_unsandbox(void);
 void procmgr_resandbox(void);
 

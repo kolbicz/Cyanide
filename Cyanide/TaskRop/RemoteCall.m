@@ -138,7 +138,7 @@ static bool remote_call_verbose_logging(void);   // defined below, near RC_DEBUG
 
 // Round 37: the per-op guard acquire/release lines fire at the OUTERMOST op
 // (n==1 / n==0), where `what` is the top-level label. Process Viewer kills wrap
-// in the external "fastkill"/"fastkill-unsandbox" guard; SpringBoard tweak applies
+// in the external "fastkill" guard; SpringBoard tweak applies
 // and their live-repair loops run as "call-stable"/"init-hijack"/"destroy" with
 // no external guard. The verbose/debug toggle exists to debug the PROCESS
 // VIEWER — so scope these boundary lines to the fastkill context and stop them
