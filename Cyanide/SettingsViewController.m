@@ -8889,19 +8889,8 @@ static NSString *pm_chip_name(NSString *machine) {
         }]];
     }
 
-    // Debug: intense RemoteCall logging. Off by default — the per-call guard
-    // acquire/release and RC_DEBUG lines flood the log after a tweak apply.
-    BOOL verbose = [NSUserDefaults.standardUserDefaults boolForKey:kSettingsVerboseLoggingEnabled];
-    [ac addAction:[UIAlertAction
-        actionWithTitle:(verbose ? @"Verbose logging: On ✓" : @"Verbose logging: Off")
-                  style:UIAlertActionStyleDefault
-                handler:^(UIAlertAction *a) {
-        BOOL now = !verbose;
-        [NSUserDefaults.standardUserDefaults setBool:now forKey:kSettingsVerboseLoggingEnabled];
-        remote_call_set_verbose(now);
-        log_set_rc_filter(!now);   // verbose on → show all [RC]; off → hide routine
-        printf("[SETTINGS] verbose RemoteCall logging %s\n", now ? "ENABLED" : "disabled");
-    }]];
+    // Verbose RemoteCall logging now lives in Settings → Launch Options
+    // (it affects exploit + tweak applies too, not just the Process Viewer).
 
     [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
 
@@ -11103,6 +11092,8 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         @{ @"key": kSettingsA18BoundedSearch, @"peV1Only": @YES, @"a18Only": @YES, @"title": @"A18 bounded search",
            @"subtitle": @"On stops after 4 search passes and reports a clean retry instead of grinding — which can otherwise end in an aperture panic on a device that never lands the PCB. Off (default, matches 1.5.5) grinds until the exploit acquires. A18/M4 only; effective on the next fresh chain run." },
         @{ @"kind": @"settlemode", @"key": kSettingsRemoteSettleMode, @"title": @"Tweak apply speed" },
+        @{ @"key": kSettingsVerboseLoggingEnabled, @"title": @"Verbose logging",
+           @"subtitle": @"Logs the full RemoteCall internals for every exploit run, tweak apply and Process Viewer action. Off keeps the log readable; turn it on before reproducing an issue, then share the log." },
         @{ @"key": kSettingsAutoRunKexploit,    @"title": @"Auto-run kexploit on launch" },
         @{ @"key": kSettingsRunSandboxEscape,   @"title": @"Sandbox escape (escape_sbx_demo2)" },
         @{ @"key": kSettingsKeepAlive,          @"title": @"Keep app alive in background",
@@ -15164,6 +15155,13 @@ void cyanide_present_contact(UIViewController *host)
     settings_note_package_configuration_changed(key);
     if ([key isEqualToString:kSettingsKeepAlive]) {
         ds_keepalive_apply_enabled(sender.isOn);
+        return;
+    }
+    if ([key isEqualToString:kSettingsVerboseLoggingEnabled]) {
+        // Applies to ALL RemoteCall logging — exploit, tweak applies and the
+        // Process Viewer — so it lives in Launch Options, not the Process Viewer.
+        remote_call_set_verbose(sender.isOn);
+        log_set_rc_filter(!sender.isOn);
         return;
     }
     if (settings_key_affects_package_state(key)) {
