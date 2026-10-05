@@ -9703,6 +9703,58 @@ static BOOL pm_fastkill_warm_session_exists(void)
     return exists;
 }
 
+// Round 46: foreground idle disarm. A warm session between kills is a trapped
+// launchd thread plus armed-KRW exposure, and round 6's teardown only fires
+// when the app LEAVES the foreground — a user who kills one app and then
+// keeps browsing the viewer holds that exposure indefinitely. After a
+// successful kill, schedule a 10 s timer that tears the warm session down
+// through the SAME safe path as backgrounding, while the app is verifiably
+// foreground+active. Any new kill activity cancels/reschedules it (cheap —
+// a kill that needs a session re-warms on demand), and backgrounding stays
+// the immediate-teardown fallback. Generation-counter cancellation: no
+// suspend/resume primitives, no deallocated-block risk.
+static volatile int64_t g_pm_idle_disarm_gen = 0;
+static volatile int     g_pm_idle_disarm_pending = 0;
+
+static void pm_idle_disarm_cancel(const char *why)
+{
+    if (!g_pm_idle_disarm_pending) return;
+    g_pm_idle_disarm_pending = 0;
+    __sync_add_and_fetch(&g_pm_idle_disarm_gen, 1);
+    printf("[PROCMGR] fastkill: idle disarm cancelled (%s)\n",
+           why ?: "new kill activity");
+}
+
+static void pm_idle_disarm_schedule(void)
+{
+    g_pm_idle_disarm_pending = 1;
+    int64_t gen = __sync_add_and_fetch(&g_pm_idle_disarm_gen, 1);
+    printf("[PROCMGR] fastkill: idle disarm scheduled in 10 s "
+           "(foreground-safe teardown)\n");
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)),
+                   dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        if (gen != g_pm_idle_disarm_gen) return;   // cancelled/rescheduled
+        g_pm_idle_disarm_pending = 0;
+        // Guards: never tear down into a backgrounding (the background path
+        // owns the session there) or mid-kill.
+        if (g_app_in_background || excport_gate_blocked()) {
+            printf("[PROCMGR] fastkill: idle disarm skipped — lifecycle gate "
+                   "closed (background teardown owns the session now)\n");
+            return;
+        }
+        if (__sync_add_and_fetch(&gPMWarmupInFlight, 0) > 0 ||
+            remote_call_inflight_count() > 0) {
+            printf("[PROCMGR] fastkill: idle disarm skipped — kill in flight\n");
+            return;
+        }
+        if (!gPMKillSession) return;   // already torn down since scheduling
+        // pm_teardown… re-cancels via pm_idle_disarm_cancel, but pending is
+        // already 0 so that is a silent no-op — no noisy self-cancel log.
+        pm_teardown_fastkill_session_for_terminate("idle disarm");
+        printf("[PROCMGR] fastkill: idle disarm torn down (foreground-safe)\n");
+    });
+}
+
 // Tear down the warm launchd session. Two drivers:
 //  (a) the APP itself is exiting (applicationWillTerminate / SIGTERM /
 //      WillTerminateNotification) — the round-3 backstop;
@@ -9729,6 +9781,12 @@ static BOOL pm_fastkill_warm_session_exists(void)
 // SIGTERM handler context).
 static void pm_teardown_fastkill_session_for_terminate(const char *reason)
 {
+    // Round 46: an explicit teardown supersedes any pending idle disarm —
+    // cancel it so it can't fire later against a session that is already
+    // gone (the fire path would no-op on gPMKillSession==nil anyway; this
+    // keeps the log honest). Silent when the idle-disarm fire path itself
+    // is the caller (it clears pending first).
+    pm_idle_disarm_cancel(reason);
     // Round 25 (A): hold the exception-port teardown bypass for the WHOLE
     // teardown episode — including the PRE-LOCK stop + un-arm below and every
     // concurrent responder re-park/dispatch sign while it runs. All signing
@@ -10106,6 +10164,9 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
         printf("[PROCMGR] fastkill: REFUSING protected pid %d (kernel_task/launchd)\n", pid);
         return -1;
     }
+    // Round 46: new kill activity supersedes any pending idle disarm — the
+    // session this kill warms/uses gets its own disarm schedule on success.
+    pm_idle_disarm_cancel("new kill activity");
     // Round 13: the comm hard-stop that used to stand here was REMOVED as
     // redundant — it was the second of three identical allproc walks per kill
     // (procmgr_kill checks before its own kill(); pmForceKillViaLaunchdGated
@@ -10153,6 +10214,14 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
                                    : "no session (warm-up failed; warming now)");
     int rc = [self pmForceKillViaLaunchdLocked:pid allowRebuild:YES];
     [lock unlock];
+    // Round 46: kill confirmed dead and the session stays warm — schedule
+    // the foreground idle disarm so the trapped launchd thread + armed KRW
+    // exposure is shed after 10 idle seconds instead of persisting until
+    // backgrounding. (Failures keep whatever their paths already decided;
+    // a rebuilt/torn-down session leaves gPMKillSession nil and the fire
+    // path no-ops.)
+    if (rc == 0 && gPMKillSession)
+        pm_idle_disarm_schedule();
     return rc;
 }
 
