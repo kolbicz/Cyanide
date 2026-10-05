@@ -8616,6 +8616,14 @@ static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeco
     // titleView here fought the large title and made it jump/hide on push).
     self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeAlways;
 
+    // Round 51: reserve the nav-bar prompt line from the FIRST layout. The
+    // prompt ("N active · M suspended", or "Arming…/Restoring…") is otherwise
+    // first set only after arming/reloadProcs completes, so on entry the bar
+    // had no prompt line and then grew one when the count appeared — the whole
+    // view pushed down (iOS 17). Seeding a placeholder here fixes the bar height
+    // up front; every later prompt change is text-only, same height, no jump.
+    self.navigationItem.prompt = @"Scanning processes…";
+
     [self buildSummaryHeader];
     [self reloadProcs];
 
@@ -9017,7 +9025,10 @@ static NSString *pm_chip_name(NSString *machine) {
     self.procs = @[];
     [self.tableView reloadData];
     [self.refreshControl endRefreshing];
-    self.navigationItem.prompt = nil;
+    // Round 51: keep the prompt line reserved (was nil) so the nav bar never
+    // loses/regains a line on the gone→armed transition — that height change
+    // is the "view pushed down when the active/suspended row appears" jump.
+    self.navigationItem.prompt = @"Kernel access needed";
     [self updateSummaryHeader];
 }
 
