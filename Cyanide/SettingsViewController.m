@@ -8560,11 +8560,11 @@ typedef NS_ENUM(NSInteger, PMSortKey) { PMSortPID = 0, PMSortCPU, PMSortMem, PMS
 // Pids with a kill in flight — rows are dimmed and non-selectable until the
 // single-pid verify removes the row (or the failure path un-marks it).
 @property (nonatomic, strong) NSMutableSet<NSNumber *> *terminatingPids;
-// Round 46: while the viewer is on top the home indicator auto-hides —
-// fewer accidental swipe-home exits mid-kill (a backgrounding mid-kill is
-// exactly the strand/black-screen surface). State-driven so leaving the
-// viewer restores the indicator.
-@property (nonatomic, assign) BOOL homeIndicatorAutoHidden;
+// Round 49→50: the round-46 home-indicator auto-hide was REMOVED. It
+// collapsed the large title to the centered inline title on entry/refresh
+// (toggling prefersHomeIndicatorAutoHidden forces a nav-bar relayout), and it
+// never delivered its stated goal anyway — hiding the indicator does NOT block
+// the swipe-home gesture (that needs preferredScreenEdgesDeferringSystemGestures).
 // Round 46: kill-in-progress shield — a small non-blocking pill shown from
 // Force-Quit tap to verdict so the user keeps Cyanide open while the
 // launchd session arms/executes (leaving mid-kill is the same surface).
@@ -8910,22 +8910,6 @@ static NSString *pm_chip_name(NSString *machine) {
     }
 }
 
-- (void)viewDidAppear:(BOOL)animated
-{
-    [super viewDidAppear:animated];
-    // Round 48: auto-hide the home indicator AFTER the push transition has
-    // settled — NOT in viewWillAppear. Round 47 made the container actually
-    // forward prefersHomeIndicatorAutoHidden (round 46's leaf override had been
-    // inert, so it never perturbed anything). With forwarding live, calling
-    // setNeedsUpdateOfHomeIndicatorAutoHidden mid-push forced a nav-bar/layout
-    // re-evaluation that collapsed the large title to the centered inline title
-    // on entry — the "jumpy first-open" we had already fixed. Deferring to here
-    // lets the large title lay out expanded first; the indicator hides a frame
-    // later with no title disturbance.
-    self.homeIndicatorAutoHidden = YES;
-    [self setNeedsUpdateOfHomeIndicatorAutoHidden];
-}
-
 - (void)viewWillDisappear:(BOOL)animated
 {
     [super viewWillDisappear:animated];
@@ -8934,16 +8918,6 @@ static NSString *pm_chip_name(NSString *machine) {
         [(MainTabBarController *)tbc setPopupBarSuppressed:NO];
     }
     [self stopAutoRefreshTimer];
-    // Round 46: restore the home indicator when leaving the viewer.
-    self.homeIndicatorAutoHidden = NO;
-    [self setNeedsUpdateOfHomeIndicatorAutoHidden];
-}
-
-// Round 46: iOS queries the top view controller for this; state-driven so
-// the indicator comes back as soon as the viewer is no longer visible.
-- (BOOL)prefersHomeIndicatorAutoHidden
-{
-    return self.homeIndicatorAutoHidden;
 }
 
 - (void)dealloc

@@ -26,23 +26,7 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
 @property (nonatomic, strong) UIView *refreshBanner;
 @end
 
-@implementation CYNavigationController
-// Round 47: forward the home-indicator auto-hide query to the visible child
-// (the Process Viewer auto-hides the indicator while it is on top).
-- (UIViewController *)childViewControllerForHomeIndicatorAutoHidden
-{
-    return self.topViewController;
-}
-@end
-
 @implementation MainTabBarController
-
-// Round 47: forward the home-indicator query into the selected tab's nav
-// stack (which forwards again via CYNavigationController).
-- (UIViewController *)childViewControllerForHomeIndicatorAutoHidden
-{
-    return self.selectedViewController;
-}
 
 - (void)viewDidLoad
 {
@@ -89,7 +73,7 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
                                        symbol:(NSString *)symbol
 {
     UINavigationController *nav =
-        [[CYNavigationController alloc] initWithNavigationBarClass:CYNavigationBar.class toolbarClass:nil];
+        [[UINavigationController alloc] initWithNavigationBarClass:CYNavigationBar.class toolbarClass:nil];
     if (root) [nav setViewControllers:@[root]];
     nav.navigationBar.barStyle = UIBarStyleBlack;
     nav.tabBarItem = [[UITabBarItem alloc] initWithTitle:title
