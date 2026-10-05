@@ -9552,16 +9552,18 @@ static NSString *pm_chip_name(NSString *machine) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             int rc = procmgr_kill(pid);
             // -6 == our own SIGKILL was denied (the app sandbox blocks signalling
-            // other apps). Round 44: try the ucred-swap first — borrow launchd's
-            // credentials with one proc_ro write (self-checked), retry the
-            // direct kill() as root, always restore. Only if that can't take or
-            // the kill still fails do we fall through to the launchd RemoteCall:
-            // launchd is root and unsandboxed, so kill(pid, SIGKILL) run inside
-            // it lands on any process. This is a clean syscall from a
-            // privileged context — no memory corruption, so none of the
-            // crash-trick's panic risk.
+            // other apps). Round 45: try the unsandbox rung first — clear our
+            // own label's sandbox slot (zone-safe write, self-checked), retry
+            // the direct kill() with the sandbox MAC hook off us, always
+            // restore. (Round 44's ucred-swap rung was removed: proc_ro is
+            // write-protected on 18.4+ and the p_ucred write EFAULTs — live
+            // 46.) Only if that can't take or the kill still fails do we fall
+            // through to the launchd RemoteCall: launchd is root and
+            // unsandboxed, so kill(pid, SIGKILL) run inside it lands on any
+            // process. This is a clean syscall from a privileged context — no
+            // memory corruption, so none of the crash-trick's panic risk.
             if (rc == -6)
-                rc = [self pmForceKillViaUcredSwap:pid];
+                rc = [self pmForceKillViaUnsandbox:pid];
             if (rc == -6 || rc == -2)
                 rc = [self pmForceKillViaLaunchd:pid];
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -9808,37 +9810,45 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
 // latches — but the fundamental problem is that the warm exists BEFORE any
 // kill is requested, so every foreground/viewer cycle re-rolls the dice for
 // zero user-visible benefit. The kill path now warms the launchd session ON
-// DEMAND (pmForceKillViaLaunchdGated, unchanged) — and round 44 commit 2
-// makes even that a fallback behind the ucred-swap. First kill per
+// DEMAND (pmForceKillViaLaunchdGated, unchanged) — and round 45 makes even
+// that a fallback behind the unsandbox rung (round 44's ucred-swap rung
+// removed: proc_ro is write-protected on 18.4+, the p_ucred kwrite EFAULTs —
+// live 46). First kill per
 // foreground pays the warm-up; subsequent kills in the same foreground stay
 // ~ms warm (round-6 backgrounding teardown unchanged).
 
-// Round 44: middle rung between our own (sandboxed) kill() and the launchd
-// RemoteCall. procmgr_escalate() borrows launchd's ucred via one proc_ro write
-// (read-back + getuid()==0 self-check, automatic undo on failure), we retry
-// the direct kill(pid, SIGKILL) as root — launchd's creds are not
-// sandbox-blocked from signalling other apps — and ALWAYS de-escalate on every
-// exit path so we never stay root. Fail-closed throughout: any guard, KRW, or
-// comm re-verify failure backs out to the launchd session unchanged.
+// Round 45: middle rung between our own (sandboxed) kill() and the launchd
+// RemoteCall — REPLACES round 44's ucred-swap rung, which is proven dead on
+// 18.4+: proc_ro is write-protected, so the p_ucred kwrite EFAULTs (live 46,
+// iPhone17,2/22F76: escalate rc=-5; the fail-safe KRW skipped the write — no
+// panic, just two wasted kwrites + op-error latch noise per kill).
+// App Store apps all run uid 501 == our uid, so the POSIX uid check already
+// passes; the only blocker is the sandbox MAC hook on the SENDER.
+// procmgr_unsandbox() clears our own label's sandbox slot (zone-safe
+// full-element write, read-back verified), we probe with kill(pid, 0) and
+// retry the direct kill(pid, SIGKILL), and ALWAYS re-sandbox on every exit
+// path. Fail-closed throughout: any guard, KRW, comm re-verify, or self-check
+// failure backs out to the launchd session unchanged.
 // Returns 0 on success (ESRCH counts — the target is already gone, same UX as
 // the launchd path), -1 on a fail-closed refusal, -2 when the remote-call
-// guard is unavailable (caller falls straight through to launchd), -6 when the
-// kill still could not be delivered (caller tries launchd next).
-- (int)pmForceKillViaUcredSwap:(int)pid
+// guard is unavailable (caller falls straight through to launchd), -6 when
+// the kill still could not be delivered — e.g. a root daemon, where the uid
+// check applies even unsandboxed — (caller tries launchd next).
+- (int)pmForceKillViaUnsandbox:(int)pid
 {
     if (pid <= 1) return -1;
-    printf("[PROCMGR] fastkill: direct kill EPERM — trying ucred-swap (pid %d)\n", pid);
+    printf("[PROCMGR] fastkill: direct kill EPERM — trying unsandbox (pid %d)\n", pid);
     // Hold the same guard the launchd path holds: a pending background/detach
-    // must not tear KRW down from under the proc_ro write.
-    if (!remote_call_guard_acquire_external("fastkill-ucredswap")) {
-        printf("[PROCMGR] fastkill: ucred-swap skipped — detach gate closed "
+    // must not tear KRW down from under the label write.
+    if (!remote_call_guard_acquire_external("fastkill-unsandbox")) {
+        printf("[PROCMGR] fastkill: unsandbox skipped — detach gate closed "
                "(backgrounding in progress); falling back to launchd session\n");
         return -2;
     }
     int rc = -6;
     do {
         if (!kexploit_krw_ready()) {
-            printf("[PROCMGR] fastkill: ucred-swap skipped — KRW not ready; "
+            printf("[PROCMGR] fastkill: unsandbox skipped — KRW not ready; "
                    "falling back to launchd session\n");
             break;   // rc stays -6 → launchd fallback
         }
@@ -9848,28 +9858,51 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
         char sComm[64];
         if (procmgr_comm_for_pid(pid, sComm, sizeof(sComm)) != 0 ||
             procmgr_comm_is_protected(sComm)) {
-            printf("[PROCMGR] fastkill: ucred-swap REFUSING pid %d — comm "
+            printf("[PROCMGR] fastkill: unsandbox REFUSING pid %d — comm "
                    "re-verify failed or protected\n", pid);
             rc = -1;
             break;
         }
-        int esc = procmgr_escalate();
-        if (esc != 0) {
-            printf("[PROCMGR] ucred-swap: self-check FAILED (escalate rc=%d) — "
-                   "falling back to launchd session\n", esc);
+        int usb = procmgr_unsandbox();
+        if (usb != 0) {
+            printf("[PROCMGR] unsandbox: self-check FAILED (unsandbox rc=%d) — "
+                   "falling back to launchd session\n", usb);
+            // A failed label write latches the KRW op-error (live 46's failed
+            // proc_ro write did). The latch is a consulted signal, not a block
+            // — every critical read sequence clears it first (round-15 kill
+            // verdict, Thread.m) — but acknowledge it here too, so nothing
+            // downstream can mistake this rung's noise for its own failure.
+            krw_op_error_clear();
             break;   // rc stays -6 → launchd fallback
         }
-        printf("[PROCMGR] ucred-swap: escalated (getuid=%d)\n", getuid());
+        // Functional self-check: the read-back inside procmgr_unsandbox proves
+        // the slot is 0; this proves the sandbox MAC hook no longer blocks us
+        // — trust the syscall, not the kread. EPERM = hook still active.
+        // (ESRCH just means the target already exited → success below.)
+        errno = 0;
+        int prc = kill(pid, 0);
+        int perr = errno;
+        if (prc != 0 && perr == EPERM) {
+            printf("[PROCMGR] unsandbox: self-check FAILED — kill(%d,0) still "
+                   "EPERM after unsandbox — falling back to launchd session\n", pid);
+            procmgr_resandbox();
+            break;   // rc stays -6 → launchd fallback
+        }
+        printf("[PROCMGR] unsandbox: active (probe kill(%d,0) rc=%d errno=%d)\n",
+               pid, prc, perr);
         errno = 0;
         int krc = kill(pid, SIGKILL);
         int kerr = errno;
-        // ALWAYS restore our own creds, whatever kill() did.
-        procmgr_deescalate();
-        printf("[PROCMGR] ucred-swap: kill rc=%d (errno=%d)%s\n", krc, kerr,
-               krc == 0 ? "" : (kerr == ESRCH ? " — target already gone" : ""));
+        // ALWAYS restore our sandbox, whatever kill() did.
+        procmgr_resandbox();
+        printf("[PROCMGR] unsandbox: kill rc=%d (errno=%d)%s\n", krc, kerr,
+               krc == 0 ? "" : (kerr == ESRCH ? " — target already gone"
+                                : (kerr == EPERM ? " — still EPERM (root "
+                                   "daemon? the uid check applies even "
+                                   "unsandboxed)" : "")));
         if (krc == 0 || kerr == ESRCH) rc = 0;   // ESRCH: already dead == success
     } while (0);
-    remote_call_guard_release_external("fastkill-ucredswap");
+    remote_call_guard_release_external("fastkill-unsandbox");
     return rc;
 }
 

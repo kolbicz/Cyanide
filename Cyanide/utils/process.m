@@ -649,6 +649,15 @@ int procmgr_list(procmgr_entry_t *entries, int max) {
 }
 
 // --- credential escalation (borrow launchd's ucred) -------------------------
+//
+// Round 45: UNUSED — proven dead on 18.4+ (iPhone17,2/22F76, live 46): proc_ro
+// is write-protected, so the p_ucred kwrite64 below EFAULTs (errno 14); the
+// fail-safe KRW skips the write (no panic — the old "panics on 18.4+" comment
+// was right about the write being impossible, wrong about it panicking) and
+// the self-check backs off cleanly, but every attempt still burns two failing
+// kwrites + op-error latch noise. The Force Quit middle rung uses
+// procmgr_unsandbox() instead (zone-safe write to our own cred label, which
+// IS writable). Kept for reference; do not re-add to the kill path on 18.4+.
 
 static uint64_t g_pm_saved_cred = 0;      // our original p_ucred value
 static uint64_t g_pm_ucred_slot = 0;      // &(self proc_ro).p_ucred
@@ -2034,12 +2043,16 @@ int procmgr_kill(int pid) {
     // "Mutex is unexpectedly not owned by thread" (lock_mtx.c) on 18.5. There is
     // no safe way to gate that from userspace, so it is DISABLED for stability.
     // Report permission-denied instead of risking a reboot; the caller
-    // (SettingsViewController Force Quit) then tries the round-44 ucred-swap:
-    // procmgr_escalate() performs exactly the proc_ro write this comment once
-    // claimed "panics on 18.4+" — that panic was never observed, and the swap
-    // now exercises the write with a read-back + getuid() self-check,
-    // automatic undo on failure, unconditional de-escalation, and the launchd
-    // RemoteCall session as the final fallback.
+    // (SettingsViewController Force Quit) then tries the round-45 unsandbox
+    // rung: procmgr_unsandbox() clears our own label's sandbox slot (zone-safe
+    // write, read-back + kill(pid,0) probe self-checks, unconditional
+    // re-sandbox) and retries the direct kill with the sandbox MAC hook off
+    // us. Round 44's ucred-swap rung — which exercised the proc_ro p_ucred
+    // write this comment once claimed "panics on 18.4+" — was REMOVED after
+    // live 46 (22F76): the write doesn't panic (the fail-safe KRW catches it)
+    // but EFAULTs, so proc_ro IS write-protected on 18.4+ and escalation via
+    // p_ucred is impossible there. The launchd RemoteCall session remains the
+    // final fallback.
     static const bool kEnableCrashKill = false;
     if (!kEnableCrashKill) return -6;   // no safe way to force-quit this one
 

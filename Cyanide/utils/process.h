@@ -122,6 +122,9 @@ int procmgr_comm_for_pid(int pid, char *buf, size_t len);
 // proc_ro->p_ucred at them, so libproc can read stats for every process. Saves
 // the original and self-checks the write took. Returns 0 on success; negative
 // if KRW isn't ready or proc_ro couldn't be written. Idempotent.
+// Round 45: UNUSED — proc_ro is write-protected on 18.4+ and the p_ucred
+// write EFAULTs (live 46, 22F76). Kept for reference; do not re-add to the
+// kill path on 18.4+. Use procmgr_unsandbox() instead.
 int procmgr_escalate(void);
 // Restore our original credentials. Safe to call when not escalated.
 void procmgr_deescalate(void);
