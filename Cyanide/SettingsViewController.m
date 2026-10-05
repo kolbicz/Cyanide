@@ -8568,7 +8568,9 @@ typedef NS_ENUM(NSInteger, PMSortKey) { PMSortPID = 0, PMSortCPU, PMSortMem, PMS
 // Round 46: kill-in-progress shield — a small non-blocking pill shown from
 // Force-Quit tap to verdict so the user keeps Cyanide open while the
 // launchd session arms/executes (leaving mid-kill is the same surface).
-@property (nonatomic, strong) UILabel *killShield;
+// Round 47: a UIView pill (spinner + label) hosted inside the table view,
+// not floating on the tab bar controller.
+@property (nonatomic, strong) UIView *killShield;
 // Round 47: pending-kill counter for the shield — two concurrent
 // Force-Quits share the one pill, and the first verdict must not hide it
 // while the second kill still runs. Main-queue confined (both call sites
@@ -8652,29 +8654,53 @@ static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeco
 {
     self.killShieldPending++;   // round 47: one pill, N pending kills
     if (self.killShield) { self.killShield.hidden = NO; return; }
+    // Round 47 redesign: the pill used to float on the tab bar controller's
+    // view and overlap the bottom tab buttons. Now it is an overlay INSIDE
+    // the table view, pinned to the top safe area — it sits over the stats
+    // header's top edge (viewer chrome; the nav-bar search field is above
+    // it and list rows begin below the 112 pt header) and scrolls away
+    // with the header, never covering the search box, rows, or tab bar.
+    // Overlay with constraints, not inserted into any stack — no layout
+    // shift. userInteractionEnabled=NO: the list stays fully tappable.
+    UIView *pill = [[UIView alloc] init];
+    pill.backgroundColor =
+        [UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:0.96];
+    pill.layer.cornerRadius = 15;
+    pill.layer.masksToBounds = YES;
+    pill.userInteractionEnabled = NO;
+    pill.translatesAutoresizingMaskIntoConstraints = NO;
+
+    UIActivityIndicatorView *spin =
+        [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+    spin.translatesAutoresizingMaskIntoConstraints = NO;
+    spin.userInteractionEnabled = NO;
+    [spin startAnimating];
+
     UILabel *l = [[UILabel alloc] init];
-    // (edge spaces = horizontal padding; a plain UILabel draws no insets)
-    l.text = @"  Finishing kill — keep Cyanide open for a second.  ";
+    l.text = @"Finishing kill — keep Cyanide open for a second.";
     l.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     l.textColor = UIColor.labelColor;
-    l.backgroundColor =
-        [UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:0.96];
-    l.textAlignment = NSTextAlignmentCenter;
-    l.layer.cornerRadius = 15;
-    l.layer.masksToBounds = YES;
-    l.userInteractionEnabled = NO;   // never block touches on the list
     l.translatesAutoresizingMaskIntoConstraints = NO;
-    UIView *host = self.tabBarController.view
-                 ?: (self.navigationController.view ?: self.view);
-    [host addSubview:l];
+
+    [pill addSubview:spin];
+    [pill addSubview:l];
     [NSLayoutConstraint activateConstraints:@[
-        [l.centerXAnchor constraintEqualToAnchor:host.centerXAnchor],
-        [l.bottomAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.bottomAnchor
-                                       constant:-8],
-        [l.widthAnchor constraintLessThanOrEqualToConstant:420],
-        [l.heightAnchor constraintEqualToConstant:30],
+        [spin.leadingAnchor constraintEqualToAnchor:pill.leadingAnchor constant:10],
+        [spin.centerYAnchor constraintEqualToAnchor:pill.centerYAnchor],
+        [l.leadingAnchor constraintEqualToAnchor:spin.trailingAnchor constant:6],
+        [l.trailingAnchor constraintEqualToAnchor:pill.trailingAnchor constant:-12],
+        [l.centerYAnchor constraintEqualToAnchor:pill.centerYAnchor],
     ]];
-    self.killShield = l;
+
+    [self.view addSubview:pill];
+    [NSLayoutConstraint activateConstraints:@[
+        [pill.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor],
+        [pill.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor
+                                       constant:4],
+        [pill.widthAnchor constraintLessThanOrEqualToConstant:420],
+        [pill.heightAnchor constraintEqualToConstant:30],
+    ]];
+    self.killShield = pill;
 }
 
 - (void)pmHideKillShield
