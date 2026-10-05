@@ -8565,6 +8565,10 @@ typedef NS_ENUM(NSInteger, PMSortKey) { PMSortPID = 0, PMSortCPU, PMSortMem, PMS
 // exactly the strand/black-screen surface). State-driven so leaving the
 // viewer restores the indicator.
 @property (nonatomic, assign) BOOL homeIndicatorAutoHidden;
+// Round 46: kill-in-progress shield — a small non-blocking pill shown from
+// Force-Quit tap to verdict so the user keeps Cyanide open while the
+// launchd session arms/executes (leaving mid-kill is the same surface).
+@property (nonatomic, strong) UILabel *killShield;
 @end
 
 static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeconds";
@@ -8631,6 +8635,46 @@ static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeco
     // Round 44: no fastkill pre-warm here — arming launchd just because the
     // viewer is visible was the live-45 black-screen trigger; the kill path
     // warms on demand.
+}
+
+// --- round 46: kill-in-progress shield ----------------------------------------
+// A small floating pill shown from Force-Quit tap to verdict. NON-BLOCKING
+// (userInteractionEnabled=NO): the process list stays fully tappable while
+// it is up. Hosted by the tab bar controller's view so it floats above the
+// whole tab instead of scrolling with the table.
+
+- (void)pmShowKillShield
+{
+    if (self.killShield) { self.killShield.hidden = NO; return; }
+    UILabel *l = [[UILabel alloc] init];
+    // (edge spaces = horizontal padding; a plain UILabel draws no insets)
+    l.text = @"  Finishing kill — keep Cyanide open for a second.  ";
+    l.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    l.textColor = UIColor.labelColor;
+    l.backgroundColor =
+        [UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:0.96];
+    l.textAlignment = NSTextAlignmentCenter;
+    l.layer.cornerRadius = 15;
+    l.layer.masksToBounds = YES;
+    l.userInteractionEnabled = NO;   // never block touches on the list
+    l.translatesAutoresizingMaskIntoConstraints = NO;
+    UIView *host = self.tabBarController.view
+                 ?: (self.navigationController.view ?: self.view);
+    [host addSubview:l];
+    [NSLayoutConstraint activateConstraints:@[
+        [l.centerXAnchor constraintEqualToAnchor:host.centerXAnchor],
+        [l.bottomAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.bottomAnchor
+                                       constant:-8],
+        [l.widthAnchor constraintLessThanOrEqualToConstant:420],
+        [l.heightAnchor constraintEqualToConstant:30],
+    ]];
+    self.killShield = l;
+}
+
+- (void)pmHideKillShield
+{
+    [self.killShield removeFromSuperview];
+    self.killShield = nil;
 }
 
 // --- summary header: live system info above the process list -----------------
@@ -9569,6 +9613,7 @@ static NSString *pm_chip_name(NSString *machine) {
         [self.terminatingPids addObject:@(pid)];
         [self applyFilter];   // reflect "terminating…" without a KRW rescan
         [self stopAutoRefreshTimer];
+        [self pmShowKillShield];   // round 46: tap → verdict
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             int rc = procmgr_kill(pid);
             // -6 == our own SIGKILL was denied (the app sandbox blocks signalling
@@ -9584,6 +9629,7 @@ static NSString *pm_chip_name(NSString *machine) {
             if (rc == -6)
                 rc = [self pmForceKillViaLaunchd:pid];
             dispatch_async(dispatch_get_main_queue(), ^{
+                [self pmHideKillShield];   // round 46: verdict known — success or failure
                 [self startAutoRefreshTimerIfNeeded];
                 if (rc != 0) {
                     [self.terminatingPids removeObject:@(pid)];
