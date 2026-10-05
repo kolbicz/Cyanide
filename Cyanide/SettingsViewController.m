@@ -3332,10 +3332,9 @@ static const BOOL kFastKillTeardownOnBackground = YES;
 
 static BOOL pm_fastkill_warm_session_exists(void);
 static void pm_teardown_fastkill_session_for_terminate(const char *reason);
-// Round 13: pm_prewarm_fastkill_session is BACK, viewer-scoped and debounced
-// (the round-8 churn problem was per-CYCLE hijack+teardown; one debounced
-// hijack per viewer-open is the rate the lazy first kill would pay anyway).
-static void pm_prewarm_fastkill_session(const char *reason);
+// Round 44: pm_prewarm_fastkill_session REMOVED — see the tombstone at the
+// former definition site (live 45: speculative arming on viewer visibility
+// is the black-screen trigger; kills warm on demand only).
 
 static void settings_terminal_kexploit_cleanup_sync_internal(const char *reason)
 {
@@ -8623,14 +8622,9 @@ static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeco
     if (!self.isViewLoaded || !self.view.window) return;
     [self startAutoRefreshTimerIfNeeded];
     [self reloadProcs];
-    // Round 13: pre-warm on foreground return with the viewer visible. Slightly
-    // deferred so the scene hook clears g_app_in_background first (the pre-warm
-    // refuses to warm into a backgrounded state); debounced + single-flight,
-    // and torn down again by round 6 if the app backgrounds before any kill.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
-                   dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        pm_prewarm_fastkill_session("foreground return, viewer visible");
-    });
+    // Round 44: no fastkill pre-warm here — arming launchd just because the
+    // viewer is visible was the live-45 black-screen trigger; the kill path
+    // warms on demand.
 }
 
 // --- summary header: live system info above the process list -----------------
@@ -8815,12 +8809,9 @@ static NSString *pm_chip_name(NSString *machine) {
         // Returning to the viewer (e.g. after opening another app): refresh so
         // newly-launched processes appear instead of showing a stale snapshot.
         [self reloadProcs];
-        // Round 13: pre-warm the fastkill launchd session while the viewer is
-        // open (debounced, single-flight) so the first kill is on the ~ms warm
-        // path instead of paying the 1.4-2.5 s hijack.
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            pm_prewarm_fastkill_session("viewer visible");
-        });
+        // Round 44: no fastkill pre-warm here (live 45 — speculative arming
+        // on viewer visibility is the black-screen trigger; kills warm on
+        // demand only).
     }
 }
 
@@ -9261,12 +9252,9 @@ static NSString *pm_chip_name(NSString *machine) {
                 self.arming = NO;
                 self.silentRestoring = NO;
                 [self reloadProcs];
-                // Round 13: KRW is live and the viewer is open — pre-warm the
-                // fastkill session now (debounced, single-flight) so the first
-                // kill doesn't pay the 1.4-2.5 s warm-up.
-                dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                    pm_prewarm_fastkill_session("KRW armed in viewer");
-                });
+                // Round 44: no fastkill pre-warm on KRW-armed-in-viewer (live 45
+                // — speculative arming on viewer visibility is the black-screen
+                // trigger; kills warm on demand only).
                 return;
             }
             // No parked state to recover — a full exploit is the only way, and on
@@ -9803,162 +9791,22 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
     excport_teardown_bypass_end("fastkill-teardown");
 }
 
-// Round 8: pre-warm was REMOVED (pm_prewarm_fastkill_session deleted). Rounds
-// 6+7 made the launchd thread hijack+teardown run on EVERY background/
-// foreground cycle, and each hijack's thread-list walk read freed thread slots
-// with at least one partially-failed write — repeated cycles left a dangling
-// thread reference the kernel later tripped on (panic-full-2026-09-29-215904:
-// threads zone use-after-free, 25 s after a pre-warm hijack that walked 10
-// dead slots). The warm session is now created LAZILY by the first kill of a
-// foreground session (pmForceKillViaLaunchdGated below) and still torn down on
-// every backgrounding (round 6), so a hijack exists only while the app is
-// foregrounded and only when the user actually kills. First kill per
-// foreground pays the ~2-3 s hijack; subsequent kills stay ~ms warm.
+// Round 44: the speculative fastkill pre-warm is REMOVED (function and all
+// three call sites: viewWillAppear, KRW-armed-in-viewer, foreground-return-
+// while-visible). Arming launchd merely because the Process Viewer is VISIBLE
+// is the live-45 black-screen trigger: the pre-warm hijacks launchd at the
+// activation edge, its helper can wedge in-kernel through a background
+// transition, and an un-reaped helper turns the process into a corpse that
+// black-screens on reopen. Round 8 removed it for per-cycle churn, round 13
+// brought it back viewer-scoped, rounds 36/41/43 layered on gates and
+// latches — but the fundamental problem is that the warm exists BEFORE any
+// kill is requested, so every foreground/viewer cycle re-rolls the dice for
+// zero user-visible benefit. The kill path now warms the launchd session ON
+// DEMAND (pmForceKillViaLaunchdGated, unchanged) — and round 44 commit 2
+// makes even that a fallback behind the ucred-swap. First kill per
+// foreground pays the warm-up; subsequent kills in the same foreground stay
+// ~ms warm (round-6 backgrounding teardown unchanged).
 
-// Round 13: PRE-WARM is back — viewer-scoped and debounced. The round-8
-// removal was about CHURN (hijack+teardown on every background/foreground
-// cycle); one debounced hijack per viewer-open is the same rate the lazy
-// first kill would pay anyway, and the user's real workflow (kill →
-// background to check the switcher → foreground → kill) otherwise pays the
-// full 1.4-2.5 s warm-up on EVERY kill because round 6 tears the session
-// down on each backgrounding. Called ONLY from Process Viewer trigger points
-// (viewWillAppear / armKRW success / foreground-return-while-visible), never
-// from another tab's foregrounding. Runs on a background thread (callers
-// dispatch).
-//
-// Single-flight: gPMKillSession/gPMWarmupInFlight are checked and set under
-// pm_kill_lock, and a user-tapped kill ATTACHES to an in-flight pre-warm via
-// the round-7 mechanism (waits on pm_kill_lock once, then uses the warmed
-// session) — a kill never stacks a second hijack behind a pre-warm.
-//
-// Background-mid-warm: g_app_in_background is set BEFORE the round-6 teardown
-// runs, and both the teardown and this install take pm_kill_lock — so either
-// the teardown lands first (requests stop; the init aborts at a walk/wait
-// checkpoint, or completes and is refused by the suppressed re-check below
-// and destroyed) or the install lands first and the teardown steals the
-// session. No warm session outlives the foreground (195243-class).
-static volatile int g_prewarm_defer_pending = 0;
-
-static void pm_prewarm_fastkill_session(const char *reason)
-{
-    if (settings_krw_reattach_suppressed()) return;   // backgrounded/screen-off
-    // Round 43: while the helper-wedge latch is set the warm-up cannot
-    // succeed (init fails fast); skip the attempt entirely (one log line
-    // per trigger instead of an init's worth of noise). The latch is
-    // revocable — a late helper exit re-enables the next pre-warm.
-    if (remote_call_helper_unaccounted_count() > 0) {
-        printf("[PROCMGR] fastkill: pre-warm skipped (%s) — helper-wedge latch "
-               "set (a kernel call is stuck from an earlier backgrounding; "
-               "kill path reports restart-needed)\n", reason);
-        return;
-    }
-    // Round 36 (panic-full-2026-10-04-080209 "unexpected SIGKILL of launchd"):
-    // the AUTOMATIC pre-warm hijacks launchd (set_exception_ports → AMFI global
-    // lock) and fires at the activation edge (0.25 s after foreground / on
-    // armKRW / viewWillAppear). Arming launchd there — while runningboardd /
-    // PerfPowerServices run task_policy_set on our task — strands a launchd
-    // thread → SIGKILL of launchd ~30 s later (08:01:38 pre-warm → 08:02:09
-    // panic). Round 35 gated the SpringBoard hijack this way; the launchd
-    // pre-warm needs the same gate. Defer (reschedule once, single-flight) past
-    // the settle window — do it BEFORE any lock so a USER-initiated kill
-    // (pmForceKillViaLaunchdGated, deliberately ungated) is never blocked.
-    uint64_t settleUntil = g_activation_settle_until_ns;
-    uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-    if (settleUntil > nowNs) {
-        if (__sync_lock_test_and_set(&g_prewarm_defer_pending, 1))
-            return;   // a deferred pre-warm is already scheduled — don't stack
-        uint64_t remainNs = (settleUntil - nowNs) + 150ULL * 1000000ULL; // +150ms
-        printf("[PROCMGR] fastkill: pre-warm deferred ~%llu ms to activation "
-               "settle (launchd-hijack ⇄ task_policy_set strand avoidance)\n",
-               (unsigned long long)(remainNs / 1000000ULL));
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)remainNs),
-                       dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            __sync_lock_release(&g_prewarm_defer_pending);
-            pm_prewarm_fastkill_session("deferred past activation settle");
-        });
-        return;
-    }
-    if (!kexploit_krw_ready()) return;   // also lazy-reattaches a parked primitive
-    NSLock *lock = pm_kill_lock();
-    [lock lock];
-    if (gPMKillSession != nil || __sync_add_and_fetch(&gPMWarmupInFlight, 0) > 0) {
-        [lock unlock];
-        return;   // already warm, or a warm-up (a kill's or ours) is in flight
-    }
-    if (!remote_call_guard_acquire_external("fastkill-prewarm")) {
-        [lock unlock];
-        printf("[PROCMGR] fastkill: pre-warm skipped (%s) — detach gate closed "
-               "(backgrounding in progress)\n", reason);
-        return;
-    }
-    __sync_add_and_fetch(&gPMWarmupInFlight, 1);
-    printf("[PROCMGR] fastkill: pre-warming launchd RemoteCall session (%s)…\n", reason);
-    uint64_t w0 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-    // Round 20 (A): HOLD pm_kill_lock across the whole init + install. The
-    // round-13 pre-warm used to drop the lock here and re-take it for the
-    // install — but the round-7 kill attach path "waits" for an in-flight
-    // warm-up BY ACQUIRING pm_kill_lock, so with the lock free mid-init a
-    // kill attached and concluded "warm-up failed" in the SAME millisecond
-    // (07:13:40.679), then stacked a second hijack behind ours: two inits
-    // armed the same launchd threads with different ports, sabotaged each
-    // other, and the surviving session kept a launchd XPC worker parked with
-    // no responder — watchdogd turnstile-blocked on it and the device
-    // panicked "watchdog timeout" at 07:16:02. Holding the lock restores the
-    // round-7 invariant the attach path was built on ("every warm-up runs
-    // under this lock"): an attaching kill now genuinely waits for this
-    // init's outcome, then uses the installed session or warms once itself.
-    // A backgrounding teardown that needs this lock first issues an
-    // optimistic remote_call_request_stop (idempotent) so the init aborts at
-    // its next checkpoint instead of holding the lock for its full length.
-    // Round 41: the fastkill session arms only 2 launchd candidates (default
-    // is 6). Every armed launchd thread is a thread the kernel SIGKILLs if we
-    // die mid-session (082220: a 5-arm warm hung into "unexpected SIGKILL of
-    // launchd"); the pre-warm is not latency-critical enough to justify six.
-    remote_call_set_next_init_target_threads("launchd", 2);
-    RemoteCallSession *session =
-        [[RemoteCallSession alloc] initWithProcess:@"launchd"
-                                 useMigFilterBypass:NO
-                            firstExceptionTimeoutMS:10000];
-    uint64_t warmMs = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - w0) / 1000000ULL;
-    __sync_sub_and_fetch(&gPMWarmupInFlight, 1);
-    // Install only if still foregrounded and no kill's warm-up beat us to it
-    // (the decrement happens inside the lock so an attaching kill sees the
-    // in-flight count until the install decision is made).
-    BOOL install = (session != nil && gPMKillSession == nil &&
-                    !settings_krw_reattach_suppressed());
-    if (install)
-        gPMKillSession = session;
-    [lock unlock];
-    // Round 25 (B): release the guard ONLY AFTER any not-installed teardown
-    // has COMPLETED. The background detach gate drains the in-flight count
-    // before touching the sockets — releasing first let the count hit 0 with
-    // this teardown still pending, so settings_detach_krw_for_background()
-    // detached the KRW sockets UNDER the subsequent destroy/abandon
-    // (live 28.log 15:16:48.363: "guard release (fastkill-prewarm)" →
-    // "sockets detached" → teardown ran on dead KRW → abandon chosen: un-arm
-    // audit SKIPPED for 4 armed threads, exc_guard restore IMPOSSIBLE, and
-    // the 15:17:14 initproc panic ~26 s after the jetsam). Holding the guard
-    // across the teardown makes any pending detach wait until ALL RemoteCall
-    // teardown has finished; destroy/abandon's internal acquisitions nest
-    // safely via their bypassGate.
-    if (install) {
-        printf("[PROCMGR] fastkill: pre-warm ready (%s, launchd pid=%d) in %llu ms "
-               "— kills are on the warm path now\n",
-               reason, session.pid, (unsigned long long)warmMs);
-    } else if (session) {
-        // Backgrounded mid-warm, or a kill's own warm-up installed first —
-        // never keep a second/orphaned session: tear it down symmetrically.
-        printf("[PROCMGR] fastkill: pre-warm (%s) not installed (backgrounded "
-               "mid-warm or a kill won the race) — tearing down\n", reason);
-        if (kexploit_krw_ready()) [session destroyRemoteCall];
-        else                      [session abandonRemoteCall];
-    } else {
-        printf("[PROCMGR] fastkill: pre-warm failed (%s): %s — the first kill "
-               "will warm up on demand\n", reason,
-               remote_call_init_failure_description(remote_call_last_init_failure()));
-    }
-    remote_call_guard_release_external("fastkill-prewarm");
-}
 
 - (int)pmForceKillViaLaunchdLocked:(int)pid allowRebuild:(BOOL)allowRebuild
 {
