@@ -8560,6 +8560,11 @@ typedef NS_ENUM(NSInteger, PMSortKey) { PMSortPID = 0, PMSortCPU, PMSortMem, PMS
 // Pids with a kill in flight — rows are dimmed and non-selectable until the
 // single-pid verify removes the row (or the failure path un-marks it).
 @property (nonatomic, strong) NSMutableSet<NSNumber *> *terminatingPids;
+// Round 46: while the viewer is on top the home indicator auto-hides —
+// fewer accidental swipe-home exits mid-kill (a backgrounding mid-kill is
+// exactly the strand/black-screen surface). State-driven so leaving the
+// viewer restores the indicator.
+@property (nonatomic, assign) BOOL homeIndicatorAutoHidden;
 @end
 
 static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeconds";
@@ -8802,6 +8807,10 @@ static NSString *pm_chip_name(NSString *machine) {
     }
     [self startAutoRefreshTimerIfNeeded];
 
+    // Round 46: auto-hide the home indicator while the viewer is on top.
+    self.homeIndicatorAutoHidden = YES;
+    [self setNeedsUpdateOfHomeIndicatorAutoHidden];
+
     // Auto-arm on open: armKRW tries the parked-primitive restore first (safe,
     // no confirmation) and only asks before running the full exploit.
     if (!self.krwReady && !self.arming) {
@@ -8824,6 +8833,16 @@ static NSString *pm_chip_name(NSString *machine) {
         [(MainTabBarController *)tbc setPopupBarSuppressed:NO];
     }
     [self stopAutoRefreshTimer];
+    // Round 46: restore the home indicator when leaving the viewer.
+    self.homeIndicatorAutoHidden = NO;
+    [self setNeedsUpdateOfHomeIndicatorAutoHidden];
+}
+
+// Round 46: iOS queries the top view controller for this; state-driven so
+// the indicator comes back as soon as the viewer is no longer visible.
+- (BOOL)prefersHomeIndicatorAutoHidden
+{
+    return self.homeIndicatorAutoHidden;
 }
 
 - (void)dealloc
