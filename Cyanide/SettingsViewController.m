@@ -9655,7 +9655,14 @@ static NSString *pm_chip_name(NSString *machine) {
         [self.terminatingPids addObject:@(pid)];
         [self applyFilter];   // reflect "terminating…" without a KRW rescan
         [self stopAutoRefreshTimer];
-        [self pmShowKillShield];   // round 46: tap → verdict
+        // Round 52: show the "finishing kill" banner only when a warm-up will
+        // actually happen — i.e. the launchd session is cold (the first kill of
+        // a foreground session, after a backgrounding, or after the 10 s idle
+        // disarm). A warm session makes the kill ~ms, so the banner would just
+        // blink. Paired show/hide via this captured flag keeps the refcount
+        // balanced across concurrent kills.
+        BOOL showBanner = !pm_fastkill_warm_session_exists();
+        if (showBanner) [self pmShowKillShield];   // tap → verdict (cold kill only)
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             int rc = procmgr_kill(pid);
             // -6 == our own SIGKILL was denied (the app sandbox blocks signalling
@@ -9671,7 +9678,7 @@ static NSString *pm_chip_name(NSString *machine) {
             if (rc == -6)
                 rc = [self pmForceKillViaLaunchd:pid];
             dispatch_async(dispatch_get_main_queue(), ^{
-                [self pmHideKillShield];   // round 46: verdict known — success or failure
+                if (showBanner) [self pmHideKillShield];   // verdict known — paired with the cold-kill show
                 [self startAutoRefreshTimerIfNeeded];
                 if (rc != 0) {
                     [self.terminatingPids removeObject:@(pid)];
