@@ -8654,14 +8654,17 @@ static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeco
 {
     self.killShieldPending++;   // round 47: one pill, N pending kills
     if (self.killShield) { self.killShield.hidden = NO; return; }
-    // Round 47 redesign: the pill used to float on the tab bar controller's
-    // view and overlap the bottom tab buttons. Now it is an overlay INSIDE
-    // the table view, pinned to the top safe area — it sits over the stats
-    // header's top edge (viewer chrome; the nav-bar search field is above
-    // it and list rows begin below the 112 pt header) and scrolls away
-    // with the header, never covering the search box, rows, or tab bar.
-    // Overlay with constraints, not inserted into any stack — no layout
-    // shift. userInteractionEnabled=NO: the list stays fully tappable.
+    // Round 48: the pill floats at the TOP of the screen, above the process
+    // count. The count is the nav-bar prompt ("N active · M suspended"); the
+    // pill is hosted on the tab bar controller's view and pinned to its top
+    // safe area — the same spot and host as the existing refresh banner
+    // (MainTabBarController showRefreshBanner), so it sits over the top chrome
+    // (above the prompt/title), never over the list rows or the tab bar.
+    // Round 47 history: round 46 pinned it to the tab bar's BOTTOM (overlapped
+    // the tab buttons); round 47 moved it into the table view's top safe area
+    // (below the prompt, over the stats header). Overlay with constraints, not
+    // inserted into any stack — no layout shift. userInteractionEnabled=NO:
+    // the list stays fully tappable.
     UIView *pill = [[UIView alloc] init];
     pill.backgroundColor =
         [UIColor.secondarySystemGroupedBackgroundColor colorWithAlphaComponent:0.96];
@@ -8692,10 +8695,16 @@ static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeco
         [l.centerYAnchor constraintEqualToAnchor:pill.centerYAnchor],
     ]];
 
-    [self.view addSubview:pill];
+    // Host at the very top of the screen — the tab bar controller's view, so
+    // the pill floats above the nav-bar prompt (the process count), matching
+    // the refresh banner. Fall back to the nav/table view if there is no tab
+    // bar controller (defensive; the viewer always has one in practice).
+    UIView *host = self.tabBarController.view
+                 ?: (self.navigationController.view ?: self.view);
+    [host addSubview:pill];
     [NSLayoutConstraint activateConstraints:@[
-        [pill.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor],
-        [pill.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor
+        [pill.centerXAnchor constraintEqualToAnchor:host.centerXAnchor],
+        [pill.topAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.topAnchor
                                        constant:4],
         [pill.widthAnchor constraintLessThanOrEqualToConstant:420],
         [pill.heightAnchor constraintEqualToConstant:30],
