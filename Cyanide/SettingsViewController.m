@@ -8569,6 +8569,11 @@ typedef NS_ENUM(NSInteger, PMSortKey) { PMSortPID = 0, PMSortCPU, PMSortMem, PMS
 // Force-Quit tap to verdict so the user keeps Cyanide open while the
 // launchd session arms/executes (leaving mid-kill is the same surface).
 @property (nonatomic, strong) UILabel *killShield;
+// Round 47: pending-kill counter for the shield — two concurrent
+// Force-Quits share the one pill, and the first verdict must not hide it
+// while the second kill still runs. Main-queue confined (both call sites
+// are main-queue blocks).
+@property (nonatomic, assign) NSInteger killShieldPending;
 @end
 
 static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeconds";
@@ -8645,6 +8650,7 @@ static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeco
 
 - (void)pmShowKillShield
 {
+    self.killShieldPending++;   // round 47: one pill, N pending kills
     if (self.killShield) { self.killShield.hidden = NO; return; }
     UILabel *l = [[UILabel alloc] init];
     // (edge spaces = horizontal padding; a plain UILabel draws no insets)
@@ -8673,6 +8679,10 @@ static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeco
 
 - (void)pmHideKillShield
 {
+    // Round 47: refcounted — the first verdict of two concurrent kills must
+    // not hide the pill while the second kill still runs. Clamp at 0.
+    if (self.killShieldPending > 0) self.killShieldPending--;
+    if (self.killShieldPending > 0) return;
     [self.killShield removeFromSuperview];
     self.killShield = nil;
 }
