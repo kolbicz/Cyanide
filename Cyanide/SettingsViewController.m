@@ -2088,11 +2088,12 @@ static void settings_krw_follow_screen_transition(void)
         if (settings_krw_idle_detach_allowed() && remote_call_inflight_count() <= 0) {
             settings_detach_krw_for_background();   // synchronous, completes now
         } else if (settings_krw_idle_detach_allowed()) {
-            // Round 25 (D): an RC op (pre-warm hijack / kill) is in flight, so
-            // the synchronous detach would park THIS observer callback — the
-            // main queue — on the detach gate for up to 4 s (the pre-warm holds
-            // the guard for its whole 1.4-2.5 s init; round-7-class UI freeze,
-            // search bar unusable while the screen transition is processed).
+            // Round 25 (D): an RC op (on-demand kill warm-up / kill) is in
+            // flight, so the synchronous detach would park THIS observer
+            // callback — the main queue — on the detach gate for up to 4 s
+            // (a warm-up holds the guard for its whole 1.4-2.5 s init;
+            // round-7-class UI freeze, search bar unusable while the screen
+            // transition is processed).
             // Defer to the serial queue: the gate wait is harmless there, and
             // the detach still lands before suspension in the common case
             // (warm-up is ~2 s, suspension grace is longer). If iOS suspends
@@ -9743,10 +9744,11 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
     // nests with the destroy/abandon internal bypass and with the
     // "background-detach" episode hold on the call paths that have one.
     excport_teardown_bypass_begin("fastkill-teardown");
-    // Round 20: the pre-warm now HOLDS pm_kill_lock across its whole init
-    // (single-flight). An in-flight warm-up must still be interrupted
-    // promptly — issue the stop BEFORE taking the lock (idempotent), or this
-    // teardown would queue behind the very init it is trying to abort.
+    // Round 20: a kill's on-demand warm-up HOLDS pm_kill_lock across its
+    // whole init (single-flight). An in-flight warm-up must still be
+    // interrupted promptly — issue the stop BEFORE taking the lock
+    // (idempotent), or this teardown would queue behind the very init it is
+    // trying to abort.
     if (__sync_add_and_fetch(&gPMWarmupInFlight, 0) > 0) {
         printf("[PROCMGR] fastkill: %s with warm-up IN FLIGHT — requesting "
                "stop + un-arm of the partially-armed init (pre-lock)\n",
@@ -10008,8 +10010,9 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
         // serializing every other kill behind one kill's multi-second settle.
         // Reaching this point with the window still pending means a fresh
         // activation re-extended it in the last few ms — refuse rather than
-        // wait under the lock (nothing signalled; the automatic pre-warm
-        // re-warms after the window, and the kill can be retried).
+        // wait under the lock (nothing signalled; the kill can simply be
+        // retried after the window — round 44 removed the automatic pre-warm
+        // that used to re-warm it).
         uint64_t settleUntil = g_activation_settle_until_ns;
         uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
         if (settleUntil > nowNs) {
