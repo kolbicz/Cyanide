@@ -37,7 +37,7 @@ void cyanide_launch_trace(const char *point)
         time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
         char line[512];
         int n = snprintf(line, sizeof(line),
-            "[LAUNCH] %02d:%02d:%02d trace: %s pid=%d gate(bg=%d,term=%d) (round44)\n",
+            "[LAUNCH] %02d:%02d:%02d trace: %s pid=%d gate(bg=%d,term=%d) (round45)\n",
             tm.tm_hour, tm.tm_min, tm.tm_sec,
             point ?: "?", (int)getpid(), bg, term);
         if (n <= 0) return;
@@ -101,7 +101,7 @@ static dispatch_source_t g_sigterm_source;
     // wrote it (a stale install once produced a "new build" panic report from
     // the previous binary). log_user bypasses the verbose gate — verbose is
     // only enabled after this — and mirrors straight into live.log.
-    log_user("[BUILD] Cyanide %s (%s) built %s %s (round44)\n",
+    log_user("[BUILD] Cyanide %s (%s) built %s %s (round45)\n",
              shortVer.UTF8String, build.UTF8String, __DATE__, __TIME__);
 }
 
