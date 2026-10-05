@@ -2033,8 +2033,13 @@ int procmgr_kill(int pid) {
     // if that thread is mid-syscall holding a mutex, its forced fault trips
     // "Mutex is unexpectedly not owned by thread" (lock_mtx.c) on 18.5. There is
     // no safe way to gate that from userspace, so it is DISABLED for stability.
-    // (Broadening SIGKILL would need root, which needs a proc_ro write that also
-    // panics on 18.4+.) Report permission-denied instead of risking a reboot.
+    // Report permission-denied instead of risking a reboot; the caller
+    // (SettingsViewController Force Quit) then tries the round-44 ucred-swap:
+    // procmgr_escalate() performs exactly the proc_ro write this comment once
+    // claimed "panics on 18.4+" — that panic was never observed, and the swap
+    // now exercises the write with a read-back + getuid() self-check,
+    // automatic undo on failure, unconditional de-escalation, and the launchd
+    // RemoteCall session as the final fallback.
     static const bool kEnableCrashKill = false;
     if (!kEnableCrashKill) return -6;   // no safe way to force-quit this one
 
