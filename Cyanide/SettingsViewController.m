@@ -8896,10 +8896,6 @@ static NSString *pm_chip_name(NSString *machine) {
     }
     [self startAutoRefreshTimerIfNeeded];
 
-    // Round 46: auto-hide the home indicator while the viewer is on top.
-    self.homeIndicatorAutoHidden = YES;
-    [self setNeedsUpdateOfHomeIndicatorAutoHidden];
-
     // Auto-arm on open: armKRW tries the parked-primitive restore first (safe,
     // no confirmation) and only asks before running the full exploit.
     if (!self.krwReady && !self.arming) {
@@ -8912,6 +8908,22 @@ static NSString *pm_chip_name(NSString *machine) {
         // on viewer visibility is the black-screen trigger; kills warm on
         // demand only).
     }
+}
+
+- (void)viewDidAppear:(BOOL)animated
+{
+    [super viewDidAppear:animated];
+    // Round 48: auto-hide the home indicator AFTER the push transition has
+    // settled — NOT in viewWillAppear. Round 47 made the container actually
+    // forward prefersHomeIndicatorAutoHidden (round 46's leaf override had been
+    // inert, so it never perturbed anything). With forwarding live, calling
+    // setNeedsUpdateOfHomeIndicatorAutoHidden mid-push forced a nav-bar/layout
+    // re-evaluation that collapsed the large title to the centered inline title
+    // on entry — the "jumpy first-open" we had already fixed. Deferring to here
+    // lets the large title lay out expanded first; the indicator hides a frame
+    // later with no title disturbance.
+    self.homeIndicatorAutoHidden = YES;
+    [self setNeedsUpdateOfHomeIndicatorAutoHidden];
 }
 
 - (void)viewWillDisappear:(BOOL)animated
