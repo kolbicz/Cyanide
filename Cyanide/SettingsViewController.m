@@ -3332,6 +3332,7 @@ static const BOOL kFastKillSelfParking __attribute__((unused)) = NO;
 static const BOOL kFastKillTeardownOnBackground = YES;
 
 static BOOL pm_fastkill_warm_session_exists(void);
+static BOOL pm_fastkill_warm_session_hint(void);
 static void pm_teardown_fastkill_session_for_terminate(const char *reason);
 // Round 44: pm_prewarm_fastkill_session REMOVED — see the tombstone at the
 // former definition site (live 45: speculative arming on viewer visibility
@@ -8576,6 +8577,23 @@ typedef NS_ENUM(NSInteger, PMSortKey) { PMSortPID = 0, PMSortCPU, PMSortMem, PMS
 // while the second kill still runs. Main-queue confined (both call sites
 // are main-queue blocks).
 @property (nonatomic, assign) NSInteger killShieldPending;
+// One refresh pass at a time. The timer, viewWillAppear, search keystrokes,
+// pull-to-refresh, the refresh button and foreground return all call
+// reloadProcs; overlapping passes doubled the KRW load, could land out of
+// order (an older snapshot overwriting a newer one) and computed %CPU against
+// the same baseline twice. A request that arrives mid-pass is coalesced into
+// one follow-up pass. Main-queue confined.
+@property (nonatomic, assign) BOOL reloadInFlight;
+@property (nonatomic, assign) BOOL reloadPending;
+// Force-Quits between tap and verdict. The auto-refresh timer stays stopped
+// until the LAST one finishes (the first verdict used to restart it while a
+// second kill was still running). Main-queue confined.
+@property (nonatomic, assign) NSInteger killsInFlight;
+@property (nonatomic, assign) uint64_t lastSearchReloadNs;
+// CPU source of the previous pass (task totals + live threads vs live-only).
+// When it changes, the old per-pid baselines are in a different basis and
+// would produce a one-refresh spike — drop them for that pass.
+@property (nonatomic, assign) BOOL prevCpuFullTotals;
 @end
 
 static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeconds";
@@ -8911,7 +8929,9 @@ static NSString *pm_chip_name(NSString *machine) {
     } else if (self.krwReady) {
         // Returning to the viewer (e.g. after opening another app): refresh so
         // newly-launched processes appear instead of showing a stale snapshot.
-        [self reloadProcs];
+        // Skip when a pass is already running — on the first open viewDidLoad
+        // just started one, and its result is fresh enough.
+        if (!self.reloadInFlight) [self reloadProcs];
         // Round 44: no fastkill pre-warm here (live 45 — speculative arming
         // on viewer visibility is the black-screen trigger; kills warm on
         // demand only).
@@ -8944,6 +8964,7 @@ static NSString *pm_chip_name(NSString *machine) {
 - (void)startAutoRefreshTimerIfNeeded
 {
     [self stopAutoRefreshTimer];   // never stack timers
+    if (self.killsInFlight > 0) return;   // the last kill verdict restarts it
     double interval = [self autoRefreshInterval];
     if (interval <= 0) return;
     self.autoRefreshTimer = [NSTimer scheduledTimerWithTimeInterval:interval
@@ -9060,6 +9081,11 @@ static NSString *pm_chip_name(NSString *machine) {
         return;
     }
     self.krwReady = YES;
+    if (self.reloadInFlight) {
+        self.reloadPending = YES;   // coalesce: one follow-up pass when this one lands
+        return;
+    }
+    self.reloadInFlight = YES;
 
     // Enumerate via the KRW proc-walk, then read each process's memory/CPU from
     // the kernel task/thread structs using the self-calibrated, mapped-checked
@@ -9071,13 +9097,17 @@ static NSString *pm_chip_name(NSString *machine) {
     uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     double dWall = (self.prevWall > 0 && nowNs > self.prevWall) ? (double)(nowNs - self.prevWall) : 0;
     NSDictionary<NSNumber *, NSNumber *> *prevCpu = self.prevCpu;
+    BOOL prevCpuFullTotals = self.prevCpuFullTotals;
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         // The app may have backgrounded (or the screen blanked) between the guard
         // above and this block running. Bail before any KRW work so an in-flight
         // poll can't race the background detach and re-arm the socket it just
         // parked in launchd.
-        if (g_app_in_background != 0 || !settings_screen_awake_cached()) return;
+        if (g_app_in_background != 0 || !settings_screen_awake_cached()) {
+            dispatch_async(dispatch_get_main_queue(), ^{ [self pm_reloadFinished]; });
+            return;
+        }
         // Authoritative readiness re-check OFF the main thread (round 7): the
         // main-thread peek above can pass on a session that died microseconds
         // later, and the lazy reattach (bootstrap_look_up, seconds when
@@ -9086,6 +9116,7 @@ static NSString *pm_chip_name(NSString *machine) {
             printf("[PROCMGR] refresh: peek passed but authoritative check "
                    "failed — presenting not-ready UI\n");
             dispatch_async(dispatch_get_main_queue(), ^{
+                [self pm_reloadFinished];
                 [self pm_presentKrwNotReadyUI];
             });
             return;
@@ -9094,6 +9125,9 @@ static NSString *pm_chip_name(NSString *machine) {
         // process, then read every process's memory from the kernel ledger. No
         // writes anywhere, so none of the 18.5 write mitigations apply.
         procmgr_calibrate();
+        BOOL cpuFullTotals = procmgr_cpu_calibrated();
+        NSDictionary<NSNumber *, NSNumber *> *basePrev =
+            (cpuFullTotals == prevCpuFullTotals) ? prevCpu : @{};
 
         int cap = 4096;
         procmgr_entry_t *buf = calloc((size_t)cap, sizeof(procmgr_entry_t));
@@ -9113,6 +9147,9 @@ static NSString *pm_chip_name(NSString *machine) {
         }
         NSMutableArray<NSDictionary *> *rows = [NSMutableArray array];
         NSMutableDictionary<NSNumber *, NSNumber *> *newCpu = [NSMutableDictionary dictionary];
+        NSInteger ncpu = pm_sysctl_int("hw.ncpu");
+        const double maxPct = 100.0 * (double)(ncpu > 0 ? ncpu : 8) * 1.05;
+        static int sCpuSpikeLogCount = 0;
         int statCount = 0;
         for (int i = 0; i < n; i++) {
             // Mid-pass bail: a background detach can land while we walk rows —
@@ -9126,50 +9163,71 @@ static NSString *pm_chip_name(NSString *machine) {
                 if (buf) free(buf);
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [self.refreshControl endRefreshing];
+                    [self pm_reloadFinished];
                 });
                 return;
             }
             int pid = buf[i].pid;
-            NSMutableDictionary *row = [@{ @"pid": @(pid),
-                                          @"name": [NSString stringWithUTF8String:buf[i].name] } mutableCopy];
-            // p_stat FIRST (round 14): stats used to run before this check, so
-            // a process that died between the allproc walk and its row had its
-            // (freed or reallocated) task dereferenced for ledger/thread
-            // stats. A zombie's task is already torn down, and a p_stat
-            // outside SIDL..SZOMB (1..7) is mid-reap garbage (same convention
-            // as the kill-verdict loop). Both skip the stats read entirely and
-            // render dimmed with "—". kst == -1 means KRW unavailable — fall
-            // through and let procmgr_stats' own gates decide, as before.
-            int kst = procmgr_pstat_krw(pid);
-            BOOL exiting = (kst == PM_SZOMB) || (kst >= 0 && (kst < 1 || kst > 7));
-            uint64_t mem = 0, cpu = 0;
-            if (!exiting && procmgr_stats(pid, &mem, &cpu) == 0) {
+            // stringWithUTF8String: returns nil for a torn / non-UTF-8 name,
+            // and a nil value in the literal throws — fall back to the pid.
+            NSString *pname = [NSString stringWithUTF8String:buf[i].name]
+                           ?: [NSString stringWithFormat:@"pid %d", pid];
+            NSMutableDictionary *row = [@{ @"pid": @(pid), @"name": pname } mutableCopy];
+            // One read pass per row from the proc pointer the list walk
+            // already found (procmgr_row_info): p_stat FIRST (round 14) — a
+            // zombie or mid-reap p_stat (outside SIDL..SZOMB) skips the task
+            // entirely and renders dimmed with "—"; a pointer that no longer
+            // names this pid (exited / recycled since the walk) is treated the
+            // same. pstat == -1 (offset unavailable) falls through to the
+            // stats gates, as before.
+            procmgr_row_info_t ri;
+            BOOL present = procmgr_row_info(buf[i].kproc, pid, &ri);
+            int kst = ri.pstat;
+            BOOL exiting = !present || (kst == PM_SZOMB) || (kst >= 0 && (kst < 1 || kst > 7));
+            if (!exiting && ri.have_stats) {
+                uint64_t mem = ri.mem, cpu = ri.cpu;
                 statCount++;
-                row[@"mem"] = @(mem);
-                newCpu[@(pid)] = @(cpu);
-                NSNumber *prev = prevCpu[@(pid)];
-                if (prev && dWall > 0) {
-                    double pct = 100.0 * (double)(cpu - prev.unsignedLongLongValue) / dWall;
-                    if (pct < 0) pct = 0;
-                    if (pct > 800.0) pct = 800.0;   // clamp (multi-core)
-                    row[@"cpu"] = @(pct);
+                if (mem) row[@"mem"] = @(mem);
+                // Only a real CPU reading becomes a baseline; a failed read
+                // leaves none, so the next good pass shows "—" once instead
+                // of lifetime-CPU-over-one-interval.
+                if (ri.have_cpu) {
+                    newCpu[@(pid)] = @(cpu);
+                    NSNumber *prev = basePrev[@(pid)];
+                    if (prev && dWall > 0) {
+                        uint64_t p0 = prev.unsignedLongLongValue;
+                        double pct = cpu >= p0 ? 100.0 * (double)(cpu - p0) / dWall : 0;
+                        // No clamp: more than every core flat-out is not a
+                        // measurement but a bug in the read path, and it must
+                        // stay visible (row AND log), never be capped or hidden.
+                        row[@"cpu"] = @(pct);
+                        if (pct > maxPct && sCpuSpikeLogCount < 20) {
+                            sCpuSpikeLogCount++;
+                            printf("[PROCMGR] cpu: pid %d (%s) IMPOSSIBLE %.0f%% (> %.0f%% "
+                                   "for %ld cores; prev=%llu now=%llu dWall=%.0fms) — "
+                                   "read-path bug, shown unclamped\n",
+                                   pid, buf[i].name, pct, maxPct, (long)ncpu,
+                                   p0, cpu, dWall / 1e6);
+                        }
+                    }
                 }
             }
             if (exiting) row[@"exiting"] = @YES;
             // Suspended rows are dimmed in the UI. Ground truth is the proc's
             // p_stat read straight from struct proc via KRW (libproc's
             // pbi_status can stay SRUN for a suspended app); the calibrated
-            // task suspend_count is kept as a fallback. One cheap KRW read per
-            // pid — no calibration, no task_policy_set (that path deadlocked
-            // the kernel against PerfPowerServices and stays disabled).
-            int lst = procmgr_pstat(pid);
-            int sc  = procmgr_suspend_count(pid);
+            // task suspend_count is kept as a fallback. No calibration, no
+            // task_policy_set (that path deadlocked the kernel against
+            // PerfPowerServices and stays disabled).
+            int sc = ri.suspend_count;
             BOOL suspended = (kst == PM_SSTOP || kst == PM_SZOMB || sc > 0);
             // Mach task role marks GUI apps (like CocoaTop): foreground = the
             // frontmost app, switcher = a backgrounded UI app in the app
             // switcher. A GUI app is a real, user-facing process the user may
             // want to quit, so it is NOT treated as an inert "suspended" row
             // even while iOS has it task-suspended in the background.
+            // (Role calibration is currently disabled — this returns -1
+            // without touching the kernel.)
             int role = procmgr_task_role(pid);
             if (procmgr_role_is_foreground(role))     row[@"approle"] = @"foreground";
             else if (procmgr_role_is_switcher(role))  row[@"approle"] = @"switcher";
@@ -9180,8 +9238,10 @@ static NSString *pm_chip_name(NSString *machine) {
             static int sSuspendLogCount = 0;
             if (suspended && sSuspendLogCount < 40) {
                 sSuspendLogCount++;
+                // libproc p_stat only for this capped diagnostic — it used to
+                // be fetched for every row of every pass and then dropped.
                 printf("[PROCMGR] suspend: pid %d (%s) dimmed — krw_pstat=%d libproc=%d suspcount=%d\n",
-                       pid, buf[i].name, kst, lst, sc);
+                       pid, buf[i].name, kst, procmgr_pstat(pid), sc);
             }
             [rows addObject:row];
         }
@@ -9202,14 +9262,27 @@ static NSString *pm_chip_name(NSString *machine) {
         }];
         dispatch_async(dispatch_get_main_queue(), ^{
             self.prevCpu = newCpu;
+            self.prevCpuFullTotals = cpuFullTotals;
             self.prevWall = nowNs;
             self.statsAvailable = (statCount > 0);
             [self updateSummaryHeader];
             self.allProcs = rows;
             [self applyFilter];   // sets the "N processes" prompt
             [self.refreshControl endRefreshing];
+            [self pm_reloadFinished];
         });
     });
+}
+
+// Main queue: end of a reloadProcs pass (any exit path). Runs the coalesced
+// follow-up pass if a refresh was requested while this one was in flight.
+- (void)pm_reloadFinished
+{
+    self.reloadInFlight = NO;
+    if (self.reloadPending) {
+        self.reloadPending = NO;
+        [self reloadProcs];   // re-runs every guard (background / KRW peek)
+    }
 }
 
 - (void)applyFilter
@@ -9277,10 +9350,9 @@ static NSString *pm_chip_name(NSString *machine) {
     // Also refresh the underlying process snapshot while searching, so an app
     // launched after the viewer opened shows up in the results. Throttled so we
     // don't re-walk the whole proc list on every keystroke.
-    static uint64_t lastSearchReloadNs = 0;
     uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-    if (now - lastSearchReloadNs > 800ULL * NSEC_PER_MSEC) {
-        lastSearchReloadNs = now;
+    if (now - self.lastSearchReloadNs > 800ULL * NSEC_PER_MSEC) {
+        self.lastSearchReloadNs = now;
         [self reloadProcs];
     }
 }
@@ -9502,10 +9574,15 @@ static NSString *pm_chip_name(NSString *machine) {
         cell.pidL.textColor = [UIColor secondaryLabelColor];   // reset for cell reuse
     }
 
+    // One shared formatter (main queue only) — the class method built a new
+    // NSByteCountFormatter for every cell on every reload.
+    static NSByteCountFormatter *memFmt = nil;
+    if (!memFmt) {
+        memFmt = [NSByteCountFormatter new];
+        memFmt.countStyle = NSByteCountFormatterCountStyleMemory;
+    }
     NSNumber *mem = p[@"mem"];
-    cell.memL.text = mem ? [NSByteCountFormatter stringFromByteCount:(long long)mem.unsignedLongLongValue
-                                                          countStyle:NSByteCountFormatterCountStyleMemory]
-                         : @"—";
+    cell.memL.text = mem ? [memFmt stringFromByteCount:(long long)mem.unsignedLongLongValue] : @"—";
     NSNumber *cpu = p[@"cpu"];
     cell.cpuL.text = cpu ? [NSString stringWithFormat:@"%.1f%%", cpu.doubleValue] : @"—";
     if (suspended || exiting) {
@@ -9654,6 +9731,7 @@ static NSString *pm_chip_name(NSString *machine) {
         // Pause the KRW poll while we do it so the two don't contend.
         [self.terminatingPids addObject:@(pid)];
         [self applyFilter];   // reflect "terminating…" without a KRW rescan
+        self.killsInFlight++;
         [self stopAutoRefreshTimer];
         // Round 52: show the "finishing kill" banner only when a warm-up will
         // actually happen — i.e. the launchd session is cold (the first kill of
@@ -9661,7 +9739,10 @@ static NSString *pm_chip_name(NSString *machine) {
         // disarm). A warm session makes the kill ~ms, so the banner would just
         // blink. Paired show/hide via this captured flag keeps the refcount
         // balanced across concurrent kills.
-        BOOL showBanner = !pm_fastkill_warm_session_exists();
+        // Lock-free hint: pm_fastkill_warm_session_exists() takes pm_kill_lock,
+        // which a cold kill holds through its whole launchd warm-up (~2 s) —
+        // a second tap during that froze the main thread until it finished.
+        BOOL showBanner = !pm_fastkill_warm_session_hint();
         if (showBanner) [self pmShowKillShield];   // tap → verdict (cold kill only)
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             int rc = procmgr_kill(pid);
@@ -9679,7 +9760,8 @@ static NSString *pm_chip_name(NSString *machine) {
                 rc = [self pmForceKillViaLaunchd:pid];
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (showBanner) [self pmHideKillShield];   // verdict known — paired with the cold-kill show
-                [self startAutoRefreshTimerIfNeeded];
+                if (self.killsInFlight > 0) self.killsInFlight--;
+                [self startAutoRefreshTimerIfNeeded];   // no-op until the last kill lands
                 if (rc != 0) {
                     [self.terminatingPids removeObject:@(pid)];
                     [self applyFilter];   // un-dim the row
@@ -9812,6 +9894,20 @@ static BOOL pm_fastkill_warm_session_exists(void)
 {
     NSLock *lock = pm_kill_lock();
     [lock lock];
+    BOOL exists = (gPMKillSession != nil);
+    [lock unlock];
+    return exists;
+}
+
+// Main-thread-safe, non-blocking variant for UI decisions (the cold-kill
+// banner). Never waits on pm_kill_lock: a warm-up in flight means the next
+// kill is cold; a lock held without a warm-up is a warm kill running (ms) —
+// report warm. Cosmetic only; the kill path itself still uses the lock.
+static BOOL pm_fastkill_warm_session_hint(void)
+{
+    if (__sync_add_and_fetch(&gPMWarmupInFlight, 0) > 0) return NO;
+    NSLock *lock = pm_kill_lock();
+    if (![lock tryLock]) return YES;
     BOOL exists = (gPMKillSession != nil);
     [lock unlock];
     return exists;

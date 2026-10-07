@@ -216,11 +216,17 @@ int procmgr_pid_status_krw(int pid, bool *outPresent) {
 // is required. Uncalibrated -> callers keep the old kern-ptr-only behavior
 // (fail-open, exactly as before this guard existed).
 static uint32_t g_pm_off_task_bsdinfo = 0;
+// Fallback guard: on xnu-10002+ struct task has no bsd_info back-pointer —
+// proc and task are ONE allocation (task = proc + proc_struct_size), so the
+// back-pointer scan finds nothing (live log 2026-10-07: matches=0 on every
+// attempt, guards silently off). There the invariant is the fixed delta
+// task - proc, proven on our own proc and cross-checked on launchd's.
+static uint64_t g_pm_task_proc_delta = 0;
 static int      g_pm_bsdinfo_attempts = 0;
 #define PM_BSDINFO_MAX_ATTEMPTS 3   // then give up for the session (log-quiet)
 
 static void pm_calibrate_bsdinfo(void) {
-    if (g_pm_off_task_bsdinfo) return;
+    if (g_pm_off_task_bsdinfo || g_pm_task_proc_delta) return;
     if (g_pm_bsdinfo_attempts >= PM_BSDINFO_MAX_ATTEMPTS) return;
     g_pm_bsdinfo_attempts++;
     if (!kexploit_krw_ready()) return;
@@ -251,6 +257,12 @@ static void pm_calibrate_bsdinfo(void) {
         g_pm_off_task_bsdinfo = found;
         printf("[PROCMGR] bsd_info calibrated: task=+0x%x (launchd xcheck=%d)\n",
                found, haveLaunchd ? 1 : 0);
+    } else if (matches == 0 && procmgr_is_kern_ptr(task) && haveLaunchd &&
+               task > selfProc && task - selfProc <= 0x2000 &&
+               ltask - lproc == task - selfProc) {
+        g_pm_task_proc_delta = task - selfProc;
+        printf("[PROCMGR] proc->task guard: no bsd_info field; using fixed "
+               "proc+task delta 0x%llx (launchd xcheck=1)\n", g_pm_task_proc_delta);
     } else {
         printf("[PROCMGR] bsd_info calibration failed (attempt %d/%d, matches=%d "
                "launchd=%d) — proc->task guards stay kern-ptr-only\n",
@@ -263,6 +275,14 @@ static void pm_calibrate_bsdinfo(void) {
 // reallocated — do NOT dereference the task further); -1 = uncalibrated, no
 // verdict (callers fall through to the pre-guard behavior).
 static int pm_task_matches_proc(uint64_t task, uint64_t proc) {
+    if (g_pm_task_proc_delta) {
+        // Co-allocated proc+task: a task that doesn't sit at the fixed delta
+        // is not this proc's (stale proc_ro / reused proc). Still mapped-check
+        // it — the caller's next step dereferences it.
+        if (task - proc != g_pm_task_proc_delta) return 0;
+        if (ksafe_available() && !kaddr_is_mapped(task, 8)) return 0;
+        return 1;
+    }
     if (!g_pm_off_task_bsdinfo) return -1;
     // This is the liveness guard, but kread64(task + bsdinfo) is itself the
     // FIRST dereference of `task` — gate it with ksafe first, like
@@ -285,6 +305,8 @@ static int pm_task_matches_proc(uint64_t task, uint64_t proc) {
 // NSUserDefaults cache), validated against launchd (pid 1: always running,
 // suspend_count == 0).
 static uint32_t g_pm_off_task_suspcount = 0;
+static int      g_pm_suspcount_attempts = 0;
+#define PM_SUSPCOUNT_MAX_ATTEMPTS 5   // then give up for the session (log-quiet)
 
 static bool pm_taskinfo_threadnum(int pid, uint32_t *out) {
     struct pm_proc_taskinfo ti;
@@ -298,7 +320,9 @@ static bool pm_taskinfo_threadnum(int pid, uint32_t *out) {
 
 static void pm_calibrate_suspcount(void) {
     if (g_pm_off_task_suspcount) return;
+    if (g_pm_suspcount_attempts >= PM_SUSPCOUNT_MAX_ATTEMPTS) return;
     if (!kexploit_krw_ready()) return;
+    g_pm_suspcount_attempts++;
 
     uint32_t nSelf = 0;
     if (!pm_taskinfo_threadnum(getpid(), &nSelf)) {
@@ -364,8 +388,8 @@ static void pm_calibrate_suspcount(void) {
         printf("[PROCMGR] suspend_count calibrated: task=+0x%x (launchd xcheck=%d)\n",
                g_pm_off_task_suspcount, haveLaunchd ? 1 : 0);
     } else {
-        printf("[PROCMGR] suspend_count calibration failed this pass (matches=%d launchd=%d)\n",
-               matches, haveLaunchd ? 1 : 0);
+        printf("[PROCMGR] suspend_count calibration failed (attempt %d/%d, matches=%d launchd=%d)\n",
+               g_pm_suspcount_attempts, PM_SUSPCOUNT_MAX_ATTEMPTS, matches, haveLaunchd ? 1 : 0);
     }
 }
 
@@ -597,6 +621,7 @@ static bool procmgr_fill_entry(uint64_t proc, procmgr_entry_t *e) {
     uint32_t pid = kread32(proc + off_proc_p_pid);
     if (pid > 500000) return false;                 // sanity: not a real pid
     e->pid = (int)pid;
+    e->kproc = proc;
     e->name[0] = '\0';
     char *nm = proc_get_p_name(proc);               // fills a static buffer
     if (nm) { strncpy(e->name, nm, sizeof(e->name) - 1); e->name[sizeof(e->name) - 1] = '\0'; }
@@ -939,7 +964,9 @@ static bool pm_live_thread_sums(uint64_t task, uint64_t *uOut, uint64_t *sOut) {
         hiOff = MAX(MAX(g_pm_off_thread_utime, g_pm_off_thread_stime),
                     off_thread_task_threads_next) + 8;
     }
-    uint64_t first = kread64(task + off_task_threads_next);
+    uint64_t head = task + off_task_threads_next;
+    uint64_t first = kread64(head);
+    if (first == head) { *uOut = 0; *sOut = 0; return true; }   // no live threads
     if (!procmgr_is_kern_ptr(first)) {
         static int dbg0 = 0;
         if (dbg0++ < 3)
@@ -989,7 +1016,14 @@ next_thread:;
         // NULL terminates the list on this kernel (also hit when a thread
         // dies mid-walk and its links are torn down) — that is a clean end,
         // not corruption. Looping back to the first thread also ends it.
-        if (next == first || next == 0) break;
+        // task->threads is a queue_head_t: the LAST thread's next points back
+        // at the head inside the task (task + off_task_threads_next), not at
+        // the first thread. Without this check the head was walked as if it
+        // were a thread — task fields read as timer / recount pointers, and
+        // the walk "ended" only when task+head+next_off happened to be 0
+        // (live log 2026-10-07: "next=0x100000000 invalid at i=5"), failing
+        // CPU for those tasks and poisoning the task-total calibration.
+        if (next == first || next == 0 || next == head) break;
         if (!procmgr_is_kern_ptr(next)) {
             static int dbg3 = 0;
             if (dbg3++ < 3)
@@ -1351,17 +1385,40 @@ static bool pm_calibrate_thread_timers(void) {
 // Perturbation verify for task totals: a fresh ~10ms dead thread must raise
 // total_user_time by roughly that much and total_system_time by at most a
 // bounded amount. oU/oS in the unit selected by `abstime`.
+// Verify thread: ~10ms of user CPU, then ~10ms (wall) of syscall-heavy work so
+// BOTH task totals must move when it dies.
+static void *pm_verify_busy_fn(void *arg) {
+    (void)arg;
+    pm_burn_user_ns(10000000ULL);
+    pm_burn_system_ns(10000000ULL);
+    return NULL;
+}
+
 static bool pm_verify_task_totals(uint64_t task, uint32_t oU, uint32_t oS, bool abstime) {
     uint64_t u0 = kread64(task + oU), s0 = kread64(task + oS);
     pthread_t pt;
-    if (pthread_create(&pt, NULL, pm_busy_fn, NULL) != 0) return false;
+    if (pthread_create(&pt, NULL, pm_verify_busy_fn, NULL) != 0) return false;
     pthread_join(pt, NULL);
-    uint64_t u1 = kread64(task + oU), s1 = kread64(task + oS);
+    uint64_t lo  = abstime ? pm_ns_to_abs(2000000ULL)    : 2000000ULL;     // >= 2ms user
+    uint64_t loS = abstime ? pm_ns_to_abs(1000000ULL)    : 1000000ULL;     // >= 1ms system
+    uint64_t hi  = abstime ? pm_ns_to_abs(200000000ULL)  : 200000000ULL;   // <= 200ms either
+    // pthread_join returns before the kernel finishes terminating the thread
+    // and rolls its time into the task totals; the 2026-10-07 log showed the
+    // SAME user offset reading dU=0 four times and then passing on the fifth
+    // candidate (the earlier threads' time landing late) — so whichever system
+    // candidate was under test then "won". Poll up to ~100ms for the rollup.
+    uint64_t u1 = u0, s1 = s0;
+    for (int i = 0; i < 20; i++) {
+        u1 = kread64(task + oU);
+        s1 = kread64(task + oS);
+        if (u1 >= u0 + lo && s1 >= s0 + loS) break;
+        usleep(5000);
+    }
     if (u1 < u0 || s1 < s0) return false;
-    uint64_t lo = abstime ? pm_ns_to_abs(2000000ULL)    : 2000000ULL;     // >= 2ms user
-    uint64_t hi = abstime ? pm_ns_to_abs(200000000ULL)  : 200000000ULL;   // <= 200ms either
     uint64_t dU = u1 - u0, dS = s1 - s0;
-    bool ok = (dU >= lo && dU <= hi && dS <= hi);
+    // dS must MOVE: the old check only bounded it from above, so any static
+    // small field passed as total_system_time.
+    bool ok = (dU >= lo && dU <= hi && dS >= loS && dS <= hi);
     printf("[PROCMGR] task-total verify: dU=%llu dS=%llu (unit=%s) -> %s\n",
            (unsigned long long)dU, (unsigned long long)dS,
            abstime ? "abs" : "ns", ok ? "OK" : "FAIL");
@@ -1660,9 +1717,17 @@ out:
 static NSString *pm_cache_key(void) {
     char osv[64] = {0}; size_t len = sizeof(osv);
     if (sysctlbyname("kern.osversion", osv, &len, NULL, 0) != 0) osv[0] = '\0';
+    // Stays v3 on purpose: bumping the key re-runs the memory scan, which is
+    // the risky one (task-pointer derefs; a different ledger entry was picked
+    // on the 2026-10-07 re-run). Only the CPU block is versioned — see "cpuv".
     return [NSString stringWithFormat:@"cy_pmcal3_%s", osv];
 }
 static bool pm_load_cache(void) {
+    // Drop the short-lived cy_pmcal4_ entry (test builds of 2026-10-07): its
+    // memory offsets came from a re-run of the memory scan, not the v3 result.
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:
+        [pm_cache_key() stringByReplacingOccurrencesOfString:@"cy_pmcal3_"
+                                                  withString:@"cy_pmcal4_"]];
     NSDictionary *d = [[NSUserDefaults standardUserDefaults] dictionaryForKey:pm_cache_key()];
     if (!d) return false;
     // Bounds-check every cached offset before trusting it: a corrupt entry
@@ -1708,7 +1773,14 @@ static bool pm_load_cache(void) {
             printf("[PROCMGR] cache thread offsets out of bounds (thu=0x%x ths=0x%x) — dropped\n", thu, ths);
         }
     }
-    if (d[@"cpu"]) {
+    // cpuv 2: task totals calibrated with the queue-head-terminated thread
+    // walk and the dual user+system verify. Older CPU entries were matched
+    // against a live-thread sum that walked past the list head, and their
+    // system-time offset was effectively unverified — drop them (CPU-only
+    // recalibration reads nothing but our own task).
+    if (d[@"cpu"] && [d[@"cpuv"] intValue] != 2)
+        printf("[PROCMGR] cache cpu offsets predate cpuv2 — recalibrating CPU only\n");
+    else if (d[@"cpu"]) {
         uint32_t tcu = [d[@"tcu"] unsignedIntValue], tcs = [d[@"tcs"] unsignedIntValue];
         if (tcu >= 0x8 && tcu + 8 <= 0x1400 && tcs >= 0x8 && tcs + 8 <= 0x1400) {
             g_pm_off_task_cpu_u = tcu;
@@ -1732,7 +1804,7 @@ static void pm_save_cache(void) {
                        d[@"rcls"]=@(g_pm_rc_lvl_stride); d[@"rccnt"]=@(g_pm_rc_count); }
     if (g_pm_mem_cal) { d[@"mem"]=@1; d[@"tl"]=@(g_pm_off_task_ledger); d[@"lf"]=@(g_pm_off_ledger_fp); }
     if (g_pm_thr_cal && !g_pm_rc_cal) { d[@"thr"]=@1; d[@"thu"]=@(g_pm_off_thread_utime); d[@"ths"]=@(g_pm_off_thread_stime); d[@"thab"]=@(g_pm_thr_abstime); }
-    if (g_pm_cpu_cal) { d[@"cpu"]=@1; d[@"tcu"]=@(g_pm_off_task_cpu_u); d[@"tcs"]=@(g_pm_off_task_cpu_s); d[@"cab"]=@(g_pm_cpu_abstime); }
+    if (g_pm_cpu_cal) { d[@"cpu"]=@1; d[@"cpuv"]=@2; d[@"tcu"]=@(g_pm_off_task_cpu_u); d[@"tcs"]=@(g_pm_off_task_cpu_s); d[@"cab"]=@(g_pm_cpu_abstime); }
     if (d.count) [[NSUserDefaults standardUserDefaults] setObject:d forKey:pm_cache_key()];
 }
 
@@ -1774,6 +1846,21 @@ static int pm_kernel_stats(uint64_t task, uint64_t *memOut, uint64_t *cpuOut) {
     }
 
     // --- cpu: task totals (terminated threads) + live thread timers ---
+    // Live-only fallback when the task-total offsets aren't calibrated (the
+    // terminated-thread counters have proven hard to pin down: 2026-10-07 runs
+    // matched +0x98 only against a live sum that walked past the list head,
+    // and gave up outright on others). The viewer shows %CPU as a delta
+    // between refreshes, so live threads carry it; only time from threads
+    // that exit between two refreshes is missed (that interval clamps to 0).
+    // The thread timers themselves are verified against our own threads.
+    if (g_pm_thr_cal && !g_pm_cpu_cal) {
+        uint64_t lu = 0, ls = 0;
+        if (pm_live_thread_sums(task, &lu, &ls)) {
+            if (g_pm_thr_abstime) { lu = pm_abs_to_ns(lu); ls = pm_abs_to_ns(ls); }
+            uint64_t tot = lu + ls;
+            if (tot) { *cpuOut = tot; valid |= 2; }
+        }
+    }
     if (g_pm_cpu_cal && g_pm_thr_cal) {
         uint64_t u1 = kread64(task + g_pm_off_task_cpu_u);
         uint64_t s1 = kread64(task + g_pm_off_task_cpu_s);
@@ -1811,12 +1898,12 @@ static int pm_kernel_stats(uint64_t task, uint64_t *memOut, uint64_t *cpuOut) {
 // know from userspace; anything that does not reproduce reality is discarded
 // and recalibrated below. Validation only ever reads our own task/thread
 // structs (always mapped), so a stale cache cannot panic here.
-static void pm_validate_cache(void) {
-    if (!kexploit_krw_ready()) return;
-    if (!g_pm_thr_cal && !g_pm_cpu_cal && !g_pm_mem_cal) return;
+static bool pm_validate_cache(void) {
+    if (!kexploit_krw_ready()) return false;
+    if (!g_pm_thr_cal && !g_pm_cpu_cal && !g_pm_mem_cal) return true;
 
     uint64_t task = proc_task(proc_self());
-    if (!procmgr_is_kern_ptr(task)) return;
+    if (!procmgr_is_kern_ptr(task)) return false;
 
     if (g_pm_thr_cal && g_pm_cpu_cal) {
         uint64_t mem = 0, cpu = 0;
@@ -1847,6 +1934,7 @@ static void pm_validate_cache(void) {
             }
         }
     }
+    return true;
 }
 
 // Discover the offsets by matching our OWN known footprint + CPU times. All
@@ -1906,19 +1994,22 @@ int procmgr_calibrate(void) {
     // amplifies into ~1 GB of disk writes over a long session and can trip a
     // silent disk-writes resource kill (no crash .ips, KRW left un-parked). The
     // steady-state poll must produce zero log writes.
-    if (pm_load_cache()) {
-        static bool loggedCacheLoad = false;
-        if (!loggedCacheLoad) {
-            loggedCacheLoad = true;
+    //
+    // Load + validate ONCE per app run, not every poll: the offsets are fixed
+    // for the boot, and re-running both every refresh cost an NSUserDefaults
+    // read, a rewrite of every calibration global, and two full own-task
+    // stat reads (thread walk included) per poll. Retried until validation
+    // actually ran (it bails when KRW isn't ready).
+    static bool sCacheChecked = false;
+    if (!sCacheChecked) {
+        if (pm_load_cache())
             printf("[PROCMGR] calibration loaded from cache (thr=%d cpu=%d mem=%d)\n",
                    g_pm_thr_cal, g_pm_cpu_cal, g_pm_mem_cal);
-        }
+        // Don't trust the cache blindly: replay it against our own process and
+        // drop whatever doesn't reproduce the userspace truth. Cleared flags are
+        // recalibrated by the stages below and the fixed cache is re-saved.
+        sCacheChecked = pm_validate_cache();
     }
-
-    // Don't trust the cache blindly: replay it against our own process and
-    // drop whatever doesn't reproduce the userspace truth. Cleared flags are
-    // recalibrated by the stages below and the fixed cache is re-saved.
-    pm_validate_cache();
 
     bool memPossible = ksafe_available();
     bool cpuDone = g_pm_cpu_cal || g_pm_cpu_gaveup;   // "settled", success or not
@@ -1982,7 +2073,7 @@ int procmgr_stats(int pid, uint64_t *residentBytes, uint64_t *cpuNs) {
     // deltas with garbage.
     krw_set_nonfatal(true);
     if (kexploit_krw_session_active() &&
-        ((g_pm_mem_cal && ksafe_available()) || (g_pm_cpu_cal && g_pm_thr_cal))) {
+        ((g_pm_mem_cal && ksafe_available()) || g_pm_thr_cal)) {
         uint64_t proc = proc_find(pid);
         if (procmgr_is_kern_ptr(proc)) {
             uint64_t task = proc_task(proc);
@@ -2012,6 +2103,88 @@ int procmgr_stats(int pid, uint64_t *residentBytes, uint64_t *cpuNs) {
     if (residentBytes) *residentBytes = mem;
     if (cpuNs)         *cpuNs = cpu;
     return 0;
+}
+
+// One row of the Process Viewer from the proc pointer procmgr_list() found.
+// Replaces the per-row procmgr_pstat_krw + procmgr_stats +
+// procmgr_suspend_count trio, each of which re-walked allproc from the start
+// (~2 kreads per proc, so a refresh was O(N^2) — ~400k kreads at 450
+// processes) and re-ran the full kexploit_krw_ready() probe. Here: one
+// mapped-check + p_pid re-validation, then a handful of direct reads inside
+// a single krw batch (one lock hold, one repark). Same TOCTOU guards as the
+// old path: bsd_info back-pointer before the task is used, re-checked after
+// the stat reads; zombies / mid-reap p_stat skip the task entirely.
+//
+// The pointer is older than proc_find's would be (it comes from the list walk
+// at the start of the pass), but the pass is now short, the proc can only be
+// freed after exit AND reap, and p_pid is re-checked through the ksafe gate
+// first. Net kernel-read exposure is ~100x lower than the walk-per-call path.
+bool procmgr_row_info(uint64_t kproc, int pid, procmgr_row_info_t *out) {
+    if (!out) return false;
+    memset(out, 0, sizeof(*out));
+    out->pstat = -1;
+    out->suspend_count = -1;
+    if (!procmgr_is_kern_ptr(kproc) || !kexploit_krw_session_active()) return false;
+
+    krw_set_nonfatal(true);
+    bool batched = krw_batch_begin();
+    bool valid = false;
+    bool exiting = false;
+    uint64_t kMem = 0, kCpu = 0;
+    int kv = 0;
+    do {
+        // Gate the first dereference of the (possibly stale) proc pointer.
+        uint32_t span = MAX(off_proc_p_pid + 4, off_proc_p_proc_ro + 8);
+        if (off_proc_p_stat) span = MAX(span, off_proc_p_stat + 4);
+        if (ksafe_available() && !kaddr_is_mapped(kproc, span)) break;
+        if ((int)kread32(kproc + off_proc_p_pid) != pid) break;   // exited / recycled
+        valid = true;
+
+        if (off_proc_p_stat)
+            out->pstat = (int)(kread32(kproc + off_proc_p_stat) & 0xFF);   // p_stat is a char
+        // Zombie or mid-reap garbage (outside SIDL..SZOMB): task already torn
+        // down — skip every task read (same convention as the kill verdict).
+        exiting = (out->pstat == PM_SZOMB) ||
+                  (out->pstat >= 0 && (out->pstat < 1 || out->pstat > 7));
+        if (exiting) break;
+
+        uint64_t task = proc_task(kproc);
+        if (!procmgr_is_kern_ptr(task) || pm_task_matches_proc(task, kproc) == 0) break;
+
+        if (g_pm_off_task_suspcount) {
+            uint32_t sc = kread32(task + g_pm_off_task_suspcount);
+            if (sc <= 64) out->suspend_count = (int)sc;     // >64 is implausible: torn/bad read
+        }
+        if ((g_pm_mem_cal && ksafe_available()) || g_pm_thr_cal) {
+            kv = pm_kernel_stats(task, &kMem, &kCpu);
+            // Re-verify after the reads: a death mid-read with fast task
+            // reuse can tear past the double-read consistency checks.
+            if (pm_task_matches_proc(task, kproc) == 0) kv = 0;
+        }
+    } while (0);
+    if (batched) krw_batch_end();
+    krw_set_nonfatal(false);
+
+    if (!valid || exiting) return valid;
+
+    // libproc first (our own pid, or others when permitted), kernel values
+    // override — same precedence as procmgr_stats.
+    struct pm_proc_taskinfo ti;
+    bool havePI = proc_pidinfo(pid, PM_PROC_PIDTASKINFO, 0, &ti, sizeof(ti)) >= (int)sizeof(ti);
+    uint64_t mem = havePI ? ti.pti_resident_size : 0;
+    uint64_t cpu = havePI ? (ti.pti_total_user + ti.pti_total_system) : 0;
+    if (kv & 1) mem = kMem;
+    if ((kv & 2) && kCpu) cpu = kCpu;
+    // A failed CPU read leaves cpu 0 (libproc is sandboxed for other pids).
+    // It must not become the %CPU baseline: the next good read would turn the
+    // process's whole lifetime CPU into one refresh interval (the 800% rows).
+    out->have_cpu = cpu != 0;
+    if (mem || cpu) {
+        out->have_stats = true;
+        out->mem = mem;
+        out->cpu = cpu;
+    }
+    return true;
 }
 
 bool procmgr_pid_alive(int pid) {

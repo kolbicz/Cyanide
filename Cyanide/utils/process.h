@@ -35,8 +35,9 @@ int enable_aslr(void);
 
 // --- Process Manager --------------------------------------------------------
 typedef struct {
-    int  pid;
-    char name[32];
+    int      pid;
+    char     name[32];
+    uint64_t kproc;     // struct proc address from the list walk (for procmgr_row_info)
 } procmgr_entry_t;
 
 // Enumerate live processes into entries[] (up to max). Returns the count, or
@@ -167,5 +168,22 @@ bool procmgr_cpu_calibrated(void);
 // Fills residentBytes (physical memory) and cpuNs (cumulative user+system CPU
 // time in nanoseconds). Returns 0 on success, negative on error.
 int procmgr_stats(int pid, uint64_t *residentBytes, uint64_t *cpuNs);
+
+// Everything the Process Viewer needs for one row, read from the proc pointer
+// procmgr_list() already found — no per-call allproc walk (procmgr_pstat_krw /
+// procmgr_stats / procmgr_suspend_count each re-walk the whole list) and no
+// per-call kexploit_krw_ready() probe. The caller must have verified KRW once
+// for the pass. The pointer is re-validated (p_pid must still equal pid)
+// before anything else is read; returns false when it no longer names pid
+// (exited / recycled) — the row should then be shown as exiting.
+typedef struct {
+    int      pstat;          // p_stat, -1 when unavailable
+    int      suspend_count;  // -1 when uncalibrated/unavailable
+    bool     have_stats;     // mem and/or cpu valid
+    bool     have_cpu;       // cpu is a real reading THIS pass (not a 0 fill)
+    uint64_t mem;            // physical footprint, bytes
+    uint64_t cpu;            // cumulative user+system CPU, ns
+} procmgr_row_info_t;
+bool procmgr_row_info(uint64_t kproc, int pid, procmgr_row_info_t *out);
 
 #endif /* process_h */
