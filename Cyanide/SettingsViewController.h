@@ -156,6 +156,14 @@ extern NSString * const kSettingsActionsDidCompleteNotification;
 extern NSString * const kSettingsActionsDidCompleteSuccessKey;
 extern NSString * const kSettingsActionsDidCompleteMessageKey;
 
+// Completion message of the main chain run when the exploit stage fails to
+// acquire KRW. The progress UI matches on this to offer its Run Again button.
+extern NSString * const kSettingsRunKRWFailedMessage;
+
+// Re-runs the chain in the same mode (full Apply vs pending-only) as the last
+// invocation. Used by the progress UI's Run Again button after a KRW failure.
+void settings_rerun_last_actions(void);
+
 // Returns YES if the tweak whose master enable lives at `key` was successfully
 // applied in this app session. Cleared on launch, on cleanup, and whenever the
 // SpringBoard RemoteCall session goes away.

@@ -8,6 +8,7 @@
 #import "QueueReviewViewController.h"
 #import "../SettingsViewController.h"
 #import "../LogTextView.h"
+#import "../TaskRop/RemoteCall.h"
 #import <sys/utsname.h>
 
 @interface InstallProgressViewController ()
@@ -16,6 +17,8 @@
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIBarButtonItem *hideOrDoneButton;
+@property (nonatomic, strong) UIButton *retryButton;
+@property (nonatomic, strong) NSLayoutConstraint *retryButtonWidth;
 @property (nonatomic, assign) BOOL completed;
 @property (nonatomic, assign) BOOL didPromptForHideHomeBarRespring;
 @end
@@ -79,6 +82,26 @@
     self.statusLabel.minimumScaleFactor = 0.8;
     [footer.contentView addSubview:self.statusLabel];
 
+    // Run Again button: zero-width and hidden while running, expanded only
+    // when the chain run fails to acquire KRW (a clean, same-boot-retryable
+    // miss). The width constraint keeps the status label's layout stable in
+    // both states without activating/deactivating constraints.
+    self.retryButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.retryButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.retryButton setTitle:@"Run Again" forState:UIControlStateNormal];
+    self.retryButton.titleLabel.font = [UIFont systemFontOfSize:13.5 weight:UIFontWeightSemibold];
+    [self.retryButton setTitleColor:[UIColor colorWithRed:0.40 green:0.78 blue:1.0 alpha:1.0]
+                           forState:UIControlStateNormal];
+    self.retryButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentRight;
+    self.retryButton.hidden = YES;
+    self.retryButton.clipsToBounds = YES;
+    [self.retryButton addTarget:self
+                         action:@selector(didTapRetry)
+               forControlEvents:UIControlEventTouchUpInside];
+    [footer.contentView addSubview:self.retryButton];
+    self.retryButtonWidth = [self.retryButton.widthAnchor constraintEqualToConstant:0.0];
+    self.retryButtonWidth.active = YES;
+
     [NSLayoutConstraint activateConstraints:@[
         [self.bannerLabel.topAnchor      constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:12],
         [self.bannerLabel.leadingAnchor  constraintEqualToAnchor:self.view.leadingAnchor constant:12],
@@ -107,8 +130,11 @@
         [self.spinner.leadingAnchor      constraintEqualToAnchor:footer.leadingAnchor constant:20.0],
         [self.spinner.centerYAnchor      constraintEqualToAnchor:footer.safeAreaLayoutGuide.topAnchor constant:22.0],
         [self.statusLabel.leadingAnchor  constraintEqualToAnchor:self.spinner.trailingAnchor constant:12.0],
-        [self.statusLabel.trailingAnchor constraintEqualToAnchor:footer.trailingAnchor constant:-20.0],
+        [self.statusLabel.trailingAnchor constraintEqualToAnchor:self.retryButton.leadingAnchor constant:-8.0],
         [self.statusLabel.centerYAnchor  constraintEqualToAnchor:self.spinner.centerYAnchor],
+
+        [self.retryButton.trailingAnchor constraintEqualToAnchor:footer.trailingAnchor constant:-20.0],
+        [self.retryButton.centerYAnchor  constraintEqualToAnchor:self.spinner.centerYAnchor],
     ]];
 
     self.hideOrDoneButton = [[UIBarButtonItem alloc] initWithTitle:@"Hide"
@@ -146,11 +172,39 @@
         : [UIColor colorWithRed:1.0 green:0.38 blue:0.32 alpha:1.0];
     self.title = success ? @"Complete" : @"Failed";
     self.hideOrDoneButton.title = @"Done";
+    // Offer a one-tap retry only for the main chain run's KRW-acquire
+    // failure — a clean miss that is fully re-entrant in the same boot
+    // (the actions lock is already released by the time this notification
+    // fires). Never when the injection wedged: re-running there hangs again,
+    // and the Restart Cyanide alert owns that case.
+    BOOL canRetry = !success &&
+        [message isEqualToString:kSettingsRunKRWFailedMessage] &&
+        !remote_call_init_wedged();
+    self.retryButton.hidden = !canRetry;
+    self.retryButtonWidth.constant = canRetry ? 90.0 : 0.0;
     if (success &&
         self.promptsForHideHomeBarRespring &&
         settings_hide_home_bar_respring_pending()) {
         [self scheduleHideHomeBarRespringPrompt];
     }
+}
+
+- (void)didTapRetry
+{
+    // Re-arm the progress UI and re-run the chain in the same mode as the
+    // last invocation. The next completion notification lands back in
+    // didReceiveCompleteNotification: and updates this screen again.
+    self.retryButton.hidden = YES;
+    self.retryButtonWidth.constant = 0.0;
+    self.completed = NO;
+    self.title = @"Activity";
+    self.hideOrDoneButton.title = @"Hide";
+    self.statusLabel.text = @"Running — stay here until complete.";
+    self.statusLabel.font = [UIFont systemFontOfSize:13.5 weight:UIFontWeightRegular];
+    self.statusLabel.textColor = [UIColor colorWithWhite:0.55 alpha:1.0];
+    self.spinner.hidden = NO;
+    [self.spinner startAnimating];
+    settings_rerun_last_actions();
 }
 
 - (void)scheduleHideHomeBarRespringPrompt
