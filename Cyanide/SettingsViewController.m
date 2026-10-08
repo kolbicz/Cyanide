@@ -3230,6 +3230,12 @@ static BOOL settings_ensure_springboard_remote_call_locked(void)
     for (int attempt = 1; attempt <= kSettingsSpringBoardRCMaxAttempts; attempt++) {
         int timeoutMS = (attempt == 1) ? kSettingsSpringBoardRCFirstExceptionTimeoutMS
                                        : kSettingsSpringBoardRCRetryTimeoutMS;
+        // Cap the SpringBoard arm surface at 3 threads (default is 6). The
+        // one-shot is consumed by the matching init, so re-set it every
+        // attempt. Fewer armed SpringBoard threads = fewer threads that can
+        // park on our exception port if the init wedges (125410 watchdog);
+        // the min-over-threads first trap still lands in ~1 s.
+        remote_call_set_next_init_target_threads("SpringBoard", 3);
         if (init_remote_call_with_first_exception_timeout("SpringBoard",
                                                           false,
                                                           timeoutMS) == 0) {
