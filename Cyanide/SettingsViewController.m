@@ -1026,6 +1026,11 @@ static NSString * const kSettingsFastLockXLiteBlockMusic = @"FastLockXLiteBlockM
 static NSString * const kSettingsFastLockXLiteBlockFlashlight = @"FastLockXLiteBlockFlashlight";
 static NSString * const kSettingsFastLockXLiteBlockLowPower = @"FastLockXLiteBlockLowPower";
 static NSString * const kSettingsFastLockXLiteRetryInterval = @"FastLockXLiteRetryInterval";
+// Completion message of the main chain run when the exploit stage fails to
+// acquire KRW. Shared between the run loop and the post-failure retry alert
+// so the two can never drift apart.
+static NSString * const kSettingsRunKRWFailedMessage =
+    @"Failed: kernel primitives were not acquired. Please try running chain again.";
 static NSString * const kSettingsHideHomeBarHidden = @"HideHomeBarHidden";
 static NSString * const kSettingsHideHomeBarMaterialKitBootTime = @"HideHomeBarMaterialKitBootTime";
 static NSString * const kSettingsHideHomeBarRespringPending = @"HideHomeBarRespringPending";
@@ -1099,6 +1104,9 @@ static BOOL g_kexploit_done = NO;
 static volatile int g_settings_actions_running = 0;
 static volatile int g_settings_respring_cleanup_running = 0;
 static volatile int g_settings_actions_rerun_requested = 0;
+// Remembers how the last chain run was invoked so the post-failure "Run Again"
+// alert can re-enter with the same mode (full Apply vs pending-only).
+static volatile BOOL g_settings_actions_last_pending_only = NO;
 static volatile int g_springboard_rc_ready = 0;
 static volatile int g_springboard_sandbox_escaped = 0;
 static volatile int g_statbar_live_running = 0;
@@ -7502,6 +7510,7 @@ void settings_register_defaults(void)
 
 static void settings_run_actions_internal(BOOL pendingOnly)
 {
+    g_settings_actions_last_pending_only = pendingOnly;
     if (!settings_device_supported()) {
         NSString *message = settings_unsupported_message();
         printf("[SETTINGS] run blocked: %s\n", message.UTF8String);
@@ -7663,7 +7672,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                 settings_progress(&step, total, "Racing kernel allocator for r/w primitives");
                 if (!settings_ensure_kexploit()) {
                     log_user("[RUN] Failed: kernel primitives were not acquired. Please try running chain again.\n");
-                    runCompletionMessage = @"Failed: kernel primitives were not acquired. Please try running chain again.";
+                    runCompletionMessage = kSettingsRunKRWFailedMessage;
                     cyanide_upload_log_milestone(@"krw-failed");
                     return;
                 }
@@ -10706,6 +10715,43 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
     });
 }
 
+// Chain-run exploit failure ("kernel primitives were not acquired"). Unlike
+// the wedge case above, this failure is fully re-entrant in the same boot —
+// pe_v1/v2/v3 all support back-to-back runs after a clean miss, and the run
+// worker has already released the actions lock by the time this notification
+// fires. Offer a one-tap retry so the user doesn't have to hunt for the Run
+// row again. Deliberately scoped to the exact main-run KRW-failure message:
+// package installs, cleanup, and per-tweak failures post the same
+// notification and must not grow a retry button here.
+- (void)actionsDidCompleteOfferRetry:(NSNotification *)note
+{
+    NSNumber *success = note.userInfo[kSettingsActionsDidCompleteSuccessKey];
+    NSString *message = note.userInfo[kSettingsActionsDidCompleteMessageKey];
+    if (success.boolValue) return;
+    if (![message isEqualToString:kSettingsRunKRWFailedMessage]) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // A wedged injection can never recover by re-running — the restart
+        // alert owns that case; don't pile a retry offer on top of it.
+        if (remote_call_init_wedged()) return;
+        if (g_settings_actions_running) return;
+        if (self.presentedViewController) return;   // don't stack alerts
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Exploit didn't land this time"
+                             message:@"The device is fine — this miss is safe to retry in the same boot, no restart needed.\n\nRun the chain again now?"
+                      preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Run Again"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *action) {
+            (void)action;
+            settings_run_actions_internal(g_settings_actions_last_pending_only);
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Later"
+                                                  style:UIAlertActionStyleCancel
+                                                handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+    });
+}
+
 + (BOOL)liveWPHasSelectedVideo
 {
     NSString *path = livewp_absolute_path();
@@ -10892,6 +10938,10 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(remoteCallInitWedged:)
                                                  name:kRemoteCallInitWedgedNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(actionsDidCompleteOfferRetry:)
+                                                 name:kSettingsActionsDidCompleteNotification
                                                object:nil];
 
     // Match the other tabs (Home, Packages, Sources): the Settings root shows a
