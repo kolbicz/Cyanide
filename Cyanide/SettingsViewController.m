@@ -1031,6 +1031,12 @@ static NSString * const kSettingsFastLockXLiteRetryInterval = @"FastLockXLiteRet
 // so the two can never drift apart.
 NSString * const kSettingsRunKRWFailedMessage =
     @"Failed: kernel primitives were not acquired. Please try running chain again.";
+
+// Auto-retry: when On, a chain run that fails to acquire KRW re-enters itself
+// instead of reporting failure, up to the attempt cap. Each attempt is an
+// independent aperture-panic dice roll, so the cap bounds per-tap exposure.
+static NSString * const kSettingsRunAutoRetry = @"RunAutoRetry";
+static NSString * const kSettingsRunAutoRetryMaxAttempts = @"RunAutoRetryMaxAttempts";
 static NSString * const kSettingsHideHomeBarHidden = @"HideHomeBarHidden";
 static NSString * const kSettingsHideHomeBarMaterialKitBootTime = @"HideHomeBarMaterialKitBootTime";
 static NSString * const kSettingsHideHomeBarRespringPending = @"HideHomeBarRespringPending";
@@ -1107,6 +1113,9 @@ static volatile int g_settings_actions_rerun_requested = 0;
 // Remembers how the last chain run was invoked so the post-failure "Run Again"
 // alert can re-enter with the same mode (full Apply vs pending-only).
 static volatile BOOL g_settings_actions_last_pending_only = NO;
+// Counts consecutive auto-retries within one user-initiated run chain. Reset
+// by every fresh public entry point and whenever a final outcome is posted.
+static volatile int g_settings_actions_auto_retry_attempt = 0;
 static volatile int g_springboard_rc_ready = 0;
 static volatile int g_springboard_sandbox_escaped = 0;
 static volatile int g_statbar_live_running = 0;
@@ -7368,6 +7377,9 @@ void settings_register_defaults(void)
         kSettingsFastLockXLiteBlockLowPower: @NO,
         kSettingsFastLockXLiteRetryInterval: @0.3,
 
+        kSettingsRunAutoRetry: @NO,
+        kSettingsRunAutoRetryMaxAttempts: @8,
+
         kSettingsGravityLiteEnabled: @NO,
         kSettingsGravityLiteDockEnabled: @YES,
         kSettingsGravityLiteMagnitudePct: @100,
@@ -8187,6 +8199,29 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             log_session_flush();
             __sync_lock_release(&g_settings_actions_running);
             settings_reconcile_applied_from_defaults();
+            // Auto-retry: a clean KRW-acquire miss is fully re-entrant in the
+            // same boot, so instead of reporting failure, re-enter the chain
+            // until it lands or the attempt cap is hit. No completion posts
+            // meanwhile, so the progress screen simply keeps spinning. Never
+            // retries a wedged injection (re-running there hangs again) and
+            // never swallows a queued follow-up run.
+            NSUserDefaults *retryDefaults = [NSUserDefaults standardUserDefaults];
+            NSInteger maxRetryAttempts = [retryDefaults integerForKey:kSettingsRunAutoRetryMaxAttempts];
+            if (maxRetryAttempts < 1) maxRetryAttempts = 1;
+            if (!runSucceeded &&
+                [runCompletionMessage isEqualToString:kSettingsRunKRWFailedMessage] &&
+                [retryDefaults boolForKey:kSettingsRunAutoRetry] &&
+                !remote_call_init_wedged() &&
+                g_settings_actions_rerun_requested == 0 &&
+                g_settings_actions_auto_retry_attempt < maxRetryAttempts) {
+                int attempt = __sync_add_and_fetch(&g_settings_actions_auto_retry_attempt, 1);
+                log_user("[RUN] Auto-retrying chain (attempt %d of %ld)…\n",
+                         attempt, (long)maxRetryAttempts);
+                cyanide_upload_log_milestone(@"krw-auto-retry");
+                settings_run_actions_internal(pendingOnly);
+                return;
+            }
+            g_settings_actions_auto_retry_attempt = 0;
             if (__sync_bool_compare_and_swap(&g_settings_actions_rerun_requested, 1, 0)) {
                 log_user("[RUN] Applying queued follow-up run.\n");
                 settings_run_actions_internal(pendingOnly);
@@ -8211,16 +8246,19 @@ static void settings_run_actions_internal(BOOL pendingOnly)
 
 void settings_run_actions(void)
 {
+    g_settings_actions_auto_retry_attempt = 0;
     settings_run_actions_internal(NO);
 }
 
 void settings_run_pending_actions(void)
 {
+    g_settings_actions_auto_retry_attempt = 0;
     settings_run_actions_internal(YES);
 }
 
 void settings_rerun_last_actions(void)
 {
+    g_settings_actions_auto_retry_attempt = 0;
     settings_run_actions_internal(g_settings_actions_last_pending_only);
 }
 
@@ -11284,6 +11322,7 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
 
 - (NSArray<NSDictionary *> *)launchRows
 {
+    BOOL autoRetryOn = [NSUserDefaults.standardUserDefaults boolForKey:kSettingsRunAutoRetry];
     NSArray<NSDictionary *> *rows = @[
         @{ @"kind": @"a18path", @"key": kSettingsA18ExploitPath, @"a18Only": @YES, @"title": @"A18 exploit path" },
         @{ @"key": kSettingsA18Interleave, @"peV1Only": @YES, @"a18Only": @YES, @"title": @"A18 interleaved search",
@@ -11291,6 +11330,11 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         @{ @"kind": @"a18shape", @"key": kSettingsA18MemoryShaping, @"peV1Only": @YES, @"a18Only": @YES, @"title": @"A18 memory shaping" },
         @{ @"key": kSettingsA18BoundedSearch, @"peV1Only": @YES, @"a18Only": @YES, @"title": @"A18 bounded search",
            @"subtitle": @"On stops after 4 search passes and reports a clean retry instead of grinding — which can otherwise end in an aperture panic on a device that never lands the PCB. Off (default, matches 1.5.5) grinds until the exploit acquires. A18/M4 only; effective on the next fresh chain run." },
+        @{ @"key": kSettingsRunAutoRetry, @"title": @"Auto-retry failed chain runs",
+           @"subtitle": @"On re-runs the chain automatically when the exploit misses, up to the attempt cap below — the progress screen just keeps spinning until it lands or the cap is hit. Never retries a wedged injection. Every attempt is an independent panic dice roll, so the cap bounds your exposure per tap." },
+        @{ @"kind": @"stepper", @"key": kSettingsRunAutoRetryMaxAttempts, @"title": @"Auto-retry attempt cap",
+           @"min": @1, @"max": @20, @"default": @8, @"disabled": @(!autoRetryOn),
+           @"subtitle": @"Maximum automatic re-runs after the first miss. Enable Auto-retry failed chain runs to change this." },
         @{ @"kind": @"settlemode", @"key": kSettingsRemoteSettleMode, @"title": @"Tweak apply speed" },
         @{ @"key": kSettingsVerboseLoggingEnabled, @"title": @"Verbose logging",
            @"subtitle": @"Logs the full RemoteCall internals for every exploit run, tweak apply and Process Viewer action. Off keeps the log readable; turn it on before reproducing an issue, then share the log." },
@@ -14751,7 +14795,10 @@ void cyanide_present_contact(UIViewController *host)
         UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"stepper" forIndexPath:dequeuePath];
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
         cell.textLabel.textAlignment = NSTextAlignmentNatural;
-        cell.textLabel.textColor = supported ? UIColor.labelColor : UIColor.tertiaryLabelColor;
+        // Honor the same @"disabled" row flag the toggle cells use (e.g. the
+        // auto-retry cap is greyed out while its master toggle is off).
+        BOOL stepperEnabled = supported && ![row[@"disabled"] boolValue];
+        cell.textLabel.textColor = stepperEnabled ? UIColor.labelColor : UIColor.tertiaryLabelColor;
         NSInteger value = [d integerForKey:row[@"key"]];
         NSString *combined = [NSString stringWithFormat:@"%@: %ld", row[@"title"], (long)value];
         NSString *subtitle = row[@"subtitle"];
@@ -14760,8 +14807,8 @@ void cyanide_present_contact(UIViewController *host)
             config.text = combined;
             config.secondaryText = subtitle;
             config.textToSecondaryTextVerticalPadding = 3;
-            config.textProperties.color = supported ? UIColor.labelColor : UIColor.tertiaryLabelColor;
-            config.secondaryTextProperties.color = supported ? UIColor.secondaryLabelColor : UIColor.tertiaryLabelColor;
+            config.textProperties.color = stepperEnabled ? UIColor.labelColor : UIColor.tertiaryLabelColor;
+            config.secondaryTextProperties.color = stepperEnabled ? UIColor.secondaryLabelColor : UIColor.tertiaryLabelColor;
             config.secondaryTextProperties.font = [UIFont systemFontOfSize:12];
             config.secondaryTextProperties.numberOfLines = 0;
             cell.contentConfiguration = config;
@@ -14774,7 +14821,7 @@ void cyanide_present_contact(UIViewController *host)
         stp.maximumValue = [row[@"max"] doubleValue];
         stp.stepValue = 1;
         stp.value = (double)value;
-        stp.enabled = supported;
+        stp.enabled = stepperEnabled;
         stp.tag = (indexPath.section << 16) | indexPath.row;
         [stp addTarget:self action:@selector(stepperChanged:) forControlEvents:UIControlEventValueChanged];
         cell.accessoryView = stp;
@@ -15384,6 +15431,10 @@ void cyanide_present_contact(UIViewController *host)
             settings_note_package_configuration_changed(kSettingsSBCDockLabels);
             settings_mark_tweak_applied(kSettingsSBCDockLabels, NO);
         }
+        [self.tableView reloadData];
+    }
+    if ([key isEqualToString:kSettingsRunAutoRetry]) {
+        // Grey out / re-enable the attempt-cap stepper immediately.
         [self.tableView reloadData];
     }
 
