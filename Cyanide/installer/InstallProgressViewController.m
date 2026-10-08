@@ -133,7 +133,7 @@
         [self.statusLabel.trailingAnchor constraintEqualToAnchor:self.retryButton.leadingAnchor constant:-8.0],
         [self.statusLabel.centerYAnchor  constraintEqualToAnchor:self.spinner.centerYAnchor],
 
-        [self.retryButton.trailingAnchor constraintEqualToAnchor:footer.trailingAnchor constant:-20.0],
+        [self.retryButton.trailingAnchor constraintEqualToAnchor:footer.safeAreaLayoutGuide.trailingAnchor constant:-16.0],
         [self.retryButton.centerYAnchor  constraintEqualToAnchor:self.spinner.centerYAnchor],
     ]];
 
