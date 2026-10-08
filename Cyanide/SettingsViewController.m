@@ -14868,11 +14868,12 @@ void cyanide_present_contact(UIViewController *host)
         title.translatesAutoresizingMaskIntoConstraints = NO;
 
         UISegmentedControl *seg =
-            [[UISegmentedControl alloc] initWithItems:@[@"pe_v1 (default)", @"pe_v2 (fallback)"]];
+            [[UISegmentedControl alloc] initWithItems:@[@"pe_v1 (default)", @"pe_v2 (fallback)", @"pe_v3 (single-hunt)"]];
         seg.translatesAutoresizingMaskIntoConstraints = NO;
         // Display order is pe_v1 first, but the stored value is unchanged
-        // (1 = pe_v1, 0 = pe_v2) so existing preferences keep their meaning.
-        seg.selectedSegmentIndex = ([d integerForKey:kSettingsA18ExploitPath] == 1) ? 0 : 1;
+        // (1 = pe_v1, 0 = pe_v2, 2 = pe_v3) so existing preferences keep their meaning.
+        NSInteger storedPath = [d integerForKey:kSettingsA18ExploitPath];
+        seg.selectedSegmentIndex = (storedPath == 1) ? 0 : (storedPath == 2) ? 2 : 1;
         seg.enabled = settings_device_is_a18_above();
         [seg addTarget:self action:@selector(a18PathSegChanged:)
       forControlEvents:UIControlEventValueChanged];
@@ -14885,7 +14886,10 @@ void cyanide_present_contact(UIViewController *host)
             ? @"A18/M4 only. pe_v1 is the default and the only path with a measured acquire "
                "rate (~50% per attempt; parked state makes it a one-time cost per boot). pe_v2 "
                "stages 2 GB as 131,072 separate IOSurfaces, but iOS caps a process at 16,384 — so "
-               "most fail and it has not acquired reliably in testing. Leave this on pe_v1."
+               "most fail and it has not acquired reliably in testing. pe_v3 uses pe_v2's staging "
+               "but hunts only one mapping and retries reoccupation on already-proven pages "
+               "instead of re-hunting — built to cut the aperture panics. Leave this on pe_v1 "
+               "unless you are testing."
             : @"A18/M4 devices only. This device uses pe_v1 already.";
         note.translatesAutoresizingMaskIntoConstraints = NO;
 
@@ -15903,12 +15907,16 @@ void cyanide_present_contact(UIViewController *host)
 - (void)a18PathSegChanged:(UISegmentedControl *)sender
 {
     // Segment 0 is pe_v1, which is stored as 1 -- see the control's comment.
-    NSInteger path = (sender.selectedSegmentIndex == 0) ? 1 : 0;
+    // Stored values: 1 = pe_v1, 0 = pe_v2, 2 = pe_v3 (single-hunt).
+    NSInteger path = (sender.selectedSegmentIndex == 0) ? 1
+                   : (sender.selectedSegmentIndex == 2) ? 2 : 0;
     [[NSUserDefaults standardUserDefaults] setInteger:path forKey:kSettingsA18ExploitPath];
     [[NSUserDefaults standardUserDefaults] synchronize];
     log_user("[KRW] A18 exploit path set to %s. Takes effect on the next fresh chain run "
              "(a parked/recovered session skips the exploit entirely).\n",
-             path == 1 ? "pe_v1 (default)" : "pe_v2 (fallback)");
+             path == 1 ? "pe_v1 (default)"
+             : path == 2 ? "pe_v3 (single-hunt)"
+                         : "pe_v2 (fallback)");
     // The pe_v1-only options (shaping/interleave/bounded) enable/disable with the
     // path -- reload so they grey out or come back live immediately.
     [self.tableView reloadData];
