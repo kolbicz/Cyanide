@@ -10677,6 +10677,35 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
 
 @implementation SettingsViewController
 
+// Init-watchdog wedge (RemoteCall.m): an injection deadlocked uninterruptibly
+// and was aborted externally. The device is safe, but no new injection channel
+// can open in this session — the only full recovery is an app restart. Offer
+// it as a guided button instead of making the user force-quit: park the KRW
+// filter (idempotent, takes no locks — the wedged run worker may still hold
+// the actions lock, so the full terminal-cleanup path is NOT safe here) and
+// exit; the leaked KRW sockets survive by design and re-park on next launch.
+- (void)remoteCallInitWedged:(NSNotification *)note
+{
+    (void)note;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"Injection wedged — device is safe"
+                             message:@"A SpringBoard/launchd injection deadlocked and the init watchdog aborted it before it could freeze the device.\n\nCyanide cannot open new injection channels in this session. Restart the app to continue."
+                      preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Restart Cyanide"
+                                                  style:UIAlertActionStyleDestructive
+                                                handler:^(UIAlertAction *action) {
+            (void)action;
+            settings_park_krw_filter_for_background();
+            exit(0);
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Later"
+                                                  style:UIAlertActionStyleCancel
+                                                handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+    });
+}
+
 + (BOOL)liveWPHasSelectedVideo
 {
     NSString *path = livewp_absolute_path();
@@ -10859,6 +10888,10 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(cleanupStateDidChange:)
                                                  name:kSettingsCleanupStateDidChangeNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(remoteCallInitWedged:)
+                                                 name:kRemoteCallInitWedgedNotification
                                                object:nil];
 
     // Match the other tabs (Home, Packages, Sources): the Settings root shows a

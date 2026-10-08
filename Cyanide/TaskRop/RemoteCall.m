@@ -3692,6 +3692,11 @@ static void rc_restore_trapped_thread_for_abort(mach_port_t port, int trapStage,
 #define RC_INIT_WATCHDOG_SECONDS 12
 
 static _Atomic uint64_t g_rc_init_watchdog_gen = 0;
+static _Atomic bool g_rc_init_wedged = false;
+
+bool remote_call_init_wedged(void) {
+    return atomic_load_explicit(&g_rc_init_wedged, memory_order_acquire);
+}
 
 static void *rc_init_watchdog_main(void *arg) {
     uint64_t gen = (uint64_t)(uintptr_t)arg;
@@ -3700,12 +3705,19 @@ static void *rc_init_watchdog_main(void *arg) {
         if (atomic_load_explicit(&g_rc_init_watchdog_gen, memory_order_acquire) != gen)
             return NULL;   // init returned (any result) — healthy, nothing to do
     }
+    // Latch FIRST: every later init refuses fast (the wedged thread may hold
+    // the init mutex forever) and the UI can offer a guided restart.
+    atomic_store_explicit(&g_rc_init_wedged, true, memory_order_release);
     printf("[RemoteCall] INIT WATCHDOG: no init completion in %d s — init thread "
            "wedged (TH_UNINT); external abort: un-arm + drain + guard restore\n",
            RC_INIT_WATCHDOG_SECONDS);
     log_user("[WARN] Injection wedged and was aborted by the init watchdog — the "
-             "device is safe, but this run cannot continue. Retry the run; if this "
-             "repeats, restart the app.\n");
+             "device is safe, but this run cannot continue. Restart the app to "
+             "continue (the kernel session is parked).\n");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter]
+            postNotificationName:kRemoteCallInitWedgedNotification object:nil];
+    });
 
     // 1+2: stop latch + un-arm snapshot (request_stop does both), then drain.
     remote_call_request_stop("init watchdog timeout");
@@ -3746,6 +3758,18 @@ static void *rc_init_watchdog_main(void *arg) {
 }
 
 int init_remote_call(const char* process, bool useMigFilterBypass) {
+    // Wedge latch: a previous init wedged uninterruptibly and was externally
+    // aborted by the init watchdog. Its thread may still hold the init mutex,
+    // so queueing here would block the caller forever — refuse fast instead.
+    if (remote_call_init_wedged()) {
+        printf("[RemoteCall] init REFUSED for %s: a previous init wedged and was "
+               "aborted by the init watchdog — no new injection channels this "
+               "session. Restart the app to continue.\n", process ?: "?");
+        log_user("[RUN] Injection channel unavailable: a previous injection "
+                 "wedged (device is safe). Restart Cyanide to continue.\n");
+        remote_call_note_init_failure(RemoteCallInitFailureOther, 0);
+        return -1;
+    }
     if (!remote_call_inflight_begin("init-hijack")) {
         remote_call_note_init_failure(RemoteCallInitFailureKRWUnavailable, 0);
         return -1;

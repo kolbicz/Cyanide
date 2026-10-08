@@ -144,6 +144,17 @@ bool remote_call_inflight_wait_drained_ms(int timeoutMs);
 void remote_call_request_stop(const char *reason);   // ask in-flight ops to abort ASAP
 bool remote_call_stop_requested(void);
 
+// Init-watchdog wedge latch. Set when the init watchdog had to abort a wedged
+// init externally (TH_UNINT, e.g. the 125410/145511 watchdog panics): the
+// device was made safe, but the wedged thread may still hold the init mutex,
+// so every later init refuses fast instead of queueing behind it forever.
+// Latched for the process lifetime — the only full recovery is an app restart.
+bool remote_call_init_wedged(void);
+
+// Posted (main queue) when the init watchdog fires, so the UI can offer a
+// guided restart instead of leaving the user with a silently dead channel.
+#define kRemoteCallInitWedgedNotification @"CyanideRemoteCallInitWedged"
+
 // Detach gate: while held (acquire → detach → release), new RemoteCall
 // acquisitions fail-fast — closes the drain-wait → next-acquire race that let
 // a background detach land in the same millisecond as a kill call
