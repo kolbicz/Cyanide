@@ -3655,6 +3655,96 @@ static void rc_restore_trapped_thread_for_abort(mach_port_t port, int trapStage,
 // cannot tear the primitive down while a target thread is trapped or running
 // redirected state — that strands the thread inside launchd and watchdogs the
 // device (live 9.log: 13:42:57 / 16:24:58 black-screens).
+// --- last-rites init watchdog ------------------------------------------------
+//
+// panic-full-2026-10-08-125410 (watchdog timeout, 92 s without watchdogd
+// checkins): a SpringBoard init wedged between "preparing EXC_GUARD thread
+// hijack" and "EXC_GUARD injected" and never returned. Every timeout in the
+// init path (8 s hard budget, 3x4 s attempt caps, stop/gate checks) runs ON
+// the init thread itself — useless when that thread is the one blocked
+// uninterruptibly in the kernel (TH_UNINT; see the round-30 comment). Meanwhile
+// any target thread that trapped in that window parks on our exception port
+// forever: the first-port responder starts only at the END of a successful
+// init. One parked SpringBoard thread with the right lock held cascades into
+// a system-wide freeze and the hardware watchdog reboots.
+//
+// This monitor is the same teardown the init would do, driven by a thread the
+// wedge cannot touch. It fires only past 12 s — strictly beyond the init's own
+// 8 s hard budget + margins — so it can never race a healthy init: firing is
+// proof the init thread is wedged, not slow. It deliberately does NOT call
+// abandon_remote_call(): that takes g_universal_ipc_mutex, which the wedged
+// thread may hold. It only does the three things that keep the DEVICE alive,
+// each safe without the init thread:
+//   1. un-arm every armed target thread (pure KRW writes, idempotent) and
+//      latch the stop flag — if the kernel ever hands the wedged thread back,
+//      it aborts at its first checkpoint;
+//   2. answer queued exceptions on our ports, so a trapped SpringBoard thread
+//      is resumed instead of parked forever (own-guard traps resume with their
+//      own state — the AST is consumed on delivery, so they cannot re-trap;
+//      anything else gets one reply, then we stop draining that port — the
+//      round-19 responder rule);
+//   3. restore the target task's task_exc_guard flags (consumes the saved
+//      snapshot; a later teardown restore is then a no-op).
+// Residual degradation, accepted: if the wedged thread never returns, this
+// run's worker thread stays blocked and RemoteCall is refuse-all for the app's
+// remaining life (the stop flag never drains). The app may need a restart;
+// the device does not reboot. That trade is the entire point.
+#define RC_INIT_WATCHDOG_SECONDS 12
+
+static _Atomic uint64_t g_rc_init_watchdog_gen = 0;
+
+static void *rc_init_watchdog_main(void *arg) {
+    uint64_t gen = (uint64_t)(uintptr_t)arg;
+    for (int i = 0; i < RC_INIT_WATCHDOG_SECONDS; i++) {
+        sleep(1);
+        if (atomic_load_explicit(&g_rc_init_watchdog_gen, memory_order_acquire) != gen)
+            return NULL;   // init returned (any result) — healthy, nothing to do
+    }
+    printf("[RemoteCall] INIT WATCHDOG: no init completion in %d s — init thread "
+           "wedged (TH_UNINT); external abort: un-arm + drain + guard restore\n",
+           RC_INIT_WATCHDOG_SECONDS);
+    log_user("[WARN] Injection wedged and was aborted by the init watchdog — the "
+             "device is safe, but this run cannot continue. Retry the run; if this "
+             "repeats, restart the app.\n");
+
+    // 1+2: stop latch + un-arm snapshot (request_stop does both), then drain.
+    remote_call_request_stop("init watchdog timeout");
+    for (int portIdx = 0; portIdx < 2; portIdx++) {
+        mach_port_t port = portIdx == 0 ? g_RC_firstExceptionPort
+                                        : g_RC_secondExceptionPort;
+        if (!MACH_PORT_VALID(port)) continue;
+        for (int i = 0; i < 16; i++) {
+            ExceptionMessage msg;
+            if (!wait_exception(port, &msg, 100, false)) break;
+            if (rc_exc_is_own_guard(&msg)) {
+                // One-shot by construction: resume with the thread's own state.
+                reply_with_state(&msg, &msg.threadState);
+                printf("[RemoteCall] INIT WATCHDOG: unparked trapped thread on %s "
+                       "port (pc=%#llx)\n", portIdx == 0 ? "first" : "second",
+                       (unsigned long long)msg.threadState.__pc);
+                continue;
+            }
+            // Not our injected trap (a crash or a protocol park trap): answer
+            // exactly once so the thread is not left parked on a dequeued
+            // message, then STOP draining this port — the session-state repair
+            // those messages may need belongs to the proper teardown drain,
+            // which we must not race (round-19 responder semantics).
+            reply_with_state(&msg, &msg.threadState);
+            printf("[RemoteCall] INIT WATCHDOG: answered non-protocol exception "
+                   "(exc=%u code=%#llx/%#llx) on %s port once, stopping drain\n",
+                   (unsigned)msg.exception,
+                   (unsigned long long)msg.codeFirst,
+                   (unsigned long long)msg.codeSecond,
+                   portIdx == 0 ? "first" : "second");
+            break;
+        }
+    }
+
+    // 3: task_exc_guard flags back (no-op if a racing teardown already did it).
+    rc_restore_task_exc_guard("init-watchdog");
+    return NULL;
+}
+
 int init_remote_call(const char* process, bool useMigFilterBypass) {
     if (!remote_call_inflight_begin("init-hijack")) {
         remote_call_note_init_failure(RemoteCallInitFailureKRWUnavailable, 0);
@@ -3686,7 +3776,21 @@ int init_remote_call(const char* process, bool useMigFilterBypass) {
     atomic_fetch_sub_explicit(&g_rc_init_contenders, 1, memory_order_acq_rel);
     if (contenders > 0)
         printf("[RC] INIT SINGLE-FLIGHT: previous init finished — proceeding\n");
+    // Arm the last-rites watchdog AFTER winning the mutex (single-flight means
+    // at most one monitor exists; contenders blocked on the mutex above do not
+    // spawn one). Retired by bumping the generation the moment init returns.
+    uint64_t wdGen = atomic_fetch_add_explicit(&g_rc_init_watchdog_gen, 1,
+                                               memory_order_acq_rel) + 1;
+    pthread_t wdThread;
+    if (pthread_create(&wdThread, NULL, rc_init_watchdog_main,
+                       (void *)(uintptr_t)wdGen) == 0) {
+        pthread_detach(wdThread);
+    } else {
+        printf("[RemoteCall] INIT WATCHDOG: pthread_create failed — init runs "
+               "WITHOUT the external abort net\n");
+    }
     int rc = init_remote_call_internal(process, useMigFilterBypass);
+    atomic_fetch_add_explicit(&g_rc_init_watchdog_gen, 1, memory_order_acq_rel);
     if (rc == 0) {
         // Round 22: reap dead sessions' leaked sentinel-parked threads
         // (launchd landmines — the initproc-exited/SIGBUS accumulator) BEFORE
@@ -4288,8 +4392,11 @@ static int init_remote_call_internal(const char* process, bool useMigFilterBypas
                     // Round 10: post-mortem identity of every armed thread —
                     // if the device dies while one is armed (17:45:56 shape),
                     // the analysis needs to know WHICH thread it was, not just
-                    // how many.
-                    printf("[RC] walk: ARMED thread %#llx (candidate #%d, armed #%d)\n",
+                    // how many. [RemoteCall] prefix, not [RC]: the round-43
+                    // filter must NOT hide these — the 125410 watchdog wedge
+                    // was undiagnosable precisely because the walk's progress
+                    // was filtered out of the log.
+                    printf("[RemoteCall] walk: ARMED thread %#llx (candidate #%d, armed #%d)\n",
                            currThread, validThreadCount + 1, successThreadCount);
                     RC_DEBUG("[%s:%d] Inject EXC_GUARD on thread:0x%llx OK\n", __FUNCTION__, __LINE__, (unsigned long long)currThread);
                 }
