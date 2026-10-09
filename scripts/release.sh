@@ -555,7 +555,7 @@ ORIGIN_URL=$(git remote get-url origin)
 REPO_SLUG=$(echo "$ORIGIN_URL" \
     | sed -E 's#^(https?://[^/]+/|git@[^:]+:)##' \
     | sed -E 's#\.git$##')
-RELEASE_TITLE="Cyanide ${TAG}"
+RELEASE_TITLE="Cyanide ${VERSION}"   # "Cyanide 1.7.3", like earlier releases (tag stays v1.7.3)
 
 LOCAL_TAG_SHA=""
 if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
