@@ -3392,10 +3392,46 @@ struct VMShmem *put_shmem_in_cache(struct VMShmem *shmem)
     return &g_RC_shmemCache[slot];
 }
 
+// Shared-region pages that could not be mapped even after the cache-clearing
+// retry below, per target vm_map. vm_get_object cannot resolve the dyld
+// shared region (a nested submap), so such a page fails the same way every time,
+// and each repeat wiped the whole shmem cache and logged three errors. Known
+// pages now fail at once. Keyed by g_RC_vmMap, so a new session starts clean.
+#define SHMEM_UNMAPPABLE_CAP 32
+static uint64_t g_RC_shmemUnmappableMap = 0;
+static uint64_t g_RC_shmemUnmappable[SHMEM_UNMAPPABLE_CAP];
+static int g_RC_shmemUnmappableCount = 0;
+
+static bool shmem_page_known_unmappable(uint64_t pageAddr)
+{
+    if (g_RC_shmemUnmappableMap != g_RC_vmMap) return false;
+    for (int i = 0; i < g_RC_shmemUnmappableCount; i++)
+        if (g_RC_shmemUnmappable[i] == pageAddr) return true;
+    return false;
+}
+
+static void shmem_note_unmappable(uint64_t pageAddr)
+{
+    // Only the arm64 shared region (SHARED_REGION_BASE_ARM64, 4 GB): it is a
+    // nested submap and stays unmappable here. Anywhere else a failure may be
+    // an untouched page that becomes mappable later, so keep retrying those.
+    if (pageAddr < 0x180000000ULL || pageAddr >= 0x280000000ULL) return;
+    if (g_RC_shmemUnmappableMap != g_RC_vmMap) {
+        g_RC_shmemUnmappableMap = g_RC_vmMap;
+        g_RC_shmemUnmappableCount = 0;
+    }
+    if (g_RC_shmemUnmappableCount < SHMEM_UNMAPPABLE_CAP) {
+        g_RC_shmemUnmappable[g_RC_shmemUnmappableCount++] = pageAddr;
+        printf("[RemoteCall] page 0x%llx is not mappable (failed after cache clear); "
+               "further reads of it fail fast this session\n", (unsigned long long)pageAddr);
+    }
+}
+
 struct VMShmem *get_shmem_for_page(uint64_t pageAddr)
 {
     struct VMShmem *cached = get_shmem_from_cache(pageAddr);
     if (cached) return cached;
+    if (shmem_page_known_unmappable(pageAddr)) return NULL;
 
     struct VMShmem newShmem = vm_map_remote_page(g_RC_vmMap, pageAddr);
     if (!newShmem.localAddress) {
@@ -3408,6 +3444,7 @@ struct VMShmem *get_shmem_for_page(uint64_t pageAddr)
         clear_remote_shmem_cache();
         (void)reap_dead_port_names("shmem_retry");
         newShmem = vm_map_remote_page(g_RC_vmMap, pageAddr);
+        if (!newShmem.localAddress) shmem_note_unmappable(pageAddr);
     }
     if (!newShmem.localAddress)
             return NULL;

@@ -488,10 +488,13 @@ static RemoteInvocationEntry *r_inv_entry(int pid, uint64_t obj, uint64_t cls, u
         numUserArgs = (numArgs > 2) ? (numArgs - 2) : 0;
         if (numUserArgs > 4) numUserArgs = 4;
         retLen = r_msg(sig, r_sel("methodReturnLength"), 0, 0, 0, 0);
+        // Is the return type '@'? Not via remote_read: the type string lives
+        // in the dyld shared cache, which the shmem page mapping cannot map
+        // (each attempt logged 3 errors and wiped the whole shmem cache).
+        // strchr(t, '@') == t exactly when t[0] == '@': one call, no read.
         uint64_t retType = r_msg(sig, r_sel("methodReturnType"), 0, 0, 0, 0);
-        char retType0 = 0;
-        if (retType) remote_read(retType, &retType0, 1);
-        retIsObject = (retType0 == '@');
+        retIsObject = retType &&
+            r_call_stable(R_TIMEOUT, "strchr", retType, '@', 0, 0, 0, 0, 0, 0) == retType;
         if (retLen <= R_INV_RET_SLOT) {
             inv = r_msg_retained_return(NSInvocation, r_sel("invocationWithMethodSignature:"),
                                         sig, 0, 0, 0);
