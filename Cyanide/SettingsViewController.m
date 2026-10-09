@@ -866,6 +866,7 @@ NSString * const kSettingsA18ExploitPath   = @"A18ExploitPath";
 NSString * const kSettingsA18Interleave = @"A18Interleave";
 NSString * const kSettingsA18MemoryShaping = @"A18MemoryShaping";
 NSString * const kSettingsA18BoundedSearch = @"A18BoundedSearch";
+NSString * const kSettingsA18InterleavedStaging = @"A18InterleavedStaging";
 NSString * const kSettingsRemoteSettleMode  = @"RemoteSettleMode";
 NSString * const kSettingsAutoRunKexploit    = @"AutoRunKexploit";
 NSString * const kSettingsRunSandboxEscape   = @"RunSandboxEscape";
@@ -7364,6 +7365,7 @@ void settings_register_defaults(void)
         // which can otherwise end in an aperture panic on a device that never
         // lands the PCB.
         kSettingsA18BoundedSearch:   @NO,
+        kSettingsA18InterleavedStaging: @NO,
         kSettingsRemoteSettleMode:   @2,
         kSettingsAutoRunKexploit:    @NO,
         kSettingsRunSandboxEscape:   @YES,
@@ -11425,6 +11427,8 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         @{ @"kind": @"a18shape", @"key": kSettingsA18MemoryShaping, @"peV1Only": @YES, @"a18Only": @YES, @"title": @"A18 memory shaping" },
         @{ @"key": kSettingsA18BoundedSearch, @"peV1Only": @YES, @"a18Only": @YES, @"title": @"A18 bounded search",
            @"subtitle": @"On stops after 4 search passes and reports a clean retry instead of grinding — which can otherwise end in an aperture panic on a device that never lands the PCB. Off (default, matches 1.5.5) grinds until the exploit acquires. A18/M4 only; effective on the next fresh chain run." },
+        @{ @"key": kSettingsA18InterleavedStaging, @"peV3Only": @YES, @"a18Only": @YES, @"title": @"A18 interleaved staging (pe_v3)",
+           @"subtitle": @"Experimental. Every pe_v3 aperture panic so far happened while the hunt read a physical page that wasn't ours. On lays out the search mapping between our own staging pages so those neighbour reads land on our pages more often. The log's [RESULT] row (own vs foreign, staging=) shows whether it helps. pe_v3 path only; effective on the next fresh chain run." },
         @{ @"key": kSettingsRunAutoRetry, @"title": @"Auto-retry failed chain runs",
            @"subtitle": @"On re-runs the chain automatically when the exploit misses, up to the attempt cap below — the progress screen just keeps spinning until it lands or the cap is hit. Never retries a wedged injection. Every attempt is an independent panic dice roll, so the cap bounds your exposure per tap." },
         @{ @"kind": @"stepper", @"key": kSettingsRunAutoRetryMaxAttempts, @"title": @"Auto-retry attempt cap",
@@ -15411,6 +15415,9 @@ void cyanide_present_contact(UIViewController *host)
     // them out so a control never looks live when it does nothing.
     if ([row[@"peV1Only"] boolValue] &&
         [d integerForKey:kSettingsA18ExploitPath] != 1)
+        rowEnabled = NO;
+    if ([row[@"peV3Only"] boolValue] &&
+        [d integerForKey:kSettingsA18ExploitPath] != 2)
         rowEnabled = NO;
     cell.userInteractionEnabled = rowEnabled;
     NSString *subtitle = row[@"subtitle"];
