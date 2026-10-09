@@ -394,9 +394,21 @@ static bool r_write_remote_arg(uint64_t remoteBuf, const void *arg, size_t argSi
 //
 // Safe to reuse because the perform waits for completion (waitUntilDone:YES)
 // and gInvLock is held for the whole call, so no two calls share an
-// invocation at once. The cached invocations never retainArguments, so they
-// keep nothing alive; the target they still point at afterwards is never
-// messaged again until it is replaced. Keyed by class (not object), because a
+// invocation at once.
+//
+// Object lifetimes must match the slow path, which callers were written
+// against. That path's invocation had retainArguments, so it retained the
+// returned object INSIDE -invoke on the main thread, and then leaked (its
+// worker-thread autorelease pool never drains), keeping that object alive for
+// good. Callers rely on it: r_msg2_main_retained fetches -windows / -subviews
+// and only retains the autoreleased array on a SECOND main-thread hop; with
+// nothing holding it, SpringBoard's run loop drained its pool in between and
+// the retain hop's object_getClass PAC-faulted on the freed array (SpringBoard
+// crash 2026-10-09 11:43:55, Double Tap to Lock). So each cached invocation
+// has retainArguments too (target, object arguments and the return value are
+// retained as they are set), and every returned object gets one more retain
+// held in gInvKeep and released, on the main thread, only after
+// R_INV_KEEP_CAP newer returns. Keyed by class (not object), because a
 // freed object's address can be reused by another class with a different
 // signature; a class object is keyed by its metaclass. A new SpringBoard
 // (respring) has a new pid, so its entries never match. Anything unusual --
@@ -406,6 +418,7 @@ static bool r_write_remote_arg(uint64_t remoteBuf, const void *arg, size_t argSi
 #define R_INV_ARG_SLOT  64
 #define R_INV_RET_SLOT  64
 #define R_INV_SCRATCH   (4 * R_INV_ARG_SLOT + R_INV_RET_SLOT)
+#define R_INV_KEEP_CAP  512
 
 typedef struct {
     int pid;
@@ -414,6 +427,7 @@ typedef struct {
     uint64_t inv;        // retained; 0 = this (class, selector) uses the slow path
     uint64_t numUserArgs;
     uint64_t retLen;
+    bool retIsObject;    // return type '@': kept alive in gInvKeep
     uint64_t lastUse;
 } RemoteInvocationEntry;
 
@@ -422,6 +436,32 @@ static RemoteInvocationEntry gInvCache[R_INV_CACHE_CAP];
 static uint64_t gInvClock = 0;
 static int gInvScratchPid = 0;
 static uint64_t gInvScratch = 0;   // 4 argument slots, then the return slot
+static int gInvKeepPid = 0;
+static uint64_t gInvKeep[R_INV_KEEP_CAP];
+static int gInvKeepNext = 0;
+
+// Release on SpringBoard's main thread, async: a release can be the last one,
+// and a UIView (or an array of them) must not be deallocated on our worker.
+static void r_release_on_main_async(uint64_t obj)
+{
+    if (!obj) return;
+    r_msg(obj, r_sel("performSelectorOnMainThread:withObject:waitUntilDone:"),
+          r_sel("release"), 0, 0, 0);
+}
+
+static void r_inv_keep(int pid, uint64_t obj)
+{
+    if (gInvKeepPid != pid) {   // new process: the old entries died with it
+        memset(gInvKeep, 0, sizeof(gInvKeep));
+        gInvKeepNext = 0;
+        gInvKeepPid = pid;
+    }
+    r_msg(obj, r_sel("retain"), 0, 0, 0, 0);
+    uint64_t old = gInvKeep[gInvKeepNext];
+    gInvKeep[gInvKeepNext] = obj;
+    gInvKeepNext = (gInvKeepNext + 1) % R_INV_KEEP_CAP;
+    r_release_on_main_async(old);
+}
 
 static RemoteInvocationEntry *r_inv_entry(int pid, uint64_t obj, uint64_t cls, uint64_t sel)
 {
@@ -436,10 +476,11 @@ static RemoteInvocationEntry *r_inv_entry(int pid, uint64_t obj, uint64_t cls, u
         if (e->lastUse < victim->lastUse) victim = e;
     }
     // Evict (an invocation from a dead process is just dropped).
-    if (victim->pid == pid && victim->inv) r_msg(victim->inv, r_sel("release"), 0, 0, 0, 0);
+    if (victim->pid == pid && victim->inv) r_release_on_main_async(victim->inv);
     memset(victim, 0, sizeof(*victim));
 
     uint64_t inv = 0, numUserArgs = 0, retLen = 0;
+    bool retIsObject = false;
     uint64_t sig = r_method_signature(obj, sel);   // retained
     uint64_t NSInvocation = r_class("NSInvocation");
     if (r_is_objc_ptr(sig) && r_is_objc_ptr(NSInvocation)) {
@@ -447,11 +488,21 @@ static RemoteInvocationEntry *r_inv_entry(int pid, uint64_t obj, uint64_t cls, u
         numUserArgs = (numArgs > 2) ? (numArgs - 2) : 0;
         if (numUserArgs > 4) numUserArgs = 4;
         retLen = r_msg(sig, r_sel("methodReturnLength"), 0, 0, 0, 0);
+        uint64_t retType = r_msg(sig, r_sel("methodReturnType"), 0, 0, 0, 0);
+        char retType0 = 0;
+        if (retType) remote_read(retType, &retType0, 1);
+        retIsObject = (retType0 == '@');
         if (retLen <= R_INV_RET_SLOT) {
             inv = r_msg_retained_return(NSInvocation, r_sel("invocationWithMethodSignature:"),
                                         sig, 0, 0, 0);
-            if (r_is_objc_ptr(inv)) r_msg(inv, r_sel("setSelector:"), sel, 0, 0, 0);
-            else inv = 0;
+            if (r_is_objc_ptr(inv)) {
+                r_msg(inv, r_sel("setSelector:"), sel, 0, 0, 0);
+                // Before any target/argument is set, so every later setter and
+                // -invoke's return value are retained as they happen.
+                r_msg(inv, r_sel("retainArguments"), 0, 0, 0, 0);
+            } else {
+                inv = 0;
+            }
         }
     }
     if (r_is_objc_ptr(sig)) r_msg(sig, r_sel("release"), 0, 0, 0, 0);
@@ -462,6 +513,7 @@ static RemoteInvocationEntry *r_inv_entry(int pid, uint64_t obj, uint64_t cls, u
     victim->inv = inv;
     victim->numUserArgs = numUserArgs;
     victim->retLen = retLen;
+    victim->retIsObject = retIsObject;
     victim->lastUse = ++gInvClock;
     return victim;
 }
@@ -510,6 +562,10 @@ static bool r_msg_main_cached(uint64_t obj, uint64_t sel,
         if (e->retLen) {
             r_msg(e->inv, r_sel("getReturnValue:"), retSlot, 0, 0, 0);
             ret = remote_read64(retSlot);
+            // The invocation already holds it (retainArguments); this keeps it
+            // alive past the next call on the same invocation, as the slow
+            // path's leaked invocations did.
+            if (e->retIsObject && ret) r_inv_keep(pid, ret);
         }
         *retOut = ret;
         done = true;
