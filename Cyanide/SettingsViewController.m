@@ -7379,6 +7379,7 @@ void settings_register_defaults(void)
 
         kSettingsRunAutoRetry: @NO,
         kSettingsRunAutoRetryMaxAttempts: @8,
+        kRemoteCallControlledPanicOnWedge: @NO,
 
         kSettingsGravityLiteEnabled: @NO,
         kSettingsGravityLiteDockEnabled: @YES,
@@ -10730,19 +10731,21 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
 @implementation SettingsViewController
 
 // Init-watchdog wedge (RemoteCall.m): an injection deadlocked uninterruptibly
-// and was aborted externally. The device is safe, but no new injection channel
-// can open in this session — the only full recovery is an app restart. Offer
-// it as a guided button instead of making the user force-quit: park the KRW
-// filter (idempotent, takes no locks — the wedged run worker may still hold
-// the actions lock, so the full terminal-cleanup path is NOT safe here) and
-// exit; the leaked KRW sockets survive by design and re-park on next launch.
+// and was aborted externally. The app is safe, but no new injection channel
+// can open in this session — and because the wedged thread belongs to a
+// system process, the device will usually follow with a hardware-watchdog
+// reset within ~2 minutes. Tell the user the truth and offer the guided app
+// restart: park the KRW filter (idempotent, takes no locks — the wedged run
+// worker may still hold the actions lock, so the full terminal-cleanup path
+// is NOT safe here) and exit; the leaked KRW sockets survive by design and
+// re-park on next launch.
 - (void)remoteCallInitWedged:(NSNotification *)note
 {
     (void)note;
     dispatch_async(dispatch_get_main_queue(), ^{
         UIAlertController *alert = [UIAlertController
-            alertControllerWithTitle:@"Injection wedged — device is safe"
-                             message:@"A SpringBoard/launchd injection deadlocked and the init watchdog aborted it before it could freeze the device.\n\nCyanide cannot open new injection channels in this session. Restart the app to continue."
+            alertControllerWithTitle:@"Injection wedged — restart the iPhone soon"
+                             message:@"A SpringBoard/launchd injection deadlocked and the init watchdog aborted it cleanly. Cyanide is safe — but the stuck system-process thread cannot be recovered, so the device will very likely reboot on its own within ~2 minutes.\n\nSave anything open and restart the iPhone proactively; a controlled reboot beats the watchdog's. Then relaunch Cyanide (no new injection channels can open in this session)."
                       preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"Restart Cyanide"
                                                   style:UIAlertActionStyleDestructive
@@ -11335,6 +11338,8 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         @{ @"kind": @"stepper", @"key": kSettingsRunAutoRetryMaxAttempts, @"title": @"Auto-retry attempt cap",
            @"min": @1, @"max": @20, @"default": @8, @"disabled": @(!autoRetryOn),
            @"subtitle": @"Maximum automatic re-runs after the first miss. Enable Auto-retry failed chain runs to change this." },
+        @{ @"key": kRemoteCallControlledPanicOnWedge, @"title": @"Controlled panic on injection wedge",
+           @"subtitle": @"Diagnostic. When an injection wedges, the stuck system-process thread dooms the device to a hardware-watchdog reset within ~2 minutes — which can leave no panic log at all. On instead flushes the log and panics the kernel immediately via KRW: the reboot is instant and always writes a panic-full stamped with the CYANIDE signature address 0x4359414e494445xx. Off keeps the standard abort + restart flow." },
         @{ @"kind": @"settlemode", @"key": kSettingsRemoteSettleMode, @"title": @"Tweak apply speed" },
         @{ @"key": kSettingsVerboseLoggingEnabled, @"title": @"Verbose logging",
            @"subtitle": @"Logs the full RemoteCall internals for every exploit run, tweak apply and Process Viewer action. Off keeps the log readable; turn it on before reproducing an issue, then share the log." },

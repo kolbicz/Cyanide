@@ -155,6 +155,12 @@ bool remote_call_init_wedged(void);
 // guided restart instead of leaving the user with a silently dead channel.
 #define kRemoteCallInitWedgedNotification @"CyanideRemoteCallInitWedged"
 
+// NSUserDefaults key (Launch Option, default NO): when the init watchdog
+// latches a wedge, deliberately panic the kernel via KRW instead of waiting
+// for the logless ~93 s hardware-watchdog reset. Defined here (not in
+// SettingsViewController) because the wedge latch lives in RemoteCall.m.
+#define kRemoteCallControlledPanicOnWedge @"ControlledPanicOnWedge"
+
 // Detach gate: while held (acquire → detach → release), new RemoteCall
 // acquisitions fail-fast — closes the drain-wait → next-acquire race that let
 // a background detach land in the same millisecond as a kill call

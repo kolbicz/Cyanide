@@ -19,8 +19,10 @@
 #import <string.h>
 #import <stdatomic.h>
 #import <time.h>
+#import <fcntl.h>
 
 #import "RemoteCall.h"
+#import "../LogTextView.h"
 #import "../VPhoneDebug.h"
 #import "VM.h"
 #import "Exception.h"
@@ -3698,6 +3700,44 @@ bool remote_call_init_wedged(void) {
     return atomic_load_explicit(&g_rc_init_wedged, memory_order_acquire);
 }
 
+// Controlled panic (Launch Option "Controlled panic on injection wedge").
+// A latched TH_UNINT wedge in a system process means the hardware watchdog
+// resets the device within ~93 s anyway — and if the panic path itself is
+// wedged, that reset writes NO panic log (the logless resets we've seen).
+// Instead of waiting, deliberately fault the kernel RIGHT NOW via KRW:
+// overwrite our own proc's fd_ofiles array pointer with a marker address and
+// issue a harmless fcntl; fp_lookup() dereferences the marker and panics
+// instantly, synchronously, on our own syscall stack — and the panic-full is
+// stamped with the unmistakable signature address below. Logs are flushed
+// first so the run's evidence survives the reset. Off by default.
+#define RC_CONTROLLED_PANIC_MARKER 0x4359414E49444500ULL   // "CYANIDE\0"
+
+static void rc_controlled_panic_on_wedge(void)
+{
+    if (![[NSUserDefaults standardUserDefaults] boolForKey:kRemoteCallControlledPanicOnWedge])
+        return;
+    if (proc_self() == 0) {
+        printf("[RemoteCall] controlled panic requested but proc_self/KRW is "
+               "unavailable — skipping\n");
+        return;
+    }
+    printf("[RemoteCall] CONTROLLED PANIC: wedge latched — overwriting own fd "
+           "table with marker 0x%llx and faulting via fcntl; trading the ~93 s "
+           "logless watchdog freeze for an instant reset WITH a panic log\n",
+           (unsigned long long)RC_CONTROLLED_PANIC_MARKER);
+    log_user("[WARN] Controlled panic: forcing an immediate kernel panic so the "
+             "reset writes a panic log (signature address 0x4359414e494445xx). "
+             "The wedge had already doomed this boot.\n");
+    log_session_flush();
+    usleep(400 * 1000);   // let the fsync and any in-flight log write land
+    kwrite64(proc_self() + off_proc_p_fd + off_filedesc_fd_ofiles,
+             RC_CONTROLLED_PANIC_MARKER);
+    // fp_lookup() dereferences ofiles[fd] on any fd syscall → data abort at
+    // 0x4359414E494445xx. If fd 0 somehow slips through, fd 1 follows.
+    (void)fcntl(0, F_GETFL);
+    (void)fcntl(1, F_GETFL);
+}
+
 static void *rc_init_watchdog_main(void *arg) {
     uint64_t gen = (uint64_t)(uintptr_t)arg;
     for (int i = 0; i < RC_INIT_WATCHDOG_SECONDS; i++) {
@@ -3712,8 +3752,9 @@ static void *rc_init_watchdog_main(void *arg) {
            "wedged (TH_UNINT); external abort: un-arm + drain + guard restore\n",
            RC_INIT_WATCHDOG_SECONDS);
     log_user("[WARN] Injection wedged and was aborted by the init watchdog — the "
-             "device is safe, but this run cannot continue. Restart the app to "
-             "continue (the kernel session is parked).\n");
+             "app is safe, but a system-process thread is stuck uninterruptibly "
+             "and the device will likely reboot on its own within ~2 minutes. "
+             "Save anything open and restart the iPhone proactively.\n");
     dispatch_async(dispatch_get_main_queue(), ^{
         [[NSNotificationCenter defaultCenter]
             postNotificationName:kRemoteCallInitWedgedNotification object:nil];
@@ -3754,6 +3795,11 @@ static void *rc_init_watchdog_main(void *arg) {
 
     // 3: task_exc_guard flags back (no-op if a racing teardown already did it).
     rc_restore_task_exc_guard("init-watchdog");
+
+    // 4 (Launch Option, off by default): the wedge has already doomed this
+    // boot — trade the logless ~93 s watchdog freeze for an instant reset
+    // that writes a panic-full.
+    rc_controlled_panic_on_wedge();
     return NULL;
 }
 
@@ -3766,7 +3812,8 @@ int init_remote_call(const char* process, bool useMigFilterBypass) {
                "aborted by the init watchdog — no new injection channels this "
                "session. Restart the app to continue.\n", process ?: "?");
         log_user("[RUN] Injection channel unavailable: a previous injection "
-                 "wedged (device is safe). Restart Cyanide to continue.\n");
+                 "wedged (the device may reboot on its own — the stuck thread "
+                 "cannot be recovered). Restart Cyanide to continue.\n");
         remote_call_note_init_failure(RemoteCallInitFailureOther, 0);
         return -1;
     }
