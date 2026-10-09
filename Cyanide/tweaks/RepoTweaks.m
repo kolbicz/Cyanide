@@ -18,9 +18,9 @@ extern uint64_t r_nsstr_retained(const char *str);
 
 static const NSUInteger kRepoTweaksMaxRepoBytes = 512 * 1024;
 static const NSUInteger kRepoTweaksMaxScriptBytes = 512 * 1024;
-static NSString * const kRepoTweaksDefaultRepoURL = @"https://0xjohnnydev.github.io/cyanide-repotweaks.json";
+static NSString * const kRepoTweaksDefaultRepoURL = @"https://raw.githubusercontent.com/MinePlayer16/MinePlayer16.github.io/refs/heads/main/repotweaks.json";
 static NSString * const kRepoTweaksDefaultReposSeedVersionKey = @"RepoTweaksDefaultReposSeedVersion";
-static NSString * const kRepoTweaksDefaultReposSeedVersion = @"5";
+static NSString * const kRepoTweaksDefaultReposSeedVersion = @"6";
 static NSString * const kRepoTweaksHideHomeBarMaterialKitAssets =
     @"/System/Library/PrivateFrameworks/MaterialKit.framework/Assets.car";
 
@@ -396,6 +396,48 @@ static NSDictionary *repotweaks_saved_caches(NSUserDefaults *d) {
     return [raw isKindOfClass:NSDictionary.class] ? raw : @{};
 }
 
+// Move a dead source's per-tweak state (enabled, cached script, values,
+// installed version, seen) to its replacement, for every tweak id the dead
+// source had cached. Those keys hash the source URL, so without this an
+// installed tweak would silently drop out when its source URL changes; with
+// it, a tweak the new source still lists (same id) stays installed and is
+// offered as an update when the new version differs. Ids the new source no
+// longer lists are moved too and simply stay unlisted, as before.
+static void repotweaks_migrate_source(NSUserDefaults *d, NSMutableArray *urls,
+                                      NSMutableDictionary *caches,
+                                      NSString *fromURL, NSString *toURL) {
+    if (![urls containsObject:fromURL]) return;
+    NSDictionary *old = [caches[fromURL] isKindOfClass:NSDictionary.class] ? caches[fromURL] : nil;
+    NSArray *tweaks = [old[@"tweaks"] isKindOfClass:NSArray.class] ? old[@"tweaks"] : @[];
+    NSArray<NSString *> *prefixes = @[ @"RepoTweakEnabled_", @"RepoTweakScript_", @"RepoTweakValues_",
+                                       @"RepoTweakInstalledVersion_", @"RepoTweakSeen_" ];
+    NSUInteger moved = 0;
+    for (NSDictionary *tweak in tweaks) {
+        if (![tweak isKindOfClass:NSDictionary.class]) continue;
+        NSString *tweakID = repotweaks_string_or_empty(tweak[@"id"]);
+        if (tweakID.length == 0) continue;
+        NSString *fromKey = repotweaks_storage_key(fromURL, tweakID);
+        NSString *toKey = repotweaks_storage_key(toURL, tweakID);
+        for (NSString *prefix in prefixes) {
+            NSString *oldKey = [prefix stringByAppendingString:fromKey];
+            id value = [d objectForKey:oldKey];
+            if (!value) continue;
+            NSString *newKey = [prefix stringByAppendingString:toKey];
+            if (![d objectForKey:newKey]) [d setObject:value forKey:newKey];
+            [d removeObjectForKey:oldKey];
+            moved++;
+        }
+    }
+    // QuickLoader remembers which source its current script came from.
+    if ([[d stringForKey:@"QuickLoaderSourceRepoURL"] isEqualToString:fromURL])
+        [d setObject:toURL forKey:@"QuickLoaderSourceRepoURL"];
+    [urls removeObject:fromURL];
+    [caches removeObjectForKey:fromURL];
+    if (![urls containsObject:toURL]) [urls addObject:toURL];
+    log_user("[RepoTweaks] Moved source %s -> %s (%lu saved setting(s) carried over)\n",
+             fromURL.UTF8String, toURL.UTF8String, (unsigned long)moved);
+}
+
 void repotweaks_seed_default_repos(void) {
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     NSMutableArray *urls = [[repotweaks_saved_urls(d) mutableCopy] ?: [NSMutableArray array] mutableCopy];
@@ -404,14 +446,16 @@ void repotweaks_seed_default_repos(void) {
     BOOL firstSeedForVersion = ![seedVersion isEqualToString:kRepoTweaksDefaultReposSeedVersion];
     BOOL changed = NO;
 
-    // Migration: the default repo moved from zeroxjf.github.io (now 404) to
-    // 0xjohnnydev.github.io when the author renamed the GitHub handle. Drop the
-    // stale dead URL (and its cache) from existing installs so it stops erroring.
-    NSString *deadRepoURL = @"https://zeroxjf.github.io/cyanide-repotweaks.json";
-    if ([urls containsObject:deadRepoURL]) {
-        [urls removeObject:deadRepoURL];
-        [caches removeObjectForKey:deadRepoURL];
-        changed = YES;
+    // Migration: the default source has moved twice -- zeroxjf.github.io
+    // (renamed, now 404), then 0xjohnnydev.github.io (dead) -- and now lives
+    // in MinePlayer16's repository. Existing installs switch over with their
+    // installed tweaks' state carried across.
+    for (NSString *deadRepoURL in @[ @"https://zeroxjf.github.io/cyanide-repotweaks.json",
+                                     @"https://0xjohnnydev.github.io/cyanide-repotweaks.json" ]) {
+        if ([urls containsObject:deadRepoURL]) {
+            repotweaks_migrate_source(d, urls, caches, deadRepoURL, kRepoTweaksDefaultRepoURL);
+            changed = YES;
+        }
     }
 
     if (firstSeedForVersion && ![urls containsObject:kRepoTweaksDefaultRepoURL]) {
@@ -421,8 +465,8 @@ void repotweaks_seed_default_repos(void) {
 
     if ([urls containsObject:kRepoTweaksDefaultRepoURL] && ![caches[kRepoTweaksDefaultRepoURL] isKindOfClass:NSDictionary.class]) {
         caches[kRepoTweaksDefaultRepoURL] = @{
-            @"repoName": @"cyanide-repotweaks",
-            @"author": @"0xjohnnydev",
+            @"repoName": @"MinePlayer16's Repository",
+            @"author": @"MinePlayer16/Iggy05",
             @"tweaks": @[],
         };
         changed = YES;

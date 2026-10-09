@@ -380,8 +380,9 @@ Cyanide includes two JavaScript tweak runners contributed by Iggy05:
 - **QuickLoader** imports a local `.js` file from Files and exposes declared
   `@param` values as settings rows.
 - **RepoTweaks Store** imports HTTPS JSON repositories and downloads selected
-  JavaScript tweaks from those sources. Cyanide seeds the zeroxjf source at
-  `https://zeroxjf.github.io/cyanide-repotweaks.json` by default.
+  JavaScript tweaks from those sources. Cyanide seeds MinePlayer16's source at
+  `https://raw.githubusercontent.com/MinePlayer16/MinePlayer16.github.io/refs/heads/main/repotweaks.json`
+  by default.
 
 Only run scripts and repositories you trust; JavaScript tweaks can call Cyanide
 RemoteCall helpers and may destabilize SpringBoard if the script is buggy.

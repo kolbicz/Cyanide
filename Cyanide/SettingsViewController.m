@@ -174,7 +174,7 @@ static NSDictionary *settings_repotweaks_caches(void)
     return [raw isKindOfClass:NSDictionary.class] ? (NSDictionary *)raw : @{};
 }
 
-static NSString * const kSettingsDefaultRepoURL = @"https://0xjohnnydev.github.io/cyanide-repotweaks.json";
+static NSString * const kSettingsDefaultRepoURL = @"https://raw.githubusercontent.com/MinePlayer16/MinePlayer16.github.io/refs/heads/main/repotweaks.json";
 
 static NSArray<NSString *> *settings_repotweaks_urls(void)
 {
