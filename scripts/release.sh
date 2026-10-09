@@ -414,12 +414,18 @@ CHANGELOG_PENDING_SKIP_LOG="$CHANGELOG_SKIP_LOG" \
 #     CURRENT_PROJECT_VERSION. build.sh writes build/Cyanide-${VERSION}.ipa and
 #     refreshes a build/Cyanide.ipa symlink. We build *before* committing so the
 #     actual IPA size can be baked into source.json in the same commit.
+# Release configuration, the same as ./build.sh -- what gets tested on device
+# is what ships. scripts/build.sh on its own defaults to Debug (-O0, ~2x the
+# code, slower), which would ship differently timed exploit/RemoteCall code
+# than every tested build. Logs and backtrace symbols are the same in both
+# (no #if DEBUG code; a plain build is not stripped). CONFIG=Debug overrides.
+export CONFIG="${CONFIG:-Release}"
 ./scripts/build.sh
 
 # Read bundle versions from the just-built app. CFBundleShortVersionString
 # drives the IPA filename and tag; CFBundleVersion must advance too so iOS/Xcode
 # never keeps a stale installed bundle around under the same internal build.
-APP_PATH="$PWD/build/DerivedData/Build/Products/Debug-iphoneos/Cyanide.app"
+APP_PATH="$PWD/build/DerivedData/Build/Products/${CONFIG}-iphoneos/Cyanide.app"
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Info.plist" 2>/dev/null || true)
 if [ -z "$VERSION" ]; then
     echo "error: could not read CFBundleShortVersionString from $APP_PATH/Info.plist" >&2
