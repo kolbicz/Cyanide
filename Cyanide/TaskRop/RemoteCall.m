@@ -3738,6 +3738,78 @@ static void rc_controlled_panic_on_wedge(void)
     (void)fcntl(1, F_GETFL);
 }
 
+// ---- wedge autopsy -------------------------------------------------------
+// The init watchdog gives us a forensic window nothing else can: KRW is live,
+// the wedged thread is frozen mid-deadlock, and the log flushes before any
+// reset. Walk BOTH sides of the hijack — our own task (the wedged init worker
+// is a Cyanide thread) and the injection target — and dump per thread: ctid,
+// kernel-stack pointer, the saved user→kernel entry pc (machine.contextData,
+// fixed arm_saved_state64 layout: pc at +0x100), and a scan of the kernel
+// stack for return addresses into kernel text. PCs are logged absolute and
+// kernel-base-relative so they symbolize offline against the 22F76/T8140
+// kernelcache — THIS is how we learn which lock the wedge dies holding.
+// Read-only, every read sanity-gated, always runs (not just when the
+// controlled-panic option is on): the chain log survives the reboot either
+// way once flushed.
+#define RC_AUTOPSY_MAX_THREADS 16
+#define RC_AUTOPSY_MAX_LR      8
+#define RC_AUTOPSY_STACK_BYTES 0x4000   // arm64 kernel stack is 16 KB
+
+static void rc_autopsy_task_threads(const char *label, uint64_t taskAddr)
+{
+    if (!taskAddr || !kaddr_is_mapped(taskAddr, 8)) {
+        printf("[AUTOPSY] %s: task address unavailable/unmapped — skipped\n", label);
+        return;
+    }
+    // Stack return addresses live in the relocated text exec region, which
+    // sits ~17 MB above the kernelcache base — a 64 MB window from base
+    // covers both without needing the exact exec slide.
+    uint64_t lo = g_kernel_base, hi = g_kernel_base + 0x4000000ULL;
+    printf("[AUTOPSY] %s task=0x%llx (kernel base 0x%llx)\n",
+           label, (unsigned long long)taskAddr, (unsigned long long)g_kernel_base);
+    uint64_t first = kread64(taskAddr + off_task_threads_next);
+    uint64_t th = first;
+    for (int i = 0; i < RC_AUTOPSY_MAX_THREADS && th && kaddr_is_mapped(th, 8); i++) {
+        uint32_t ctid = kread32(th + off_thread_ctid);
+        uint64_t kstack = thread_get_kstackptr(th);
+        uint64_t ctx = kread_ptr(th + off_thread_machine_contextdata);
+        uint64_t entrypc = 0;
+        if (ctx && kaddr_is_mapped(ctx, 0x108 + 8))
+            entrypc = kread64(ctx + 0x100);   // arm_saved_state64.pc
+        printf("[AUTOPSY] %s thread[%d] kaddr=0x%llx ctid=%u kstack=0x%llx entryPC=0x%llx\n",
+               label, i, (unsigned long long)th, ctid,
+               (unsigned long long)kstack, (unsigned long long)entrypc);
+        if (kstack && kaddr_is_mapped(kstack, 8)) {
+            uint64_t stop = (kstack & ~(uint64_t)(RC_AUTOPSY_STACK_BYTES - 1))
+                            + RC_AUTOPSY_STACK_BYTES;
+            int found = 0;
+            for (uint64_t p = kstack; p + 8 <= stop && found < RC_AUTOPSY_MAX_LR; p += 8) {
+                uint64_t v = kread64(p);
+                if (v >= lo && v < hi) {
+                    printf("[AUTOPSY]   lr[%d] abs=0x%llx (base+0x%llx)\n",
+                           found++, (unsigned long long)v,
+                           (unsigned long long)(v - lo));
+                }
+            }
+            if (found == 0)
+                printf("[AUTOPSY]   (no kernel-text return addresses on stack)\n");
+        }
+        uint64_t next = kread64(th + off_thread_task_threads_next);
+        if (next == th || next == first) break;   // cycle guard
+        th = next;
+    }
+}
+
+static void rc_wedge_autopsy(void)
+{
+    printf("[AUTOPSY] wedge autopsy: dumping threads on both sides of the "
+           "hijack (target = the 'Found <name> in kernel' line above)\n");
+    rc_autopsy_task_threads("self", task_self());
+    rc_autopsy_task_threads("target", g_RC_taskAddr);
+    log_session_flush();
+    printf("[AUTOPSY] wedge autopsy done\n");
+}
+
 static void *rc_init_watchdog_main(void *arg) {
     uint64_t gen = (uint64_t)(uintptr_t)arg;
     for (int i = 0; i < RC_INIT_WATCHDOG_SECONDS; i++) {
@@ -3795,6 +3867,12 @@ static void *rc_init_watchdog_main(void *arg) {
 
     // 3: task_exc_guard flags back (no-op if a racing teardown already did it).
     rc_restore_task_exc_guard("init-watchdog");
+
+    // 3b: forensic autopsy — the wedged thread is frozen mid-deadlock and KRW
+    // is live; dump both tasks' thread stacks (read-only) so the chain log
+    // shows exactly which lock the wedge dies holding. Runs regardless of the
+    // controlled-panic option; the flush makes it survive the reset.
+    rc_wedge_autopsy();
 
     // 4 (Launch Option, off by default): the wedge has already doomed this
     // boot — trade the logless ~93 s watchdog freeze for an instant reset
