@@ -47,6 +47,7 @@ static BOOL catalog_repo_script_requires_native_bridge(NSString *rawScript)
 
 + (NSArray<Package *> *)repoPackages
 {
+    if (!repotweaks_sources_enabled()) return @[];
     repotweaks_seed_default_repos();
 
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];

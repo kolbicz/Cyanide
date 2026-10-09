@@ -438,6 +438,8 @@ void repotweaks_seed_default_repos(void) {
         [d synchronize];
     }
 
+    // Seeding itself is local; only the fetch below needs Repo sources on.
+    if (!repotweaks_sources_enabled()) return;
     NSDictionary *repo = repotweaks_saved_caches(d)[kRepoTweaksDefaultRepoURL];
     NSArray *tweaks = [repo isKindOfClass:NSDictionary.class] ? repo[@"tweaks"] : nil;
     if (firstSeedForVersion || ![tweaks isKindOfClass:NSArray.class] || tweaks.count == 0) {
@@ -764,6 +766,12 @@ void repotweaks_refresh_repo(NSString *repoURL, void (^completion)(BOOL success,
     void (^finish)(BOOL, NSString *) = ^(BOOL success, NSString *message) {
         if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(success, message ?: @""); });
     };
+    // Every source fetch goes through here: nothing connects while Repo
+    // sources is off.
+    if (!repotweaks_sources_enabled()) {
+        finish(NO, @"Repo sources are turned off.");
+        return;
+    }
     if (!repotweaks_is_https_url(repoURL)) {
         finish(NO, @"Repository URL must be HTTPS.");
         return;
@@ -863,6 +871,10 @@ void repotweaks_download_script(NSString *repoURL, NSString *tweakId, NSString *
     void (^finish)(BOOL) = ^(BOOL success) {
         if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(success); });
     };
+    if (!repotweaks_sources_enabled()) {
+        finish(NO);
+        return;
+    }
     if (![tweakId isKindOfClass:NSString.class] || tweakId.length == 0 ||
         !repotweaks_is_https_url(scriptURL)) {
         finish(NO);
@@ -968,6 +980,14 @@ bool repotweaks_stop_in_session(void) {
 #pragma mark - Update detection
 
 NSString * const RepoTweaksDidRefreshNotification = @"RepoTweaksDidRefreshNotification";
+NSString * const kRepoSourcesEnabledKey = @"RepoSourcesEnabled";
+NSString * const RepoSourcesEnabledDidChangeNotification = @"RepoSourcesEnabledDidChangeNotification";
+
+bool repotweaks_sources_enabled(void) {
+    // Unset (fresh install, or before settings_register_defaults ran) is On.
+    id value = [[NSUserDefaults standardUserDefaults] objectForKey:kRepoSourcesEnabledKey];
+    return value ? [value boolValue] : true;
+}
 
 NSString *repotweaks_installed_version_key(NSString *repoURL, NSString *tweakId) {
     return [NSString stringWithFormat:@"RepoTweakInstalledVersion_%@", repotweaks_storage_key(repoURL, tweakId)];
@@ -1089,6 +1109,10 @@ NSUInteger repotweaks_available_update_count(void) {
 }
 
 void repotweaks_refresh_all_sources(void (^completion)(void)) {
+    if (!repotweaks_sources_enabled()) {
+        if (completion) completion();
+        return;
+    }
     repotweaks_seed_default_repos();
     NSArray<NSString *> *urls = repotweaks_saved_urls([NSUserDefaults standardUserDefaults]);
     if (urls.count == 0) {

@@ -147,11 +147,22 @@
                                              selector:@selector(didReceiveCompleteNotification:)
                                                  name:kSettingsActionsDidCompleteNotification
                                                object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(didReceiveStatusNotification:)
+                                                 name:kSettingsApplyStatusDidChangeNotification
+                                               object:nil];
 }
 
 - (void)dealloc
 {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)didReceiveStatusNotification:(NSNotification *)note
+{
+    if (self.completed) return;
+    NSString *text = note.userInfo[kSettingsApplyStatusTextKey];
+    self.statusLabel.text = text.length ? text : @"Running — stay here until complete.";
 }
 
 - (void)didReceiveCompleteNotification:(NSNotification *)note

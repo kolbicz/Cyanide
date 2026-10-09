@@ -56,11 +56,31 @@ static const CGFloat kMargin = 20.0;
         [self.stack.widthAnchor    constraintEqualToAnchor:self.scrollView.frameLayoutGuide.widthAnchor constant:-kMargin * 2],
     ]];
 
+    [self buildContent];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(repoSourcesEnabledDidChange:)
+                                                 name:RepoSourcesEnabledDidChangeNotification
+                                               object:nil];
+}
+
+- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
+
+- (void)buildContent
+{
+    for (UIView *v in self.stack.arrangedSubviews) [v removeFromSuperview];
     [self.stack addArrangedSubview:[self buildHero]];
     [self.stack addArrangedSubview:[self buildQuickActions]];
     [self.stack addArrangedSubview:[self buildWhatsNew]];
     [self.stack addArrangedSubview:[self buildGetStarted]];
     [self.stack addArrangedSubview:[self buildCommunity]];
+}
+
+// The Sources card and "Add a Source" follow the Repo sources switch.
+- (void)repoSourcesEnabledDidChange:(NSNotification *)note
+{
+    if (!self.isViewLoaded) return;
+    [self buildContent];
 }
 
 - (void)viewWillAppear:(BOOL)animated
@@ -199,10 +219,17 @@ static const CGFloat kMargin = 20.0;
                                        icon:@"shippingbox.fill"
                                       color:UIColor.systemBlueColor
                                         sel:@selector(openPackagesTab)]];
-    [row addArrangedSubview:[self actionCard:@"Sources"
-                                       icon:@"tray.and.arrow.down.fill"
-                                      color:UIColor.systemGreenColor
-                                        sel:@selector(openSourcesTab)]];
+    if (repotweaks_sources_enabled()) {
+        [row addArrangedSubview:[self actionCard:@"Sources"
+                                           icon:@"tray.and.arrow.down.fill"
+                                          color:UIColor.systemGreenColor
+                                            sel:@selector(openSourcesTab)]];
+    } else {
+        [row addArrangedSubview:[self actionCard:@"Settings"
+                                           icon:@"gear"
+                                          color:UIColor.systemGrayColor
+                                            sel:@selector(openSettingsTab)]];
+    }
 
     return row;
 }
@@ -309,11 +336,13 @@ static const CGFloat kMargin = 20.0;
                                          icon:@"bolt.fill"
                                         color:UIColor.systemOrangeColor
                                           sel:@selector(openQuickLoader)]];
-    [s addArrangedSubview:[self bigActionButton:@"Add a Source"
-                                          sub:@"Browse and install JS tweaks from repos"
-                                         icon:@"plus.circle.fill"
-                                        color:UIColor.systemGreenColor
-                                          sel:@selector(openSourcesTab)]];
+    if (repotweaks_sources_enabled()) {
+        [s addArrangedSubview:[self bigActionButton:@"Add a Source"
+                                              sub:@"Browse and install JS tweaks from repos"
+                                             icon:@"plus.circle.fill"
+                                            color:UIColor.systemGreenColor
+                                              sel:@selector(openSourcesTab)]];
+    }
     return card;
 }
 
@@ -607,8 +636,8 @@ static const CGFloat kMargin = 20.0;
             ql.quickLoaderStandalone = YES;
             // QuickLoader has no package page to return to. It belongs with the
             // JS-tweak sources flow, so the back button goes to the Sources front
-            // page instead of back to Home.
-            ql.installerReturnTabTitle = @"Sources";
+            // page instead of back to Home -- unless Sources is switched off.
+            ql.installerReturnTabTitle = repotweaks_sources_enabled() ? @"Sources" : @"Home";
             ql.installerReturnResetsTargetTab = YES;
             [nav pushViewController:ql animated:NO];
             tab.selectedIndex = i;
@@ -619,10 +648,20 @@ static const CGFloat kMargin = 20.0;
 
 - (void)openSourcesTab
 {
+    [self openTabNamed:@"Sources"];
+}
+
+- (void)openSettingsTab
+{
+    [self openTabNamed:@"Settings"];
+}
+
+- (void)openTabNamed:(NSString *)title
+{
     UITabBarController *tab = self.tabBarController;
     if (!tab) return;
     for (NSUInteger i = 0; i < tab.viewControllers.count; i++) {
-        if ([tab.viewControllers[i].tabBarItem.title isEqualToString:@"Sources"]) {
+        if ([tab.viewControllers[i].tabBarItem.title isEqualToString:title]) {
             tab.selectedIndex = i;
             return;
         }

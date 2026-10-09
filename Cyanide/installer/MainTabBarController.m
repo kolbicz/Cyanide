@@ -24,6 +24,9 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
 @property (nonatomic, copy) NSArray<NSLayoutConstraint *> *popupBarConstraints;
 @property (nonatomic, strong) NSTimer *sourcesRefreshTimer;
 @property (nonatomic, strong) UIView *refreshBanner;
+// Kept while the Repo sources switch hides it, so turning it back on restores
+// the same tab.
+@property (nonatomic, strong) UINavigationController *sourcesNav;
 @end
 
 @implementation MainTabBarController
@@ -53,6 +56,10 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(sourcesDidRefresh:)
                                                  name:RepoTweaksDidRefreshNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(repoSourcesEnabledDidChange:)
+                                                 name:RepoSourcesEnabledDidChangeNotification
                                                object:nil];
 
     [self updateSourcesBadge];
@@ -117,11 +124,12 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
 
     HomeViewController *home = [[HomeViewController alloc] init];
     SourcesViewController *sources = [[SourcesViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+    self.sourcesNav = [self cy_tabNavWithRoot:sources title:@"Sources" symbol:@"tray.and.arrow.down.fill"];
 
     NSMutableArray<UIViewController *> *tabs = [NSMutableArray array];
     [tabs addObject:[self cy_tabNavWithRoot:home    title:@"Home"     symbol:@"house.fill"]];
     if (pkgRoot) [tabs addObject:[self cy_tabNavWithRoot:pkgRoot title:@"Packages" symbol:@"shippingbox.fill"]];
-    [tabs addObject:[self cy_tabNavWithRoot:sources title:@"Sources"  symbol:@"tray.and.arrow.down.fill"]];
+    if (repotweaks_sources_enabled()) [tabs addObject:self.sourcesNav];
     if (logRoot) [tabs addObject:[self cy_tabNavWithRoot:logRoot title:@"Log"      symbol:@"terminal"]];
     if (setRoot) [tabs addObject:[self cy_tabNavWithRoot:setRoot title:@"Settings" symbol:@"gear"]];
 
@@ -225,8 +233,52 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
     [self showRefreshSuccessThenHide];
 }
 
+- (void)repoSourcesEnabledDidChange:(NSNotification *)note
+{
+    BOOL enabled = repotweaks_sources_enabled();
+    if (!enabled) {
+        // Repo packages are no longer listed, so nothing queued for them
+        // should be applied either.
+        PackageQueue *queue = [PackageQueue sharedQueue];
+        NSArray<Package *> *queued = [queue.queuedInstalls arrayByAddingObjectsFromArray:queue.queuedUninstalls];
+        for (Package *pkg in queued) {
+            if (pkg.kind == PackageInstallKindRepoTweak) [queue removePackage:pkg];
+        }
+        [self.refreshBanner removeFromSuperview];
+        self.refreshBanner = nil;
+    }
+    [self updateSourcesTabVisibility];
+    [self updateSourcesBadge];
+    if (enabled) [self refreshSourcesIfNeeded];
+}
+
+- (void)updateSourcesTabVisibility
+{
+    if (!self.sourcesNav) return;
+    BOOL enabled = repotweaks_sources_enabled();
+    NSMutableArray<UIViewController *> *tabs = [self.viewControllers mutableCopy];
+    BOOL present = [tabs containsObject:self.sourcesNav];
+    if (enabled == present) return;
+
+    UIViewController *selected = self.selectedViewController;
+    if (enabled) {
+        // Back to its usual place, right after Packages.
+        NSUInteger insertAt = 1;
+        for (NSUInteger i = 0; i < tabs.count; i++) {
+            if ([tabs[i].tabBarItem.title isEqualToString:@"Packages"]) { insertAt = i + 1; break; }
+        }
+        [tabs insertObject:self.sourcesNav atIndex:MIN(insertAt, tabs.count)];
+    } else {
+        [tabs removeObject:self.sourcesNav];
+        if (selected == self.sourcesNav) selected = tabs.firstObject;
+    }
+    [self setViewControllers:tabs animated:NO];
+    if (selected) self.selectedViewController = selected;
+}
+
 - (void)refreshSourcesIfNeeded
 {
+    if (!repotweaks_sources_enabled()) return;
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     NSTimeInterval last = [d doubleForKey:kSourcesLastRefreshKey];
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];

@@ -153,6 +153,11 @@ extern NSString * const kSettingsExperimentalTweaksEnabled;
 extern NSString * const kSettingsLogUploadEnabled;
 
 extern NSString * const kSettingsActionsDidCompleteNotification;
+// Live status text for the progress screen during a long apply step;
+// userInfo[kSettingsApplyStatusTextKey] is the text, or absent to restore the
+// default status line.
+extern NSString * const kSettingsApplyStatusDidChangeNotification;
+extern NSString * const kSettingsApplyStatusTextKey;
 extern NSString * const kSettingsActionsDidCompleteSuccessKey;
 extern NSString * const kSettingsActionsDidCompleteMessageKey;
 

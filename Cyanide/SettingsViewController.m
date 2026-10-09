@@ -2962,29 +2962,66 @@ static void settings_progress(NSUInteger *step, NSUInteger total, const char *me
 // main thread (which stays free — the blocked thread is SpringBoard's, in another
 // process) and logs an elapsed-time line every second so the user sees progress.
 // The first tick is at +1s, so steps that finish quickly produce no heartbeat.
+//
+// A step that can report real progress calls settings_apply_heartbeat_update()
+// with the new text: it is logged at once and mirrored to the progress
+// screen's status line, and the elapsed-time tick only resumes (counting from
+// that update) when the step then goes quiet for a second or more.
+NSString * const kSettingsApplyStatusDidChangeNotification = @"SettingsApplyStatusDidChangeNotification";
+NSString * const kSettingsApplyStatusTextKey = @"text";
+
 static dispatch_source_t g_apply_heartbeat_timer;   // main-queue only
-static NSTimeInterval     g_apply_heartbeat_start;
+static NSTimeInterval     g_apply_heartbeat_since;  // when the label was set
+static NSTimeInterval     g_apply_heartbeat_last;   // last line logged
 static NSString          *g_apply_heartbeat_label;
+
+static void settings_post_apply_status(NSString *text)   // main queue
+{
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:kSettingsApplyStatusDidChangeNotification
+                      object:nil
+                    userInfo:text ? @{ kSettingsApplyStatusTextKey: text } : nil];
+}
 
 static void settings_apply_heartbeat_start(NSString *label)
 {
     NSString *msg = label.length ? label : @"Working";
     dispatch_async(dispatch_get_main_queue(), ^{
         if (g_apply_heartbeat_timer) return;   // one at a time
-        g_apply_heartbeat_start = [NSDate timeIntervalSinceReferenceDate];
+        NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+        g_apply_heartbeat_since = now;
+        g_apply_heartbeat_last = now;
         g_apply_heartbeat_label = msg;
+        settings_post_apply_status(msg);
         dispatch_source_t t = dispatch_source_create(
             DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
         dispatch_source_set_timer(t,
             dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
             (uint64_t)(1.0 * NSEC_PER_SEC), (uint64_t)(0.2 * NSEC_PER_SEC));
         dispatch_source_set_event_handler(t, ^{
-            int secs = (int)([NSDate timeIntervalSinceReferenceDate]
-                             - g_apply_heartbeat_start + 0.5);
+            NSTimeInterval tick = [NSDate timeIntervalSinceReferenceDate];
+            if (tick - g_apply_heartbeat_last < 0.95) return;
+            g_apply_heartbeat_last = tick;
+            int secs = (int)(tick - g_apply_heartbeat_since + 0.5);
             log_user("      … %s (%ds)\n", g_apply_heartbeat_label.UTF8String, secs);
+            settings_post_apply_status([NSString stringWithFormat:@"%@ (%ds)", g_apply_heartbeat_label, secs]);
         });
         g_apply_heartbeat_timer = t;
         dispatch_resume(t);
+    });
+}
+
+static void settings_apply_heartbeat_update(NSString *label)
+{
+    if (!label.length) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!g_apply_heartbeat_timer) return;
+        NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+        g_apply_heartbeat_since = now;
+        g_apply_heartbeat_last = now;
+        g_apply_heartbeat_label = label;
+        log_user("      %s\n", label.UTF8String);
+        settings_post_apply_status(label);
     });
 }
 
@@ -2995,6 +3032,7 @@ static void settings_apply_heartbeat_stop(void)
         dispatch_source_cancel(g_apply_heartbeat_timer);
         g_apply_heartbeat_timer = nil;
         g_apply_heartbeat_label = nil;
+        settings_post_apply_status(nil);   // back to the default status line
     });
 }
 
@@ -6813,6 +6851,39 @@ static BOOL settings_key_affects_package_state(NSString *key)
     return [settings_rc_backed_tweak_keys() containsObject:key];
 }
 
+// Repo sources switch. Turning it off stops repo JS already running in
+// SpringBoard (RepoTweaks, and QuickLoader when its script came from a
+// source); the installer tabs listen for the notification to hide Sources
+// and repo packages and to drop queued repo packages.
+static void settings_repo_sources_enabled_changed(BOOL enabled)
+{
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    log_user("[SETTINGS] Repo sources %s.\n", enabled ? "enabled" : "disabled");
+    if (!enabled) {
+        BOOL stopQuickLoader = quickloader_is_driven_by_repo_tweak();
+        settings_mark_tweak_applied(kSettingsRepoTweaksEnabled, NO);
+        if (stopQuickLoader) settings_mark_tweak_applied(kSettingsQuickLoaderEnabled, NO);
+        if (g_springboard_rc_ready) {
+            dispatch_async(dispatch_get_global_queue(0, 0), ^{
+                @synchronized (settings_rc_lock()) {
+                    if (!g_springboard_rc_ready) return;
+                    repotweaks_stop_in_session();
+                    if (stopQuickLoader) quickloader_stop_in_session();
+                }
+            });
+        }
+    } else {
+        // Re-enabled: a repo-driven QuickLoader script runs again on next Apply.
+        if ([d boolForKey:kSettingsRepoTweaksEnabled]) settings_mark_tweak_needs_apply(kSettingsRepoTweaksEnabled);
+        if ([d boolForKey:kSettingsQuickLoaderEnabled] && quickloader_is_driven_by_repo_tweak())
+            settings_mark_tweak_needs_apply(kSettingsQuickLoaderEnabled);
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] postNotificationName:RepoSourcesEnabledDidChangeNotification object:nil];
+    });
+    settings_notify_package_queue_changed_async();
+}
+
 static void settings_schedule_live_apply_for_key(NSString *key)
 {
     if (settings_cleanup_in_progress()) {
@@ -7138,6 +7209,9 @@ static void settings_schedule_live_apply_for_key(NSString *key)
     }
     if (settings_key_is_quickloader(key)) {
         BOOL repoTweaksKey = [key isEqualToString:kSettingsRepoTweaksEnabled];
+        BOOL blockedByRepoSources = !repotweaks_sources_enabled() &&
+                                    (repoTweaksKey || quickloader_is_driven_by_repo_tweak());
+        if (blockedByRepoSources) return;
         if ([d boolForKey:key] && g_springboard_rc_ready) {
             dispatch_async(dispatch_get_global_queue(0, 0), ^{
                 @synchronized (settings_rc_lock()) {
@@ -7378,6 +7452,7 @@ void settings_register_defaults(void)
         kSettingsFastLockXLiteRetryInterval: @0.3,
 
         kSettingsRunAutoRetry: @NO,
+        kRepoSourcesEnabledKey: @YES,
         kSettingsRunAutoRetryMaxAttempts: @8,
         kRemoteCallControlledPanicOnWedge: @NO,
 
@@ -7593,8 +7668,12 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             BOOL runStageStrip = settings_stagestrip_install_allowed() && settings_enabled_tweak_should_run(d, kSettingsStageStripEnabled, springBoardPendingOnly);
             BOOL runFastLockXLite = settings_fastlockx_lite_install_allowed() && settings_enabled_tweak_should_run(d, kSettingsFastLockXLiteEnabled, springBoardPendingOnly);
             BOOL runGravityLite = settings_enabled_tweak_should_run(d, kSettingsGravityLiteEnabled, springBoardPendingOnly);
-            BOOL runQuickLoader = settings_enabled_tweak_should_run(d, kSettingsQuickLoaderEnabled, springBoardPendingOnly);
-            BOOL runRepoTweaks = settings_enabled_tweak_should_run(d, kSettingsRepoTweaksEnabled, springBoardPendingOnly);
+            // Repo sources switched off: skip repo tweaks, and QuickLoader too
+            // while its script is one installed from a source.
+            BOOL repoSourcesOn = repotweaks_sources_enabled();
+            BOOL runQuickLoader = settings_enabled_tweak_should_run(d, kSettingsQuickLoaderEnabled, springBoardPendingOnly) &&
+                                  (repoSourcesOn || !quickloader_is_driven_by_repo_tweak());
+            BOOL runRepoTweaks = repoSourcesOn && settings_enabled_tweak_should_run(d, kSettingsRepoTweaksEnabled, springBoardPendingOnly);
             BOOL stagePausesThemerLive = settings_themer_dynamic_updates_blocked_by_stage(d);
             if (stagePausesThemerLive) {
                 settings_note_themer_stage_conflict(YES);
@@ -8039,11 +8118,24 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                     // SBCustomizer has finished moving icons.
                     if (runLayoutExtras) {
                         settings_progress(&step, total, "Applying Home Layout Extras to final icon layout");
-                        // HSSCALE's first icon resize parks ~5s behind SpringBoard's
-                        // grid relayout; tick a heartbeat so the screen isn't frozen.
-                        settings_apply_heartbeat_start(@"Resizing icons — SpringBoard is laying out the new grid");
+                        // HSSCALE first waits ~5s behind SpringBoard's grid relayout
+                        // (elapsed-time heartbeat), then reports page by page.
+                        NSTimeInterval layoutStart = [NSDate timeIntervalSinceReferenceDate];
+                        uint64_t layoutTrips = r_perf_round_trips();
+                        settings_apply_heartbeat_start(@"Waiting for SpringBoard to lay out the new grid");
+                        darksword_layout_set_progress_handler(^(int pagesDone, int pagesTotal,
+                                                                int iconsDone, int iconsTotal) {
+                            settings_apply_heartbeat_update(pagesDone == 0
+                                ? [NSString stringWithFormat:@"Resizing %d icons on %d pages", iconsTotal, pagesTotal]
+                                : [NSString stringWithFormat:@"Resizing icons: page %d of %d (%d of %d)",
+                                                             pagesDone, pagesTotal, iconsDone, iconsTotal]);
+                        });
                         bool ok = settings_apply_layout_extras_from_defaults_locked(d);
+                        darksword_layout_set_progress_handler(nil);
                         settings_apply_heartbeat_stop();
+                        log_user("      Home Layout Extras took %.1fs (%llu remote calls).\n",
+                                 [NSDate timeIntervalSinceReferenceDate] - layoutStart,
+                                 (unsigned long long)(r_perf_round_trips() - layoutTrips));
                         settings_mark_tweak_applied(kSettingsLayoutExtrasEnabled, ok);
                         printf("[SETTINGS] Layout extras result=%d\n", ok);
                         log_user("%s Home Layout Extras %s.\n",
@@ -11345,6 +11437,8 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
            @"subtitle": @"Logs the full RemoteCall internals for every exploit run, tweak apply and Process Viewer action. Off keeps the log readable; turn it on before reproducing an issue, then share the log." },
         @{ @"key": kSettingsAutoRunKexploit,    @"title": @"Auto-run kexploit on launch" },
         @{ @"key": kSettingsRunSandboxEscape,   @"title": @"Sandbox escape (escape_sbx_demo2)" },
+        @{ @"key": kRepoSourcesEnabledKey,      @"title": @"Repo sources",
+           @"subtitle": @"Off hides the Sources tab and repo packages, stops refreshing sources, and skips repo tweaks when applying (running ones are stopped). Local QuickLoader .js files still work." },
         @{ @"key": kSettingsKeepAlive,          @"title": @"Keep app alive in background",
            @"subtitle": @"Required for app-driven live tweaks to persist while minimized, including StatBar receiving fresh live data." },
     ];
@@ -15174,7 +15268,8 @@ void cyanide_present_contact(UIViewController *host)
         config.text = @"No tweak loaded";
         config.textProperties.font = [UIFont systemFontOfSize:17.0 weight:UIFontWeightMedium];
         config.textProperties.color = UIColor.tertiaryLabelColor;
-        config.secondaryText = @"Select a .js file or install from Sources";
+        config.secondaryText = repotweaks_sources_enabled() ? @"Select a .js file or install from Sources"
+                                                            : @"Select a .js file to run";
         config.secondaryTextProperties.color = UIColor.tertiaryLabelColor;
         config.textToSecondaryTextVerticalPadding = 2.0;
         NSDirectionalEdgeInsets m = config.directionalLayoutMargins;
@@ -15411,6 +15506,10 @@ void cyanide_present_contact(UIViewController *host)
     settings_note_package_configuration_changed(key);
     if ([key isEqualToString:kSettingsKeepAlive]) {
         ds_keepalive_apply_enabled(sender.isOn);
+        return;
+    }
+    if ([key isEqualToString:kRepoSourcesEnabledKey]) {
+        settings_repo_sources_enabled_changed(sender.isOn);
         return;
     }
     if ([key isEqualToString:kSettingsVerboseLoggingEnabled]) {

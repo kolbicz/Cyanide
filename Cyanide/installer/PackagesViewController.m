@@ -63,6 +63,10 @@ static NSString * const kSearchCellID = @"SearchPkgCell";
                                              selector:@selector(catalogDidChange:)
                                                  name:RepoTweaksDidRefreshNotification
                                                object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(catalogDidChange:)
+                                                 name:RepoSourcesEnabledDidChangeNotification
+                                               object:nil];
 }
 
 - (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }

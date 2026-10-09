@@ -8,6 +8,13 @@
 #import <stdbool.h>
 #import <Foundation/Foundation.h>
 
+// User switch for the whole repo feature (Settings > Launch Options): the
+// Sources tab, repo packages, background source refresh, and running repo
+// tweaks in Apply. Default On. Local QuickLoader .js files are unaffected.
+extern NSString * const kRepoSourcesEnabledKey;
+extern NSString * const RepoSourcesEnabledDidChangeNotification;
+bool repotweaks_sources_enabled(void);
+
 // Runs all enabled tweaks during the RUN 4/4 sequence
 bool repotweaks_apply_in_session(void);
 
