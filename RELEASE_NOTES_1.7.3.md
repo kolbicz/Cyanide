@@ -19,7 +19,7 @@ Faster tweaks, fewer reboots on A18 / M4, and a run that recovers on its own.
 ## Fixes
 
 - If the injection into SpringBoard gets stuck, Cyanide now notices, makes the device safe and offers a Restart Cyanide button instead of hanging. A new diagnostic option, "Controlled panic on injection wedge", restarts the device right away with a clearly labelled panic log, for bug reports.
-- Process Viewer: a process that couldn't be checked is no longer shown as gone, and a Quit or Force Quit that failed is no longer reported as successful.
+- Process Viewer: a process that couldn't be checked is no longer shown as gone, and a Force Quit that failed is no longer reported as successful.
 - Process Viewer: fixed a rare way reading a process's CPU usage could reboot the device while one of its threads was exiting.
 - Process Viewer: after a failed Force Quit, the background helper it uses now shuts down after 10 idle seconds, as it already did after a successful one.
 - Process Viewer: fixed CPU % sometimes using the wrong source after re-calibrating.
