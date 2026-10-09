@@ -259,11 +259,16 @@ static BOOL sbl_extract_zip(NSData *zip, NSString *destination, NSError **error)
         p += 46 + nameLen + extraLen + commentLen;
         if ([name hasSuffix:@"/"]) continue;
 
-        if (localOff + 30 > len || sbl_le32(b + localOff) != 0x04034b50) continue;
-        uint16_t localNameLen = sbl_le16(b + localOff + 26);
-        uint16_t localExtraLen = sbl_le16(b + localOff + 28);
-        NSUInteger dataOff = localOff + 30 + localNameLen + localExtraLen;
-        if (dataOff + compSize > len) continue;
+        // Bounds in NSUInteger, subtraction form: localOff is a uint32_t read
+        // from the archive, and `localOff + 30` in 32-bit arithmetic wraps
+        // (0xfffffff0 + 30 == 14), passing the check before an out-of-bounds
+        // read. len >= 22 here, so len - 30 needs its own guard.
+        NSUInteger lo = localOff;
+        if (len < 30 || lo > len - 30 || sbl_le32(b + lo) != 0x04034b50) continue;
+        uint16_t localNameLen = sbl_le16(b + lo + 26);
+        uint16_t localExtraLen = sbl_le16(b + lo + 28);
+        NSUInteger dataOff = lo + 30 + localNameLen + localExtraLen;   // < 2^33, no wrap
+        if (dataOff > len || compSize > len - dataOff) continue;
 
         NSString *outPath = sbl_safe_output_path(destination, name);
         if (!outPath) continue;
