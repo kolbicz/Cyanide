@@ -293,94 +293,135 @@ static bool rc_icon_is_resizable(uint64_t icon)
     return false;
 }
 
-// Resize one live SBIconView's image immediately. setIconImageInfo: on the layout
+// Eager resize of the live SBIconViews. setIconImageInfo: on the layout
 // configuration alone is LAZY — a view only adopts the new size on its next
 // natural relayout (a page swipe, or a touch on the dock). Setting it on the view
 // itself plus -_updateAfterManualIconImageInfoChangeInvalidatingLayout: forces
 // the change to show now. Done synchronously (waitUntilDone:YES) so the resize is
 // applied before the run reports done. Only the app-icon classes above — never
 // widgets/pods/folders.
-static void rc_refresh_icon_view(uint64_t iconView, uint64_t clsInv,
-                                 const RC_SBIconImageInfo *info)
+//
+// Cost is what makes this slow: every remote message is a RemoteCall round
+// trip. Building a fresh NSInvocation per call costs ~9, so the two
+// invocations are built once per run with their argument already set, and each
+// icon only swaps the target and performs (4 round trips instead of ~18). The
+// resizable-class check is cached per class.
+typedef struct {
+    uint64_t clsInv;
+    RC_SBIconImageInfo info;
+    uint64_t invInfo;     // retained, -setIconImageInfo: with info set
+    uint64_t invUpdate;   // retained, -_updateAfterManual...: with YES set
+    bool built;
+    uint64_t selIcon, selSetTgt, selPerform, selInvoke;
+    struct { uint64_t cls; bool resizable; } classCache[16];
+    int nClassCache;
+} RCResizeCtx;
+
+static void rc_resize_ctx_init(RCResizeCtx *ctx, uint64_t clsInv, const RC_SBIconImageInfo *info)
 {
-    if (!iconView) return;
-    uint64_t icon = rc_safe_msg(iconView, "icon", 0, 0, 0, 0);
-    if (!icon) return;
-    if (!rc_icon_is_resizable(icon)) return;
-
-    uint64_t selSig     = r_sel("methodSignatureForSelector:");
-    uint64_t selWithSig = r_sel("invocationWithMethodSignature:");
-    uint64_t selSetTgt  = r_sel("setTarget:");
-    uint64_t selSetSel  = r_sel("setSelector:");
-    uint64_t selSetArg  = r_sel("setArgument:atIndex:");
-    uint64_t selInvoke  = r_sel("invoke");
-    uint64_t selPerform = r_sel("performSelectorOnMainThread:withObject:waitUntilDone:");
-    uint64_t selSetInfo = r_sel("setIconImageInfo:");
-    uint64_t selUpdate  = r_sel("_updateAfterManualIconImageInfoChangeInvalidatingLayout:");
-
-    uint64_t sig = r_msg(iconView, selSig, selSetInfo, 0, 0, 0);
-    if (sig) {
-        uint64_t inv = r_msg(clsInv, selWithSig, sig, 0, 0, 0);
-        if (inv) {
-            r_msg(inv, selSetTgt, iconView, 0, 0, 0);
-            r_msg(inv, selSetSel, selSetInfo, 0, 0, 0);
-            uint64_t mem = do_remote_call_stable(R_TIMEOUT, "calloc", 1, 32, 0, 0, 0, 0, 0, 0);
-            if (mem) {
-                remote_write(mem, info, sizeof(*info));
-                r_msg(inv, selSetArg, mem, 2, 0, 0);
-                r_msg(inv, selPerform, selInvoke, 0, 1, 0);
-                r_free(mem);
-            }
-        }
-    }
-
-    uint64_t sigU = r_msg(iconView, selSig, selUpdate, 0, 0, 0);
-    if (sigU) {
-        uint64_t invU = r_msg(clsInv, selWithSig, sigU, 0, 0, 0);
-        if (invU) {
-            r_msg(invU, selSetTgt, iconView, 0, 0, 0);
-            r_msg(invU, selSetSel, selUpdate, 0, 0, 0);
-            uint64_t one = do_remote_call_stable(R_TIMEOUT, "calloc", 1, 8, 0, 0, 0, 0, 0, 0);
-            if (one) {
-                uint8_t yes = 1;
-                remote_write(one, &yes, 1);
-                r_msg(invU, selSetArg, one, 2, 0, 0);
-                r_msg(invU, selPerform, selInvoke, 0, 1, 0);
-                r_free(one);
-            }
-        }
-    }
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->clsInv     = clsInv;
+    ctx->info       = *info;
+    ctx->selIcon    = r_sel("icon");
+    ctx->selSetTgt  = r_sel("setTarget:");
+    ctx->selPerform = r_sel("performSelectorOnMainThread:withObject:waitUntilDone:");
+    ctx->selInvoke  = r_sel("invoke");
 }
 
-// Walk one SBIconListView's children on SpringBoard's main thread and resize each
-// SBIconView. Returns how many were touched. The walk marshals every hop to main
-// (r_msg_main) — doing it on the RemoteCall worker thread crashes SpringBoard
-// (EXC_ARM_PAC_FAIL). No per-icon sleep.
-static int rc_refresh_list_view(uint64_t listView, uint64_t clsInv,
-                                const RC_SBIconImageInfo *info)
+static void rc_resize_ctx_destroy(RCResizeCtx *ctx)
 {
-    if (!listView) return 0;
-    uint64_t clsIconView = r_class("SBIconView");
-    if (!clsIconView) return 0;
+    uint64_t selRel = r_sel("release");
+    if (ctx->invInfo)   r_msg(ctx->invInfo,   selRel, 0, 0, 0, 0);
+    if (ctx->invUpdate) r_msg(ctx->invUpdate, selRel, 0, 0, 0, 0);
+    ctx->invInfo = ctx->invUpdate = 0;
+}
 
-    uint64_t subs = r_msg_main(listView, r_sel("subviews"), 0, 0, 0, 0);
-    if (!subs) return 0;
-    r_msg_main(subs, r_sel("retain"), 0, 0, 0, 0);
-    uint64_t n = r_msg_main(subs, r_sel("count"), 0, 0, 0, 0);
-    if (n > 512) n = 512;
-
-    uint64_t selObjAt = r_sel("objectAtIndex:");
-    uint64_t selKind  = r_sel("isKindOfClass:");
-    int touched = 0;
-    for (uint64_t i = 0; i < n; i++) {
-        uint64_t v = r_msg_main(subs, selObjAt, i, 0, 0, 0);
-        if (!v) continue;
-        if (!r_msg_main(v, selKind, clsIconView, 0, 0, 0)) continue;
-        rc_refresh_icon_view(v, clsInv, info);
-        touched++;
+static bool rc_icon_is_resizable_cached(RCResizeCtx *ctx, uint64_t icon)
+{
+    if (!icon) return false;
+    uint64_t cls = r_dlsym_call(R_TIMEOUT, "object_getClass", icon, 0, 0, 0, 0, 0, 0, 0);
+    if (!cls) return false;
+    for (int i = 0; i < ctx->nClassCache; i++) {
+        if (ctx->classCache[i].cls == cls) return ctx->classCache[i].resizable;
     }
-    r_msg_main(subs, r_sel("release"), 0, 0, 0, 0);
-    return touched;
+    bool resizable = rc_icon_is_resizable(icon);
+    if (ctx->nClassCache < (int)(sizeof(ctx->classCache) / sizeof(ctx->classCache[0]))) {
+        ctx->classCache[ctx->nClassCache].cls = cls;
+        ctx->classCache[ctx->nClassCache].resizable = resizable;
+        ctx->nClassCache++;
+    }
+    return resizable;
+}
+
+// Returns true when the view was resized (a resizable app icon).
+static bool rc_resize_icon_view(RCResizeCtx *ctx, uint64_t iconView)
+{
+    if (!iconView) return false;
+    uint64_t icon = r_msg(iconView, ctx->selIcon, 0, 0, 0, 0);
+    if (!rc_icon_is_resizable_cached(ctx, icon)) return false;
+
+    if (!ctx->built) {
+        ctx->built = true;
+        uint8_t yes = 1;
+        ctx->invInfo   = r_invocation_retained(iconView, "setIconImageInfo:",
+                                               &ctx->info, sizeof(ctx->info));
+        ctx->invUpdate = r_invocation_retained(iconView,
+                                               "_updateAfterManualIconImageInfoChangeInvalidatingLayout:",
+                                               &yes, sizeof(yes));
+    }
+    if (ctx->invInfo) {
+        r_msg(ctx->invInfo, ctx->selSetTgt, iconView, 0, 0, 0);
+        r_msg(ctx->invInfo, ctx->selPerform, ctx->selInvoke, 0, 1, 0);
+    }
+    if (ctx->invUpdate) {
+        r_msg(ctx->invUpdate, ctx->selSetTgt, iconView, 0, 0, 0);
+        r_msg(ctx->invUpdate, ctx->selPerform, ctx->selInvoke, 0, 1, 0);
+    }
+    return ctx->invInfo != 0;
+}
+
+// The SBIconViews of one SBIconListView. The subviews snapshot is fetched and
+// retained on main (calling -subviews off-main races the live view tree:
+// EXC_ARM_PAC_FAIL), then read on the worker thread; the caller releases
+// *retainedSubs once done with the views.
+static int rc_list_view_icon_views(uint64_t listView, uint64_t *out, int cap,
+                                   uint64_t *retainedSubs)
+{
+    *retainedSubs = 0;
+    uint64_t clsIconView = r_class("SBIconView");
+    if (!listView || !clsIconView) return 0;
+    uint64_t subs = r_msg2_main_retained(listView, "subviews");
+    if (!subs) return 0;
+    *retainedSubs = subs;
+    return r_array_items_of_class(subs, clsIconView, out, cap);
+}
+
+// Resize every icon view of one list view. Returns how many were resized.
+static int rc_refresh_list_view(RCResizeCtx *ctx, uint64_t listView)
+{
+    enum { ICON_CAP = 256 };
+    uint64_t views[ICON_CAP];
+    uint64_t subs = 0;
+    int n = rc_list_view_icon_views(listView, views, ICON_CAP, &subs);
+    int resized = 0;
+    for (int i = 0; i < n; i++) {
+        if (rc_resize_icon_view(ctx, views[i])) resized++;
+    }
+    if (subs) r_msg(subs, r_sel("release"), 0, 0, 0, 0);
+    return resized;
+}
+
+static DSLayoutProgressHandler g_ds_layout_progress;
+
+void darksword_layout_set_progress_handler(DSLayoutProgressHandler handler)
+{
+    g_ds_layout_progress = [handler copy];
+}
+
+static void rc_report_progress(int pagesDone, int pagesTotal, int iconsDone, int iconsTotal)
+{
+    DSLayoutProgressHandler handler = g_ds_layout_progress;
+    if (handler) handler(pagesDone, pagesTotal, iconsDone, iconsTotal);
 }
 
 static uint64_t rc_icon_controller(void)
@@ -404,7 +445,78 @@ static uint64_t rc_dock_list_view(uint64_t ctrl, uint64_t mgr)
     return ctrl ? rc_safe_msg(ctrl, "dockListView", 0, 0, 0, 0) : 0;
 }
 
+// The home-screen pages straight from the root folder view
+// (rootFolderController -> folderView -> iconListViews): a handful of round
+// trips. The fallback below walks every view of every SpringBoard window with
+// main-thread hops (~20 round trips each, thousands of views), which was most
+// of the resize time. Returns 0 when the direct path isn't available.
+static int rc_root_page_list_views(uint64_t mgr, uint64_t *out, int cap)
+{
+    uint64_t clsListView = r_class("SBIconListView");
+    if (!mgr || !clsListView) return 0;
+    uint64_t rootFC = rc_safe_msg(mgr, "rootFolderController", 0, 0, 0, 0);
+    if (!rootFC) rootFC = rc_safe_msg(mgr, "_rootFolderController", 0, 0, 0, 0);
+    if (!rootFC) return 0;
+
+    uint64_t selResponds = r_sel("respondsToSelector:");
+    uint64_t folderView = 0;
+    static const char *kFolderViewSels[] = { "folderView", "rootFolderView", "contentView", NULL };
+    for (int i = 0; kFolderViewSels[i] && !folderView; i++) {
+        uint64_t sel = r_sel(kFolderViewSels[i]);
+        if (sel && r_msg(rootFC, selResponds, sel, 0, 0, 0))
+            folderView = r_msg_main(rootFC, sel, 0, 0, 0, 0);
+    }
+    uint64_t selLists = r_sel("iconListViews");
+    if (!folderView || !selLists || !r_msg(folderView, selResponds, selLists, 0, 0, 0)) return 0;
+
+    uint64_t lists = r_msg2_main_retained(folderView, "iconListViews");
+    if (!lists) return 0;
+    int n = r_array_items_of_class(lists, clsListView, out, cap);
+    r_release(lists);
+    return n;
+}
+
+// Home pages (and possibly the dock and other list views, on the fallback
+// path) for the resize and the iOS 26 transform.
+static int rc_collect_home_list_views(uint64_t mgr, uint64_t *out, int cap, const char *tag)
+{
+    int n = rc_root_page_list_views(mgr, out, cap);
+    if (n > 0) {
+        printf("[%s] %d page list view(s) via root folder view\n", tag, n);
+        return n;
+    }
+    uint64_t clsListView = r_class("SBIconListView");
+    n = sb_collect_views_in_windows_main(clsListView, out, cap);
+    if (n == 0 && mgr) {
+        uint64_t rootFC = rc_safe_msg(mgr, "rootFolderController", 0, 0, 0, 0);
+        if (!rootFC) rootFC = rc_safe_msg(mgr, "_rootFolderController", 0, 0, 0, 0);
+        if (rootFC) {
+            uint64_t rv = rc_safe_msg(rootFC, "view", 0, 0, 0, 0);
+            if (rv) n = sb_collect_views_main(rv, clsListView, out, cap);
+        }
+    }
+    printf("[%s] %d list view(s) via window walk (fallback)\n", tag, n);
+    return n;
+}
+
+// The spacing setters below take relayout=false when called from
+// darksword_layout_apply_in_session, which forces one relayout after both:
+// each forced relayout is a synchronous full grid relayout on SpringBoard's
+// main thread, and the home and dock insets don't need one each.
+static bool rc_home_spacing(double exL, double exR, double exT, double exB, bool relayout);
+static bool rc_dock_spacing(double extraLeft, double extraRight, bool relayout);
+
 bool darksword_layout_home_spacing_in_session(double exL, double exR, double exT, double exB)
+{
+    return rc_home_spacing(exL, exR, exT, exB, true);
+}
+
+bool darksword_layout_dock_spacing_in_session(double extraLeft, double extraRight)
+{
+    return rc_dock_spacing(extraLeft, extraRight, true);
+}
+
+static bool rc_home_spacing(double exL, double exR, double exT, double exB, bool relayout)
 {
     printf("[HSSPACE] ios=%d left=%.2f right=%.2f top=%.2f bottom=%.2f\n",
            ds_layout_ios_major(), exL, exR, exT, exB);
@@ -423,11 +535,11 @@ bool darksword_layout_home_spacing_in_session(double exL, double exR, double exT
         .right  = 27.0  + exR,
     };
     bool ok = rc_set_insets_on(cfg, clsInv, &ins);
-    if (ok) rc_force_manager_relayout(mgr, clsInv);
+    if (ok && relayout) rc_force_manager_relayout(mgr, clsInv);
     return ok;
 }
 
-bool darksword_layout_dock_spacing_in_session(double extraLeft, double extraRight)
+static bool rc_dock_spacing(double extraLeft, double extraRight, bool relayout)
 {
     printf("[DOCKSPACE] ios=%d extraL=%.2f extraR=%.2f\n",
            ds_layout_ios_major(), extraLeft, extraRight);
@@ -449,7 +561,7 @@ bool darksword_layout_dock_spacing_in_session(double extraLeft, double extraRigh
         .right  = 16.0 + extraRight,
     };
     bool ok = rc_set_insets_on(dockCfg, clsInv, &ins);
-    if (ok) rc_force_manager_relayout(mgr, clsInv);
+    if (ok && relayout) rc_force_manager_relayout(mgr, clsInv);
     return ok;
 }
 
@@ -474,29 +586,49 @@ bool darksword_layout_home_scale_in_session(double scale)
 
     // Set the size on the root layout config (async, for persistence + future
     // relayouts), then eagerly resize the live icon views so the change shows
-    // during the run. The walk runs on SpringBoard's main thread; right after the
-    // SBCustomizer arrange it waits for SpringBoard to finish its 12-page grid
-    // relayout — that wait is the icon re-render itself.
+    // during the run. Right after the SBCustomizer arrange, the first
+    // main-thread hop below waits for SpringBoard to finish its grid relayout
+    // and the icon re-render this triggers.
     rc_set_icon_info_on(cfg, clsInv, &info, /*async=*/true);
 
-    uint64_t clsListView = r_class("SBIconListView");
-    enum { LV_CAP = 64 };
+    enum { LV_CAP = 64, ICON_CAP = 1024 };
     uint64_t lvs[LV_CAP];
-    int nlv = sb_collect_views_in_windows_main(clsListView, lvs, LV_CAP);
-    if (nlv == 0) {
-        uint64_t rootFC = rc_safe_msg(mgr, "rootFolderController", 0, 0, 0, 0);
-        if (!rootFC) rootFC = rc_safe_msg(mgr, "_rootFolderController", 0, 0, 0, 0);
-        if (rootFC) {
-            uint64_t rv = rc_safe_msg(rootFC, "view", 0, 0, 0, 0);
-            if (rv) nlv = sb_collect_views_main(rv, clsListView, lvs, LV_CAP);
-        }
-    }
-    int touched = 0;
-    for (int i = 0; i < nlv; i++) {
+    int nlv = rc_collect_home_list_views(mgr, lvs, LV_CAP, "HSSCALE");
+
+    // Pass 1: gather every page's icon views, so progress can be shown as
+    // "N of total" rather than as elapsed time.
+    uint64_t subsHeld[LV_CAP];
+    int pageFirst[LV_CAP + 1];
+    static uint64_t views[ICON_CAP];
+    int npages = 0, nviews = 0;
+    for (int i = 0; i < nlv && npages < LV_CAP; i++) {
         if (rc_safe_msg(lvs[i], "isDock", 0, 0, 0, 0)) continue;
-        touched += rc_refresh_list_view(lvs[i], clsInv, &info);
+        uint64_t subs = 0;
+        int got = rc_list_view_icon_views(lvs[i], views + nviews, ICON_CAP - nviews, &subs);
+        if (!subs) continue;
+        subsHeld[npages] = subs;
+        pageFirst[npages] = nviews;
+        nviews += got;
+        npages++;
     }
-    printf("[HSSCALE] resized %d live icon view(s)\n", touched);
+    pageFirst[npages] = nviews;
+    rc_report_progress(0, npages, 0, nviews);
+
+    // Pass 2: resize, reporting after each page.
+    RCResizeCtx ctx;
+    rc_resize_ctx_init(&ctx, clsInv, &info);
+    int resized = 0;
+    for (int p = 0; p < npages; p++) {
+        for (int i = pageFirst[p]; i < pageFirst[p + 1]; i++) {
+            if (rc_resize_icon_view(&ctx, views[i])) resized++;
+        }
+        rc_report_progress(p + 1, npages, pageFirst[p + 1], nviews);
+    }
+    rc_resize_ctx_destroy(&ctx);
+    uint64_t selRel = r_sel("release");
+    for (int p = 0; p < npages; p++) r_msg(subsHeld[p], selRel, 0, 0, 0, 0);
+
+    printf("[HSSCALE] resized %d of %d live icon view(s) on %d page(s)\n", resized, nviews, npages);
     return true;
 }
 
@@ -525,7 +657,9 @@ bool darksword_layout_dock_scale_in_session(double scale)
     // the live dock icon views so it shows during the run.
     if (dockCfg) rc_set_icon_info_on(dockCfg, clsInv, &info, /*async=*/true);
 
-    int touched = rc_refresh_list_view(dock, clsInv, &info);
+    RCResizeCtx ctx;
+    rc_resize_ctx_init(&ctx, clsInv, &info);
+    int touched = rc_refresh_list_view(&ctx, dock);
     if (touched == 0) {
         uint64_t clsListView = r_class("SBIconListView");
         enum { LV_CAP = 64 };
@@ -533,9 +667,10 @@ bool darksword_layout_dock_scale_in_session(double scale)
         int nlv = sb_collect_views_in_windows_main(clsListView, lvs, LV_CAP);
         for (int i = 0; i < nlv; i++) {
             if (rc_safe_msg(lvs[i], "isDock", 0, 0, 0, 0))
-                touched += rc_refresh_list_view(lvs[i], clsInv, &info);
+                touched += rc_refresh_list_view(&ctx, lvs[i]);
         }
     }
+    rc_resize_ctx_destroy(&ctx);
     printf("[DOCKSCALE] resized %d live dock icon view(s)\n", touched);
     return true;
 }
@@ -581,15 +716,11 @@ static bool darksword_layout_apply_in_session_ios26(double exL, double exR, doub
 
     enum { LV_CAP = 64 };
     uint64_t lvs[LV_CAP];
-    int nlv = sb_collect_views_in_windows_main(clsListView, lvs, LV_CAP);
-    if (nlv == 0 && mgr) {
-        uint64_t rootFC = rc_safe_msg(mgr, "rootFolderController", 0, 0, 0, 0);
-        if (!rootFC) rootFC = rc_safe_msg(mgr, "_rootFolderController", 0, 0, 0, 0);
-        if (rootFC) {
-            uint64_t rv = rc_safe_msg(rootFC, "view", 0, 0, 0, 0);
-            if (rv) nlv = sb_collect_views_main(rv, clsListView, lvs, LV_CAP);
-        }
-    }
+    int nlv = rc_collect_home_list_views(mgr, lvs, LV_CAP - 1, "LAYOUT26");
+    // The direct path returns only the pages; the dock is transformed too.
+    bool haveDock = false;
+    for (int i = 0; i < nlv; i++) if (lvs[i] == dockLV) haveDock = true;
+    if (dockLV && !haveDock) lvs[nlv++] = dockLV;
     printf("[LAYOUT26] discovered %d SBIconListView(s)\n", nlv);
     if (nlv == 0) return false;
 
@@ -733,9 +864,13 @@ bool darksword_layout_apply_in_session(double exL, double exR, double exT, doubl
         return darksword_layout_apply_in_session_ios26(exL, exR, exT, exB,
                                                         dockExL, dockExR, homeScale, dockScale);
     }
-    bool ok = true;
-    ok &= darksword_layout_home_spacing_in_session(exL, exR, exT, exB);
-    ok &= darksword_layout_dock_spacing_in_session(dockExL, dockExR);
+    bool homeOK = rc_home_spacing(exL, exR, exT, exB, false);
+    bool dockOK = rc_dock_spacing(dockExL, dockExR, false);
+    if (homeOK || dockOK) {
+        uint64_t mgr = rc_icon_manager_for(rc_icon_controller());
+        rc_force_manager_relayout(mgr, r_class("NSInvocation"));
+    }
+    bool ok = homeOK && dockOK;
     if (homeScale > 0.0) ok &= darksword_layout_home_scale_in_session(homeScale);
     if (dockScale > 0.0) ok &= darksword_layout_dock_scale_in_session(dockScale);
     return ok;

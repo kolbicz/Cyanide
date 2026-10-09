@@ -28,6 +28,13 @@ bool darksword_layout_dock_spacing_in_session(double extraLeft, double extraRigh
 bool darksword_layout_home_scale_in_session(double scale);
 bool darksword_layout_dock_scale_in_session(double scale);
 
+// Progress of the home-screen icon resize (iOS 18 path), called on the
+// applying thread: once with pagesDone=0 after the pages are found, then after
+// each page. iconsDone/iconsTotal count icon views.
+typedef void (^DSLayoutProgressHandler)(int pagesDone, int pagesTotal,
+                                        int iconsDone, int iconsTotal);
+void darksword_layout_set_progress_handler(DSLayoutProgressHandler handler);
+
 // Convenience: applies all four if their values are meaningful. scale<=0
 // means "leave alone".
 bool darksword_layout_apply_in_session(double extraLeft,

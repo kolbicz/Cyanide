@@ -83,13 +83,11 @@ static void patch_dock(uint64_t iconCtrl, int dockIcons)
 {
     uint64_t mgr = try_msg0(iconCtrl, "iconManager");
     if (!mgr) { printf("[SBC] dock: nil iconManager\n"); return; }
-    usleep(50000);
 
     uint64_t dock = try_msg0(mgr, "dockListView");
     if (!dock) dock = try_msg0(iconCtrl, "dockListView");
     if (!dock) { printf("[SBC] dock: nil dockListView\n"); return; }
     disable_list_autofit(dock, "dockListView");
-    usleep(50000);
 
     uint64_t model = try_msg0(dock, "model");
     if (!model) model = try_msg0(dock, "iconListModel");
@@ -97,23 +95,18 @@ static void patch_dock(uint64_t iconCtrl, int dockIcons)
     if (model && r_responds(model, "gridSize") && r_responds(model, "setGridSize:")) {
         uint64_t oldGrid = r_msg2(model, "gridSize", 0, 0, 0, 0) & 0xffffffffULL;
         uint64_t newGrid = (oldGrid & 0xffff0000ULL) | (uint64_t)dockIcons;
-        usleep(50000);
         r_msg2(model, "setGridSize:", newGrid, 0, 0, 0);
         printf("[SBC] dock: gridSize 0x%llx -> 0x%llx\n", oldGrid, newGrid);
     }
-    usleep(50000);
 
     uint64_t layout = try_msg0(dock, "layout");
     if (layout) {
-        usleep(50000);
         uint64_t cfg = try_msg0(layout, "layoutConfiguration");
         if (cfg && r_responds(cfg, "setNumberOfPortraitColumns:")) {
-            usleep(50000);
             r_msg2(cfg, "setNumberOfPortraitColumns:", (uint64_t)dockIcons, 0, 0, 0);
             printf("[SBC] dock: portraitColumns -> %d\n", dockIcons);
         }
     }
-    usleep(50000);
 
     if (r_responds(dock, "setNeedsLayout")) {
         uint64_t selSetNeedsLayout = r_sel("setNeedsLayout");
@@ -427,9 +420,44 @@ static bool auto_add_app_to_dock(uint64_t iconCtrl, int dockIcons, const char *b
 // Hide the app-name labels on iOS 17. The layout configs expose no label toggle
 // there (issue #7: the provider-level setShowsLabels: works on iOS 18 but is a
 // no-op on 17); the lever is per icon view — SBIconView responds to
-// -setLabelHidden:. Walk every home-screen SBIconView on the main thread (a
-// worker-thread view walk PAC-crashes SpringBoard) and hide its label. Called
-// after the grid/arrange so moved or rebuilt views are covered.
+// -setLabelHidden:. Called after the grid/arrange so moved or rebuilt views are
+// covered, and from the Hide Labels live loop.
+//
+// Same fast path as the HSSCALE icon resize: only -subviews is fetched on the
+// main thread (a worker-thread view walk PAC-crashes SpringBoard); the retained
+// snapshot is read on the worker thread, and the mutation is one prebuilt
+// -setLabelHidden: invocation retargeted per view plus a direct
+// performSelectorOnMainThread: of -_updateLabel. ~5 round trips per icon
+// instead of ~5 main-thread hops (~115).
+static int set_icon_views_label_hidden(uint64_t listView, uint64_t wantHidden,
+                                       uint64_t *invHidden, int *changed)
+{
+    uint64_t clsIconView = r_class("SBIconView");
+    uint64_t selIsHidden = r_sel("isLabelHidden");
+    uint64_t selUpdate   = r_sel("_updateLabel");
+    if (!r_is_objc_ptr(listView) || !clsIconView) return 0;
+
+    uint64_t subs = r_msg2_main_retained(listView, "subviews");
+    if (!subs) return 0;
+    uint64_t views[512];
+    int n = r_array_items_of_class(subs, clsIconView, views, 512);
+    for (int i = 0; i < n; i++) {
+        uint64_t v = views[i];
+        // BOOL return: only the low byte is defined.
+        if ((r_msg(v, selIsHidden, 0, 0, 0, 0) & 0xff) == wantHidden) continue;   // already right
+        if (!*invHidden) {
+            uint8_t arg = wantHidden ? 1 : 0;
+            *invHidden = r_invocation_retained(v, "setLabelHidden:", &arg, sizeof(arg));
+            if (!*invHidden) break;
+        }
+        r_invocation_invoke_main(*invHidden, v);
+        r_perform_main(v, selUpdate, 0, true);
+        (*changed)++;
+    }
+    r_release(subs);
+    return n;
+}
+
 static int hide_home_icon_labels(uint64_t iconCtrl)
 {
     uint64_t mgr = try_msg0(iconCtrl, "iconManager");
@@ -440,37 +468,20 @@ static int hide_home_icon_labels(uint64_t iconCtrl)
         printf("[SBC] labels: no list-view accessors\n");
         return 0;
     }
-    uint64_t clsIconView = r_class("SBIconView");
-    uint64_t selHidden   = r_sel("setLabelHidden:");
-    uint64_t selIsHidden = r_sel("isLabelHidden");
-    uint64_t selUpdate   = r_sel("_updateLabel");
-    uint64_t selSubs     = r_sel("subviews");
-    uint64_t selCount    = r_sel("count");
-    uint64_t selObjAt    = r_sel("objectAtIndex:");
-    uint64_t selKind     = r_sel("isKindOfClass:");
-    if (!clsIconView || !selHidden) { printf("[SBC] labels: SBIconView/setLabelHidden: missing\n"); return 0; }
+    if (!r_class("SBIconView") || !r_sel("setLabelHidden:")) {
+        printf("[SBC] labels: SBIconView/setLabelHidden: missing\n");
+        return 0;
+    }
 
     uint64_t pages = r_msg2_main(rootFolder, "iconListViewCount", 0, 0, 0, 0);
     if (pages > 64) pages = 64;
     int hidden = 0;
+    uint64_t invHidden = 0;
     for (uint64_t p = 0; p < pages; p++) {
         uint64_t lv = r_msg2_main(rootFolder, "iconListViewAtIndex:", p, 0, 0, 0);
-        if (!r_is_objc_ptr(lv)) continue;
-        uint64_t subs = r_msg_main(lv, selSubs, 0, 0, 0, 0);
-        if (!subs) continue;
-        r_msg_main(subs, r_sel("retain"), 0, 0, 0, 0);
-        uint64_t n = r_msg_main(subs, selCount, 0, 0, 0, 0);
-        if (n > 512) n = 512;
-        for (uint64_t i = 0; i < n; i++) {
-            uint64_t v = r_msg_main(subs, selObjAt, i, 0, 0, 0);
-            if (!v || !r_msg_main(v, selKind, clsIconView, 0, 0, 0)) continue;
-            if (r_msg_main(v, selIsHidden, 0, 0, 0, 0)) continue;   // already hidden
-            r_msg_main(v, selHidden, 1, 0, 0, 0);
-            r_msg_main(v, selUpdate, 0, 0, 0, 0);
-            hidden++;
-        }
-        r_msg_main(subs, r_sel("release"), 0, 0, 0, 0);
+        set_icon_views_label_hidden(lv, 1, &invHidden, &hidden);
     }
+    r_release(invHidden);
     if (hidden) printf("[SBC] labels: hid %d icon view(s)\n", hidden);
     return hidden;
 }
@@ -745,13 +756,11 @@ static bool set_shows_labels_for_location(uint64_t provider, const char *locName
     if (!loc || !r_responds(provider, "layoutForIconLocation:")) return false;
     uint64_t layout = r_msg2(provider, "layoutForIconLocation:", loc, 0, 0, 0);
     if (!layout) { printf("[SBC] labels: no layout for %s\n", locName); return false; }
-    usleep(50000);
     uint64_t cfg = try_msg0(layout, "layoutConfiguration");
     if (!r_is_objc_ptr(cfg) || !r_responds(cfg, "setShowsLabels:")) {
         printf("[SBC] labels: %s cfg lacks setShowsLabels:\n", locName);
         return false;
     }
-    usleep(50000);
     r_msg2(cfg, "setShowsLabels:", shows ? 1 : 0, 0, 0, 0);
     printf("[SBC] labels: showsLabels=%s for %s\n", shows ? "YES" : "NO", locName);
     return true;
@@ -779,12 +788,10 @@ static int set_dock_icon_labels(uint64_t iconCtrl, bool show, bool mayForceShowL
 {
     uint64_t mgr = try_msg0(iconCtrl, "iconManager");
     if (!mgr) { printf("[SBC] dock labels: nil iconManager\n"); return 0; }
-    usleep(50000);
 
     // Durable lever first, so a later relayout keeps the setting.
     uint64_t provider = try_msg0(mgr, "listLayoutProvider");
     if (provider) {
-        usleep(50000);
         set_shows_labels_for_location(provider, "SBIconLocationDock", show);
     }
 
@@ -793,76 +800,59 @@ static int set_dock_icon_labels(uint64_t iconCtrl, bool show, bool mayForceShowL
     if (!r_is_objc_ptr(dock)) { printf("[SBC] dock labels: nil dockListView\n"); return 0; }
 
     uint64_t clsIconView = r_class("SBIconView");
-    uint64_t selHidden   = r_sel("setLabelHidden:");
     uint64_t selIsHidden = r_sel("isLabelHidden");
-    uint64_t selUpdate   = r_sel("_updateLabel");
-    uint64_t selSubs     = r_sel("subviews");
-    uint64_t selCount    = r_sel("count");
-    uint64_t selObjAt    = r_sel("objectAtIndex:");
-    uint64_t selKind     = r_sel("isKindOfClass:");
-    if (!clsIconView || !selHidden) {
+    if (!clsIconView || !r_sel("setLabelHidden:")) {
         printf("[SBC] dock labels: SBIconView/setLabelHidden: missing\n");
         return 0;
     }
 
-    uint64_t subs = r_msg_main(dock, selSubs, 0, 0, 0, 0);
-    if (!subs) return 0;
-    r_msg_main(subs, r_sel("retain"), 0, 0, 0, 0);
-    uint64_t n = r_msg_main(subs, selCount, 0, 0, 0, 0);
-    if (n > 64) n = 64;   // a dock holds a handful of icons; cap a wild read
-    uint64_t wantHidden = show ? 0 : 1;
-    int changed = 0;
-    int probed = 0;
-    for (uint64_t i = 0; i < n; i++) {
-        uint64_t v = r_msg_main(subs, selObjAt, i, 0, 0, 0);
-        if (!v || !r_msg_main(v, selKind, clsIconView, 0, 0, 0)) continue;
+    // Report what the first dock icon actually exposes. Clearing labelHidden
+    // on four real icon views changed nothing on iOS 17 (chain log
+    // 20261004-113402), and the guess that fits both that and Hide Labels
+    // working is that _updateLabel computes "_shouldShowLabel && !labelHidden"
+    // -- NO for a dock icon either way. Print the pieces rather than keep
+    // inferring them. Runs before the relabel pass below, so a forced YES
+    // gives that pass something to build.
+    uint64_t subs = r_msg2_main_retained(dock, "subviews");
+    uint64_t first = 0;
+    if (subs) r_array_items_of_class(subs, clsIconView, &first, 1);
+    r_release(subs);
+    if (first) {
+        uint64_t v = first;
+        uint64_t selShouldShow = r_sel("_shouldShowLabel");
+        int responds = selShouldShow ? r_responds(v, "_shouldShowLabel") : 0;
+        uint64_t shouldShow = responds ? r_msg_main(v, selShouldShow, 0, 0, 0, 0) : 2;
+        printf("[SBC] dock labels: probe labelHidden=%llu _shouldShowLabel=%s"
+               " labelView=%d _labelView=%d iconLabelView=%d alpha=%d\n",
+               (unsigned long long)r_msg_main(v, selIsHidden, 0, 0, 0, 0),
+               responds ? (shouldShow ? "YES" : "NO") : "absent",
+               r_responds(v, "labelView"),
+               r_responds(v, "_labelView"),
+               r_responds(v, "iconLabelView"),
+               r_responds(v, "setIconLabelAlpha:"));
 
-        // Report what the first dock icon actually exposes. Clearing
-        // labelHidden on four real icon views changed nothing on iOS 17
-        // (chain log 20261004-113402), and the guess that fits both that and
-        // Hide Labels working is that _updateLabel computes
-        // "_shouldShowLabel && !labelHidden" -- NO for a dock icon either way.
-        // Print the pieces rather than keep inferring them.
-        if (!probed) {
-            probed = 1;
-            uint64_t selShouldShow = r_sel("_shouldShowLabel");
-            int responds = selShouldShow ? r_responds(v, "_shouldShowLabel") : 0;
-            uint64_t shouldShow = responds ? r_msg_main(v, selShouldShow, 0, 0, 0, 0) : 2;
-            printf("[SBC] dock labels: probe labelHidden=%llu _shouldShowLabel=%s"
-                   " labelView=%d _labelView=%d iconLabelView=%d alpha=%d\n",
-                   (unsigned long long)r_msg_main(v, selIsHidden, 0, 0, 0, 0),
-                   responds ? (shouldShow ? "YES" : "NO") : "absent",
-                   r_responds(v, "labelView"),
-                   r_responds(v, "_labelView"),
-                   r_responds(v, "iconLabelView"),
-                   r_responds(v, "setIconLabelAlpha:"));
-
-            // Clearing labelHidden is not enough when the icon itself answers
-            // "no label here": _updateLabel takes both into account. Force the
-            // answer to YES, but only on the evidence of this probe -- never
-            // speculatively, because this rewrites a method table inside a live
-            // SpringBoard.
-            if (show && responds && !shouldShow) {
-                if (!mayForceShowLabels) {
-                    // Caller withheld permission (Hide icon labels holds this same
-                    // method). Today the caller also passes show=false in that case,
-                    // so this is belt and braces rather than a path you should see.
-                    printf("[SBC] dock labels: _shouldShowLabel=NO and forcing not allowed; "
-                           "dock follows the home screen\n");
-                } else if (sbcustomizer_swizzle_labels_shown()) {
-                    // The hook changes what _updateLabel computes, so the
-                    // per-view pass below now has something to build.
-                    printf("[SBC] dock labels: forced _shouldShowLabel=YES for this session\n");
-                }
+        // Clearing labelHidden is not enough when the icon itself answers
+        // "no label here": _updateLabel takes both into account. Force the
+        // answer to YES, but only on the evidence of this probe -- never
+        // speculatively, because this rewrites a method table inside a live
+        // SpringBoard.
+        if (show && responds && !shouldShow) {
+            if (!mayForceShowLabels) {
+                // Caller withheld permission (Hide icon labels holds this same
+                // method). Today the caller also passes show=false in that case,
+                // so this is belt and braces rather than a path you should see.
+                printf("[SBC] dock labels: _shouldShowLabel=NO and forcing not allowed; "
+                       "dock follows the home screen\n");
+            } else if (sbcustomizer_swizzle_labels_shown()) {
+                printf("[SBC] dock labels: forced _shouldShowLabel=YES for this session\n");
             }
         }
-
-        if (r_msg_main(v, selIsHidden, 0, 0, 0, 0) == wantHidden) continue;   // already right
-        r_msg_main(v, selHidden, wantHidden, 0, 0, 0);
-        r_msg_main(v, selUpdate, 0, 0, 0, 0);
-        changed++;
     }
-    r_msg_main(subs, r_sel("release"), 0, 0, 0, 0);
+
+    int changed = 0;
+    uint64_t invHidden = 0;
+    set_icon_views_label_hidden(dock, show ? 0 : 1, &invHidden, &changed);
+    r_release(invHidden);
 
     printf("[SBC] dock labels: %s on %d icon view(s)\n", show ? "shown" : "hidden", changed);
     return changed;
@@ -883,11 +873,9 @@ static void patch_homescreen_grid(uint64_t iconCtrl, int cols, int rows, bool hi
 {
     uint64_t mgr = try_msg0(iconCtrl, "iconManager");
     if (!mgr) { printf("[SBC] hs: nil iconManager\n"); return; }
-    usleep(50000);
 
     uint64_t provider = try_msg0(mgr, "listLayoutProvider");
     if (provider) {
-        usleep(50000);
 
         uint64_t loc = r_cfstr("SBIconLocationRoot");
         if (!loc) {
@@ -899,28 +887,22 @@ static void patch_homescreen_grid(uint64_t iconCtrl, int cols, int rows, bool hi
             if (!layout) {
                 printf("[SBC] hs: nil layout for root\n");
             } else {
-                usleep(50000);
                 uint64_t cfg = try_msg0(layout, "layoutConfiguration");
                 if (!cfg) {
                     printf("[SBC] hs: nil layoutConfiguration\n");
                 } else if (!r_responds(cfg, "setNumberOfPortraitColumns:")) {
                     printf("[SBC] hs: cfg lacks setNumberOfPortraitColumns:\n");
                 } else {
-                    usleep(50000);
                     r_msg2(cfg, "setNumberOfPortraitColumns:", (uint64_t)cols, 0, 0, 0);
-                    usleep(50000);
                     if (r_responds(cfg, "setNumberOfPortraitRows:"))
                         r_msg2(cfg, "setNumberOfPortraitRows:", (uint64_t)rows, 0, 0, 0);
-                    usleep(50000);
                     if (r_responds(cfg, "setNumberOfLandscapeColumns:"))
                         r_msg2(cfg, "setNumberOfLandscapeColumns:", (uint64_t)rows, 0, 0, 0);
-                    usleep(50000);
                     if (r_responds(cfg, "setNumberOfLandscapeRows:"))
                         r_msg2(cfg, "setNumberOfLandscapeRows:", (uint64_t)cols, 0, 0, 0);
                     printf("[SBC] hs: provider cols=%d rows=%d\n", cols, rows);
 
                     if (hideLabels && r_responds(cfg, "setShowsLabels:")) {
-                        usleep(50000);
                         r_msg2(cfg, "setShowsLabels:", 0, 0, 0, 0);
                         printf("[SBC] hs: showsLabels=NO\n");
                     }
@@ -1364,9 +1346,10 @@ static bool arrange_homescreen_pages(uint64_t iconCtrl, int preferredCols,
         for (uint64_t i = 0; i < refreshedLimit; i++) {
             uint64_t listView = r_msg2_main(
                 rootFolder, "iconListViewAtIndex:", i, 0, 0, 0);
-            if (r_is_objc_ptr(listView) &&
-                r_responds_main(listView, "setNeedsLayout")) {
-                r_msg2_main_async(listView, "setNeedsLayout", 0, 0, 0, 0);
+            // Fire-and-forget, as in patch_dock: one round trip instead of
+            // an NSInvocation build per page.
+            if (r_is_objc_ptr(listView) && r_responds(listView, "setNeedsLayout")) {
+                r_perform_main(listView, r_sel("setNeedsLayout"), 0, false);
             }
         }
     }
@@ -1385,6 +1368,9 @@ bool sbcustomizer_apply_in_session(int dockIcons, int hsCols, int hsRows, bool h
     // These calls already wait for main-thread completion. Avoid adding a
     // settle delay to every selector lookup and message in a redistribution;
     // mutation verification below provides the required synchronization.
+    // (The fixed 50 ms sleeps that used to sit between the property gets/sets
+    // in patch_dock / patch_homescreen_grid were the same delay hard-coded;
+    // those calls are synchronous too, so they are gone.)
     uint32_t oldSettleUS = r_settle_us(0);
     dockIcons = clamp(dockIcons, 4, 7);
     hsCols    = clamp(hsCols,    3, 7);
@@ -1401,7 +1387,6 @@ bool sbcustomizer_apply_in_session(int dockIcons, int hsCols, int hsRows, bool h
         usleep(100000);
         uint64_t cls = r_class("SBIconController");
         if (!cls) { printf("[SBC] SBIconController missing\n"); break; }
-        usleep(50000);
 
         uint64_t iconCtrl = r_msg2(cls, "sharedInstance", 0, 0, 0, 0);
         if (!iconCtrl) { printf("[SBC] +sharedInstance nil\n"); break; }

@@ -11,8 +11,6 @@
 #import <unistd.h>
 #import "../LogTextView.h"
 
-static const useconds_t kDSTSettleUS = 50000;
-
 static int ds_ios_major_version(void)
 {
     return (int)[[NSProcessInfo processInfo] operatingSystemVersion].majorVersion;
@@ -79,6 +77,10 @@ static uint64_t ds_resolve_ivar_target(uint64_t obj, uint64_t cls, const char *n
     return obj + offset;
 }
 
+// No settle sleep after these pokes or the main-thread setters below: an ivar
+// write is a plain memory write, and r_msg2_main waits for the setter to
+// finish. The fixed 50 ms that used to follow each one was most of the time
+// Disable Icon Fly-In, Zero Wake Animation and Zero Backlight Fade took.
 static bool ds_poke_pointer_ivar(uint64_t obj, uint64_t cls, const char *name, uint64_t value)
 {
     uint64_t target = ds_resolve_ivar_target(obj, cls, name);
@@ -86,7 +88,6 @@ static bool ds_poke_pointer_ivar(uint64_t obj, uint64_t cls, const char *name, u
     if (!remote_write(target, &value, sizeof(value))) return false;
     uint64_t readback = remote_read64(target);
     printf("[DST]   %-40s @ 0x%llx -> 0x%llx\n", name, target, readback);
-    usleep(kDSTSettleUS);
     return readback == value;
 }
 
@@ -148,12 +149,12 @@ static bool ds_disable_app_library_flags_on_target(uint64_t obj, const char *tag
 
     bool changed = false;
     for (size_t i = 0; i < sizeof(properties) / sizeof(properties[0]); i++) {
-        if (!r_responds_main(obj, properties[i].setter)) {
+        if (!r_responds(obj, properties[i].setter)) {
             printf("[DST:APPLIB] %s %s absent\n", tag, properties[i].setter);
             continue;
         }
         r_msg2_main(obj, properties[i].setter, 0, 0, 0, 0);
-        bool verified = !r_responds_main(obj, properties[i].getter) ||
+        bool verified = !r_responds(obj, properties[i].getter) ||
                         r_msg2_main(obj, properties[i].getter, 0, 0, 0, 0) == 0;
         printf("[DST:APPLIB] %s via %s verified=%d\n",
                tag, properties[i].setter, verified);
@@ -192,7 +193,6 @@ static bool ds_set_trailing_controllers(uint64_t obj, uint64_t value, const char
         if (!r_responds(obj, setters[i])) continue;
         r_msg2_main(obj, setters[i], value, 0, 0, 0);
         printf("[DST:APPLIB] %s via %s\n", tag, setters[i]);
-        usleep(kDSTSettleUS);
         return true;
     }
 
@@ -212,7 +212,6 @@ static bool ds_set_trailing_controller(uint64_t obj, uint64_t value, const char 
         if (!r_responds(obj, setters[i])) continue;
         r_msg2_main(obj, setters[i], value, 0, 0, 0);
         printf("[DST:APPLIB] %s via %s\n", tag, setters[i]);
-        usleep(kDSTSettleUS);
         return true;
     }
 
@@ -233,7 +232,6 @@ static bool ds_clear_overlay_library_controller(uint64_t mgr)
     if (r_responds(mgr, "setOverlayLibraryViewController:")) {
         r_msg2_main(mgr, "setOverlayLibraryViewController:", 0, 0, 0, 0);
         printf("[DST:APPLIB] iconManager via setOverlayLibraryViewController:\n");
-        usleep(kDSTSettleUS);
         return true;
     }
 
@@ -329,8 +327,8 @@ static bool ds_disable_app_library_singular_path(uint64_t mgr,
     // Exact writable iOS 17 property from SBHIconManager.h. Keep this
     // explicit instead of relying on the speculative cross-version list so
     // the log always records its before/after state.
-    if (r_responds_main(mgr, "setCanPresentOverscrollLibraryForPageTransition:") &&
-        r_responds_main(mgr, "canPresentOverscrollLibraryForPageTransition")) {
+    if (r_responds(mgr, "setCanPresentOverscrollLibraryForPageTransition:") &&
+        r_responds(mgr, "canPresentOverscrollLibraryForPageTransition")) {
         uint64_t before = r_msg2_main(
             mgr, "canPresentOverscrollLibraryForPageTransition", 0, 0, 0, 0);
         r_msg2_main(mgr, "setCanPresentOverscrollLibraryForPageTransition:",
@@ -362,15 +360,15 @@ static bool ds_disable_app_library_singular_path(uint64_t mgr,
     // Exact iOS 17 SBHIconManager state from the 17.5 SpringBoardHome
     // headers. Clear an in-flight/visible library before detaching the
     // trailing controller, then force its overscroll presenter to reconcile.
-    if (r_responds_main(mgr, "setMainDisplayLibraryViewVisible:libraryViewTransitioning:")) {
+    if (r_responds(mgr, "setMainDisplayLibraryViewVisible:libraryViewTransitioning:")) {
         r_msg2_main(mgr, "setMainDisplayLibraryViewVisible:libraryViewTransitioning:",
                     0, 0, 0, 0);
         printf("[DST:APPLIB] iconManager main library visible=0 transitioning=0\n");
     } else {
-        if (r_responds_main(mgr, "setMainDisplayLibraryViewVisible:")) {
+        if (r_responds(mgr, "setMainDisplayLibraryViewVisible:")) {
             r_msg2_main(mgr, "setMainDisplayLibraryViewVisible:", 0, 0, 0, 0);
         }
-        if (r_responds_main(mgr, "setMainDisplayLibraryViewVisibilityTransitioning:")) {
+        if (r_responds(mgr, "setMainDisplayLibraryViewVisibilityTransitioning:")) {
             r_msg2_main(mgr, "setMainDisplayLibraryViewVisibilityTransitioning:",
                         0, 0, 0, 0);
         }
@@ -384,7 +382,7 @@ static bool ds_disable_app_library_singular_path(uint64_t mgr,
         trailingOK |= ds_set_trailing_controller(rootView, 0, "rootFolderView");
     }
 
-    if (r_responds_main(mgr, "_updateOverscrollModalLibraryForScrollToPresented:")) {
+    if (r_responds(mgr, "_updateOverscrollModalLibraryForScrollToPresented:")) {
         r_msg2_main(mgr, "_updateOverscrollModalLibraryForScrollToPresented:",
                     0, 0, 0, 0);
         printf("[DST:APPLIB] iconManager reconciled overscroll presenter hidden\n");
@@ -394,14 +392,14 @@ static bool ds_disable_app_library_singular_path(uint64_t mgr,
     // trailing controller alone does not necessarily remove the already
     // constructed trailing page until SBHIconManager performs a forced
     // relayout (both selectors are present in the iOS 17.5 headers).
-    if (r_responds_main(mgr, "setNeedsRelayout:")) {
+    if (r_responds(mgr, "setNeedsRelayout:")) {
         r_msg2_main(mgr, "setNeedsRelayout:", 1, 0, 0, 0);
     }
-    if (r_responds_main(mgr, "layoutIconListsWithAnimationType:forceRelayout:")) {
+    if (r_responds(mgr, "layoutIconListsWithAnimationType:forceRelayout:")) {
         r_msg2_main(mgr, "layoutIconListsWithAnimationType:forceRelayout:",
                     0, 1, 0, 0);
         printf("[DST:APPLIB] iconManager forced root-page relayout\n");
-    } else if (r_responds_main(mgr, "relayout")) {
+    } else if (r_responds(mgr, "relayout")) {
         r_msg2_main(mgr, "relayout", 0, 0, 0, 0);
         printf("[DST:APPLIB] iconManager relayout fallback\n");
     }
@@ -421,7 +419,6 @@ static bool ds_poke_double_ivar(uint64_t obj, uint64_t cls, const char *name, do
 
     union { uint64_t u; double d; } readback = { .u = remote_read64(target) };
     printf("[DST]   %-40s @ 0x%llx -> %f\n", name, target, readback.d);
-    usleep(kDSTSettleUS);
     return true;
 }
 
@@ -601,7 +598,6 @@ bool darksword_tweak_zero_backlight_fade_in_session(void)
     for (int src = 0; src <= 3; src++) {
         for (int isWake = 0; isWake <= 1; isWake++) {
             uint64_t settings = r_msg(ctrl, selFetch, (uint64_t)src, (uint64_t)isWake, 0, 0);
-            usleep(kDSTSettleUS);
             if (!r_is_objc_ptr(settings)) continue;
 
             bool dup = false;
@@ -812,8 +808,8 @@ static bool ds_install_home_page_catcher(uint64_t list,
     char cls[96] = {0};
     ds_object_class_name(list, cls, sizeof(cls));
     if (!strstr(cls, "IconListView") || strstr(cls, "Dock")) return false;
-    if (r_responds_main(list, "isDock") &&
-        r_msg2_main(list, "isDock", 0, 0, 0, 0)) return false;
+    if (r_responds(list, "isDock") &&
+        r_msg2(list, "isDock", 0, 0, 0, 0)) return false;
 
     return ds_install_double_tap_catcher(
         list, sb, selLock, catcherAssocKey, gestureAssocKey,
@@ -832,8 +828,8 @@ static int ds_install_home_page_catchers(uint64_t rootFC,
     // Prefer the indexed accessor: visibleIconListViews may contain only the
     // currently displayed page, which would leave every other Home Screen
     // page without an empty-area catcher.
-    if (r_responds_main(rootFC, "iconListViewCount") &&
-        r_responds_main(rootFC, "iconListViewAtIndex:")) {
+    if (r_responds(rootFC, "iconListViewCount") &&
+        r_responds(rootFC, "iconListViewAtIndex:")) {
         uint64_t count = r_msg2_main(rootFC, "iconListViewCount", 0, 0, 0, 0);
         if (count > 32) count = 32;
         for (uint64_t i = 0; i < count; i++) {
@@ -848,7 +844,7 @@ static int ds_install_home_page_catchers(uint64_t rootFC,
 
     const char *arraySelectors[] = { "visibleIconListViews", "iconListViews", NULL };
     for (int s = 0; arraySelectors[s]; s++) {
-        if (!r_responds_main(rootFC, arraySelectors[s])) continue;
+        if (!r_responds(rootFC, arraySelectors[s])) continue;
         uint64_t lists = r_msg2_main(rootFC, arraySelectors[s], 0, 0, 0, 0);
         uint64_t count = r_is_objc_ptr(lists) ?
             r_msg2_main(lists, "count", 0, 0, 0, 0) : 0;
@@ -871,7 +867,7 @@ static int ds_install_home_page_catchers(uint64_t rootFC,
         NULL,
     };
     for (int s = 0; currentSelectors[s]; s++) {
-        if (!r_responds_main(rootFC, currentSelectors[s])) continue;
+        if (!r_responds(rootFC, currentSelectors[s])) continue;
         uint64_t list = r_msg2_main(rootFC, currentSelectors[s], 0, 0, 0, 0);
         if (ds_install_home_page_catcher(list, sb, selLock,
                                          catcherAssocKey, gestureAssocKey)) {
@@ -880,27 +876,6 @@ static int ds_install_home_page_catchers(uint64_t rootFC,
         }
     }
     return installed;
-}
-
-static uint64_t ds_find_cover_sheet_window(void)
-{
-    uint64_t UIApplication = r_class("UIApplication");
-    uint64_t app = r_is_objc_ptr(UIApplication) ?
-        r_msg2_main(UIApplication, "sharedApplication", 0, 0, 0, 0) : 0;
-    uint64_t windows = r_is_objc_ptr(app) ? r_msg2_main(app, "windows", 0, 0, 0, 0) : 0;
-    uint64_t count = r_is_objc_ptr(windows) ? r_msg2_main(windows, "count", 0, 0, 0, 0) : 0;
-    if (count > 80) count = 80;
-    uint64_t coverWindowClass = r_class("SBCoverSheetWindow");
-
-    for (uint64_t i = 0; i < count; i++) {
-        uint64_t window = r_msg2_main(windows, "objectAtIndex:", i, 0, 0, 0);
-        if (r_is_objc_ptr(window) && r_is_objc_ptr(coverWindowClass) &&
-            r_msg2_main(window, "isKindOfClass:", coverWindowClass, 0, 0, 0)) {
-            printf("[DST:LOCK] cover sheet window[%llu]=0x%llx\n", i, window);
-            return window;
-        }
-    }
-    return 0;
 }
 
 static bool ds_class_name_contains(uint64_t obj, const char *needle)
@@ -927,7 +902,7 @@ static uint64_t ds_cover_sheet_from_controller_array(uint64_t controllers)
 
 static uint64_t ds_resolve_cover_sheet_controller(uint64_t root)
 {
-    uint64_t coverSheet = r_responds_main(root, "coverSheetViewController") ?
+    uint64_t coverSheet = r_responds(root, "coverSheetViewController") ?
         r_msg2_main(root, "coverSheetViewController", 0, 0, 0, 0) : 0;
     if (r_is_objc_ptr(coverSheet)) return coverSheet;
 
@@ -936,7 +911,7 @@ static uint64_t ds_resolve_cover_sheet_controller(uint64_t root)
 
     const char *arraySelectors[] = { "childViewControllers", "viewControllers", NULL };
     for (int s = 0; arraySelectors[s]; s++) {
-        if (!r_responds_main(root, arraySelectors[s])) continue;
+        if (!r_responds(root, arraySelectors[s])) continue;
         uint64_t controllers = r_msg2_main(root, arraySelectors[s], 0, 0, 0, 0);
         coverSheet = ds_cover_sheet_from_controller_array(controllers);
         if (r_is_objc_ptr(coverSheet)) return coverSheet;
@@ -953,7 +928,7 @@ static uint64_t ds_cover_sheet_main_page_view(uint64_t window)
     ds_object_class_name(root, cls, sizeof(cls));
     printf("[DST:LOCK] cover sheet root=%s 0x%llx\n",
            cls[0] ? cls : "unknown", root);
-    if (r_responds_main(root, "loadViewIfNeeded")) {
+    if (r_responds(root, "loadViewIfNeeded")) {
         r_msg2_main(root, "loadViewIfNeeded", 0, 0, 0, 0);
     }
 
@@ -963,17 +938,17 @@ static uint64_t ds_cover_sheet_main_page_view(uint64_t window)
         coverSheet = root;
     }
     if (!r_is_objc_ptr(coverSheet)) return 0;
-    if (r_responds_main(coverSheet, "loadViewIfNeeded")) {
+    if (r_responds(coverSheet, "loadViewIfNeeded")) {
         r_msg2_main(coverSheet, "loadViewIfNeeded", 0, 0, 0, 0);
     }
 
-    uint64_t mainPage = r_responds_main(coverSheet, "mainPageContentViewController") ?
+    uint64_t mainPage = r_responds(coverSheet, "mainPageContentViewController") ?
         r_msg2_main(coverSheet, "mainPageContentViewController", 0, 0, 0, 0) : 0;
     if (!r_is_objc_ptr(mainPage)) {
         mainPage = r_ivar_value(coverSheet, "_mainPageContentViewController");
     }
     if (!r_is_objc_ptr(mainPage)) return 0;
-    if (r_responds_main(mainPage, "loadViewIfNeeded")) {
+    if (r_responds(mainPage, "loadViewIfNeeded")) {
         r_msg2_main(mainPage, "loadViewIfNeeded", 0, 0, 0, 0);
     }
 
@@ -1035,31 +1010,39 @@ bool darksword_tweak_double_tap_to_lock_in_session(void)
     // Older builds installed the recognizer on every SpringBoard window.
     // That also covered the passcode window, so a double tap while entering a
     // passcode invoked the lock action again. Remove those broad recognizers
-    // before installing on the two intended surfaces only.
+    // before installing on the two intended surfaces only. The same pass finds
+    // the cover sheet window. Only -windows itself is read on the main thread;
+    // the retained snapshot is walked on the worker thread (1-2 round trips per
+    // window instead of two ~23-round-trip main hops).
     uint64_t UIApplication = r_class("UIApplication");
     uint64_t app = r_is_objc_ptr(UIApplication) ?
         r_msg2_main(UIApplication, "sharedApplication", 0, 0, 0, 0) : 0;
-    uint64_t windows = r_is_objc_ptr(app) ?
-        r_msg2_main(app, "windows", 0, 0, 0, 0) : 0;
-    uint64_t count = r_is_objc_ptr(windows) ?
-        r_msg2_main(windows, "count", 0, 0, 0, 0) : 0;
-    uint64_t limit = count < 80 ? count : 80;
+    uint64_t windows = r_is_objc_ptr(app) ? r_msg2_main_retained(app, "windows") : 0;
+    uint64_t windowList[80];
+    int windowCount = r_array_items_of_class(windows, 0, windowList, 80);
+    uint64_t coverWindowClass = r_class("SBCoverSheetWindow");
+    uint64_t selKind = r_sel("isKindOfClass:");
+    uint64_t coverWindow = 0;
     int removed = 0;
-    for (uint64_t i = 0; i < limit; i++) {
-        uint64_t window = r_msg2_main(windows, "objectAtIndex:", i, 0, 0, 0);
-        if (!r_is_objc_ptr(window)) continue;
+    for (int i = 0; i < windowCount; i++) {
+        uint64_t window = windowList[i];
         if (ds_remove_double_tap_from_view(window, assocKey, "legacy window")) {
             removed++;
         }
+        if (!coverWindow && r_is_objc_ptr(coverWindowClass) &&
+            r_msg(window, selKind, coverWindowClass, 0, 0, 0)) {
+            coverWindow = window;
+            printf("[DST:LOCK] cover sheet window[%d]=0x%llx\n", i, window);
+        }
     }
 
-    uint64_t coverWindow = ds_find_cover_sheet_window();
     uint64_t lockView = ds_cover_sheet_main_page_view(coverWindow);
     bool lockScreenInstalled = r_is_objc_ptr(lockView) &&
         ds_install_double_tap_on_view(
             lockView, sb, selLock, assocKey,
             "lockscreen main page", true) != DTLockOutcomeFailed;
     ok |= lockScreenInstalled;
+    r_release(windows);
     printf("[DST:LOCK] legacyRemoved=%d lockscreen=%d passcodeExcluded=1\n",
            removed, lockScreenInstalled);
 

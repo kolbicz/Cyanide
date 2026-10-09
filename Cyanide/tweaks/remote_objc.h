@@ -57,6 +57,9 @@ int r_settle_get_mode(void);
 
 void r_perf_report(const char *label);
 void r_perf_reset(void);
+// Running total of RemoteCall round trips made through remote_objc; take the
+// difference across a step to measure it.
+uint64_t r_perf_round_trips(void);
 uint64_t r_perform_main(uint64_t obj, uint64_t sel, uint64_t object, bool wait);
 uint64_t r_cfstr(const char *s);
 uint64_t r_nsstr_retained(const char *s);
@@ -67,6 +70,26 @@ uint64_t r_ivar_value(uint64_t obj, const char *ivarName);
 uint64_t r_dlsym_call(int timeout, const char *fnName,
                       uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                       uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7);
+
+// Fast paths for walking and mutating many objects. Every r_msg_main hop is
+// ~23 RemoteCall round trips; these do the same work in 1-2 per object.
+//
+// r_msg2_main_retained: obj.selName fetched AND retained on the main thread
+// (for -subviews / -windows / -iconListViews, which must be read on main).
+// The caller releases it with r_release.
+uint64_t r_msg2_main_retained(uint64_t obj, const char *selName);
+void     r_release(uint64_t obj);
+// Elements of a retained array snapshot that are kinds of cls (0 = any), read
+// on the RemoteCall worker thread: a retained immutable snapshot is safe to
+// read off-main. Returns how many were written to out.
+int      r_array_items_of_class(uint64_t array, uint64_t cls, uint64_t *out, int cap);
+// A retained NSInvocation of selName (signature taken from sample) with
+// argument 2 already copied in. r_invocation_invoke_main retargets it and runs
+// it on the main thread, waiting: 2 round trips per object instead of ~23.
+// Release with r_release.
+uint64_t r_invocation_retained(uint64_t sample, const char *selName,
+                               const void *arg, size_t argSize);
+void     r_invocation_invoke_main(uint64_t inv, uint64_t target);
 
 // Copies the UTF-8 bytes of a remote NSString into a local C buffer (NUL
 // terminated, truncated to outLen-1). Returns true only if at least one

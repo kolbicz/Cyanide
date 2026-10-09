@@ -38,6 +38,9 @@ static bool gSettleOwed = false;
 static uint64_t gRemoteMsgCount = 0;
 static uint64_t gSettleCount = 0;
 static uint64_t gSettleSleptUS = 0;
+// Every RemoteCall made through this file (r_msg, r_msg_main's internals,
+// malloc/free, ...), not just the settled messages counted above.
+static uint64_t gRoundTripCount = 0;
 
 #define R_OBJC_CACHE_CAP 192
 #define R_OBJC_CACHE_NAME_MAX 96
@@ -204,6 +207,11 @@ int r_settle_get_mode(void)
     return gSettleMode;
 }
 
+uint64_t r_perf_round_trips(void)
+{
+    return gRoundTripCount;
+}
+
 void r_perf_reset(void)
 {
     gRemoteMsgCount = 0;
@@ -216,6 +224,7 @@ static uint64_t r_call_stable(int timeout, const char *fnName,
                               uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7)
 {
     pthread_mutex_lock(&gRemoteCallLock);
+    gRoundTripCount++;
     uint64_t ret = do_remote_call_stable(timeout, fnName,
                                          a0, a1, a2, a3,
                                          a4, a5, a6, a7);
@@ -710,6 +719,70 @@ uint64_t r_ivar_value(uint64_t obj, const char *ivarName)
     uint64_t offset = r_call_stable(R_TIMEOUT, "ivar_getOffset",
                                     ivar, 0, 0, 0, 0, 0, 0, 0);
     return remote_read64(obj + offset);
+}
+
+uint64_t r_msg2_main_retained(uint64_t obj, const char *selName)
+{
+    uint64_t value = r_msg2_main(obj, selName, 0, 0, 0, 0);
+    if (!r_is_objc_ptr(value)) return 0;
+    r_msg_main(value, r_sel("retain"), 0, 0, 0, 0);
+    return value;
+}
+
+void r_release(uint64_t obj)
+{
+    if (!r_is_objc_ptr(obj)) return;
+    r_msg(obj, r_sel("release"), 0, 0, 0, 0);
+}
+
+int r_array_items_of_class(uint64_t array, uint64_t cls, uint64_t *out, int cap)
+{
+    if (!r_is_objc_ptr(array) || cap <= 0) return 0;
+    uint64_t n = r_msg(array, r_sel("count"), 0, 0, 0, 0);
+    if (n > 512) n = 512;
+    uint64_t selObjAt = r_sel("objectAtIndex:");
+    uint64_t selKind  = r_sel("isKindOfClass:");
+    int found = 0;
+    for (uint64_t i = 0; i < n && found < cap; i++) {
+        uint64_t v = r_msg(array, selObjAt, i, 0, 0, 0);
+        if (!r_is_objc_ptr(v)) continue;
+        if (cls && !r_msg(v, selKind, cls, 0, 0, 0)) continue;
+        out[found++] = v;
+    }
+    return found;
+}
+
+uint64_t r_invocation_retained(uint64_t sample, const char *selName,
+                               const void *arg, size_t argSize)
+{
+    uint64_t sel = r_sel(selName);
+    uint64_t NSInvocation = r_class("NSInvocation");
+    if (!r_is_objc_ptr(sample) || !sel || !r_is_objc_ptr(NSInvocation)) return 0;
+    uint64_t sig = r_msg(sample, r_sel("methodSignatureForSelector:"), sel, 0, 0, 0);
+    if (!r_is_objc_ptr(sig)) return 0;
+    uint64_t inv = r_msg(NSInvocation, r_sel("invocationWithMethodSignature:"), sig, 0, 0, 0);
+    if (!r_is_objc_ptr(inv)) return 0;
+    r_msg(inv, r_sel("retain"), 0, 0, 0, 0);
+    r_msg(inv, r_sel("setSelector:"), sel, 0, 0, 0);
+    // NSInvocation copies the argument bytes, so the buffer is freed here.
+    uint64_t mem = r_call_stable(R_TIMEOUT, "calloc", 1, argSize < 8 ? 8 : argSize,
+                                 0, 0, 0, 0, 0, 0);
+    bool ok = mem && remote_write(mem, arg, argSize);
+    if (ok) r_msg(inv, r_sel("setArgument:atIndex:"), mem, 2, 0, 0);
+    if (mem) r_free(mem);
+    if (!ok) {
+        r_release(inv);
+        return 0;
+    }
+    return inv;
+}
+
+void r_invocation_invoke_main(uint64_t inv, uint64_t target)
+{
+    if (!r_is_objc_ptr(inv) || !r_is_objc_ptr(target)) return;
+    r_msg(inv, r_sel("setTarget:"), target, 0, 0, 0);
+    r_msg(inv, r_sel("performSelectorOnMainThread:withObject:waitUntilDone:"),
+          r_sel("invoke"), 0, 1, 0);
 }
 
 bool r_read_nsstring(uint64_t str, char *out, size_t outLen)
