@@ -380,6 +380,144 @@ static bool r_write_remote_arg(uint64_t remoteBuf, const void *arg, size_t argSi
     return ok;
 }
 
+// Cached main-thread invocations.
+//
+// The slow path below builds a fresh NSInvocation for every main-thread
+// message: signature, invocation, numberOfArguments, setTarget, setSelector,
+// a malloc/write/setArgument/free per argument, retainArguments, the perform,
+// methodReturnLength, a malloc/getReturnValue/free, release -- ~23 RemoteCall
+// round trips. Here one retained invocation is kept per (process, class,
+// selector) with its argument count and return length, and a call only
+// retargets it, copies the arguments in from a per-process scratch buffer and
+// performs it: object_getClass + setTarget + one setArgument per argument +
+// perform + getReturnValue, 4-8 round trips.
+//
+// Safe to reuse because the perform waits for completion (waitUntilDone:YES)
+// and gInvLock is held for the whole call, so no two calls share an
+// invocation at once. The cached invocations never retainArguments, so they
+// keep nothing alive; the target they still point at afterwards is never
+// messaged again until it is replaced. Keyed by class (not object), because a
+// freed object's address can be reused by another class with a different
+// signature; a class object is keyed by its metaclass. A new SpringBoard
+// (respring) has a new pid, so its entries never match. Anything unusual --
+// an argument larger than a slot, a return value larger than the return
+// slot, a failed build -- falls back to the slow path.
+#define R_INV_CACHE_CAP 128
+#define R_INV_ARG_SLOT  64
+#define R_INV_RET_SLOT  64
+#define R_INV_SCRATCH   (4 * R_INV_ARG_SLOT + R_INV_RET_SLOT)
+
+typedef struct {
+    int pid;
+    uint64_t cls;
+    uint64_t sel;
+    uint64_t inv;        // retained; 0 = this (class, selector) uses the slow path
+    uint64_t numUserArgs;
+    uint64_t retLen;
+    uint64_t lastUse;
+} RemoteInvocationEntry;
+
+static pthread_mutex_t gInvLock = PTHREAD_MUTEX_INITIALIZER;
+static RemoteInvocationEntry gInvCache[R_INV_CACHE_CAP];
+static uint64_t gInvClock = 0;
+static int gInvScratchPid = 0;
+static uint64_t gInvScratch = 0;   // 4 argument slots, then the return slot
+
+static RemoteInvocationEntry *r_inv_entry(int pid, uint64_t obj, uint64_t cls, uint64_t sel)
+{
+    RemoteInvocationEntry *victim = &gInvCache[0];
+    for (int i = 0; i < R_INV_CACHE_CAP; i++) {
+        RemoteInvocationEntry *e = &gInvCache[i];
+        if (e->pid == pid && e->cls == cls && e->sel == sel) {
+            e->lastUse = ++gInvClock;
+            return e;
+        }
+        if (e->pid == 0) { victim = e; break; }
+        if (e->lastUse < victim->lastUse) victim = e;
+    }
+    // Evict (an invocation from a dead process is just dropped).
+    if (victim->pid == pid && victim->inv) r_msg(victim->inv, r_sel("release"), 0, 0, 0, 0);
+    memset(victim, 0, sizeof(*victim));
+
+    uint64_t inv = 0, numUserArgs = 0, retLen = 0;
+    uint64_t sig = r_method_signature(obj, sel);   // retained
+    uint64_t NSInvocation = r_class("NSInvocation");
+    if (r_is_objc_ptr(sig) && r_is_objc_ptr(NSInvocation)) {
+        uint64_t numArgs = r_msg(sig, r_sel("numberOfArguments"), 0, 0, 0, 0);
+        numUserArgs = (numArgs > 2) ? (numArgs - 2) : 0;
+        if (numUserArgs > 4) numUserArgs = 4;
+        retLen = r_msg(sig, r_sel("methodReturnLength"), 0, 0, 0, 0);
+        if (retLen <= R_INV_RET_SLOT) {
+            inv = r_msg_retained_return(NSInvocation, r_sel("invocationWithMethodSignature:"),
+                                        sig, 0, 0, 0);
+            if (r_is_objc_ptr(inv)) r_msg(inv, r_sel("setSelector:"), sel, 0, 0, 0);
+            else inv = 0;
+        }
+    }
+    if (r_is_objc_ptr(sig)) r_msg(sig, r_sel("release"), 0, 0, 0, 0);
+
+    victim->pid = pid;
+    victim->cls = cls;
+    victim->sel = sel;
+    victim->inv = inv;
+    victim->numUserArgs = numUserArgs;
+    victim->retLen = retLen;
+    victim->lastUse = ++gInvClock;
+    return victim;
+}
+
+static bool r_msg_main_cached(uint64_t obj, uint64_t sel,
+                              const void *const args[4], const size_t sizes[4],
+                              uint64_t *retOut)
+{
+    int pid = remote_call_current_pid();
+    if (pid <= 0) return false;
+    for (int i = 0; i < 4; i++) if (sizes[i] > R_INV_ARG_SLOT) return false;
+
+    pthread_mutex_lock(&gInvLock);
+    bool done = false;
+    do {
+        if (gInvScratchPid != pid || !gInvScratch) {
+            gInvScratch = r_call_stable(R_TIMEOUT, "calloc", 1, R_INV_SCRATCH, 0, 0, 0, 0, 0, 0);
+            gInvScratchPid = gInvScratch ? pid : 0;
+            if (!gInvScratch) break;
+        }
+        uint64_t cls = r_call_stable(R_TIMEOUT, "object_getClass", obj, 0, 0, 0, 0, 0, 0, 0);
+        if (!r_is_objc_ptr(cls)) break;
+        RemoteInvocationEntry *e = r_inv_entry(pid, obj, cls, sel);
+        if (!e->inv) break;
+
+        if (e->numUserArgs) {
+            uint8_t local[4 * R_INV_ARG_SLOT];
+            memset(local, 0, sizeof(local));
+            for (uint64_t i = 0; i < e->numUserArgs; i++) {
+                if (args[i] && sizes[i]) memcpy(local + i * R_INV_ARG_SLOT, args[i], sizes[i]);
+            }
+            if (!remote_write(gInvScratch, local, (size_t)(e->numUserArgs * R_INV_ARG_SLOT))) break;
+        }
+        uint64_t retSlot = gInvScratch + 4 * R_INV_ARG_SLOT;
+        if (e->retLen && !remote_write64(retSlot, 0)) break;
+
+        r_msg(e->inv, r_sel("setTarget:"), obj, 0, 0, 0);
+        uint64_t selSetArg = r_sel("setArgument:atIndex:");
+        for (uint64_t i = 0; i < e->numUserArgs; i++) {
+            r_msg(e->inv, selSetArg, gInvScratch + i * R_INV_ARG_SLOT, i + 2, 0, 0);
+        }
+        r_msg(e->inv, r_sel("performSelectorOnMainThread:withObject:waitUntilDone:"),
+              r_sel("invoke"), 0, 1, 0);
+
+        uint64_t ret = 0;
+        if (e->retLen) {
+            r_msg(e->inv, r_sel("getReturnValue:"), retSlot, 0, 0, 0);
+            ret = remote_read64(retSlot);
+        }
+        *retOut = ret;
+        done = true;
+    } while (0);
+    pthread_mutex_unlock(&gInvLock);
+    return done;
+}
+
 uint64_t r_msg_main_raw(uint64_t obj, uint64_t sel,
                         const void *a0, size_t a0Size,
                         const void *a1, size_t a1Size,
@@ -387,6 +525,11 @@ uint64_t r_msg_main_raw(uint64_t obj, uint64_t sel,
                         const void *a3, size_t a3Size)
 {
     if (!r_is_objc_ptr(obj) || !sel) return 0;
+
+    const void *const cachedArgs[4] = { a0, a1, a2, a3 };
+    const size_t cachedSizes[4] = { a0Size, a1Size, a2Size, a3Size };
+    uint64_t cachedRet = 0;
+    if (r_msg_main_cached(obj, sel, cachedArgs, cachedSizes, &cachedRet)) return cachedRet;
 
     uint64_t sig = r_method_signature(obj, sel);
     if (!r_is_objc_ptr(sig)) return 0;
