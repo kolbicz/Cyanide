@@ -9035,9 +9035,13 @@ static NSString *pm_chip_name(NSString *machine) {
 
     // Memory: used = total − free (simple definition).
     uint64_t total = [NSProcessInfo processInfo].physicalMemory;
+    // mach_host_self() returns a new send right each call; take one per
+    // refresh, use it for both statistics and release it below (it leaked
+    // twice per refresh).
+    mach_port_t host = mach_host_self();
     vm_statistics64_data_t vm;
     mach_msg_type_number_t cnt = HOST_VM_INFO64_COUNT;
-    if (host_statistics64(mach_host_self(), HOST_VM_INFO64,
+    if (host_statistics64(host, HOST_VM_INFO64,
                           (host_info64_t)&vm, &cnt) == KERN_SUCCESS) {
         uint64_t freeB = (uint64_t)vm.free_count * (uint64_t)vm_page_size;
         uint64_t usedB = total > freeB ? total - freeB : 0;
@@ -9050,7 +9054,7 @@ static NSString *pm_chip_name(NSString *machine) {
     // Overall CPU: busy fraction delta of cumulative host cpu_ticks.
     host_cpu_load_info_data_t cl;
     cnt = HOST_CPU_LOAD_INFO_COUNT;
-    if (host_statistics64(mach_host_self(), HOST_CPU_LOAD_INFO,
+    if (host_statistics64(host, HOST_CPU_LOAD_INFO,
                           (host_info64_t)&cl, &cnt) == KERN_SUCCESS) {
         uint64_t busy = (uint64_t)cl.cpu_ticks[CPU_STATE_USER]
                       + (uint64_t)cl.cpu_ticks[CPU_STATE_SYSTEM]
@@ -9067,6 +9071,7 @@ static NSString *pm_chip_name(NSString *machine) {
         self.prevCpuTotalTicks = all;
         self.havePrevCpuTicks = YES;
     }
+    mach_port_deallocate(mach_task_self(), host);
 }
 
 - (void)viewWillAppear:(BOOL)animated
@@ -9858,11 +9863,18 @@ static NSString *pm_chip_name(NSString *machine) {
             // A zombie counts as dead — its task is gone, reap is pending.
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
                            dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                bool krwPresent = false;
-                int krwStat = procmgr_pid_status_krw(pid, &krwPresent);   // ONE walk (round 13)
+                bool krwPresent = false, krwKnown = false;
+                int krwStat = procmgr_pid_status_krw(pid, &krwPresent, &krwKnown);   // ONE walk (round 13)
                 BOOL alive = krwPresent && krwStat != PM_SZOMB;
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [self.terminatingPids removeObject:@(pid)];
+                    if (!krwKnown) {
+                        // Couldn't check (KRW down or a read failed): no verdict either
+                        // way -- neither drop the row nor claim it survived. A rescan decides.
+                        printf("[PROCMGR] fastkill: pid %d status unknown (KRW read unavailable) — rescanning\n", pid);
+                        [self reloadProcs];
+                        return;
+                    }
                     if (!alive) {
                         [self pmRemoveRowForPid:pid];
                         return;
@@ -9970,11 +9982,18 @@ static NSString *pm_chip_name(NSString *machine) {
                     // Authoritative verdict: only drop the row when the pid is
                     // really gone (a zombie counts as dead — task reaped,
                     // collection pending). Still alive = honest failure path.
-                    bool krwPresent = false;
-                int krwStat = procmgr_pid_status_krw(pid, &krwPresent);   // ONE walk (round 13)
+                    bool krwPresent = false, krwKnown = false;
+                int krwStat = procmgr_pid_status_krw(pid, &krwPresent, &krwKnown);   // ONE walk (round 13)
                 BOOL alive = krwPresent && krwStat != PM_SZOMB;
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [self.terminatingPids removeObject:@(pid)];
+                        if (!krwKnown) {
+                            // Couldn't check (KRW down or a read failed): no verdict either
+                            // way -- neither drop the row nor claim it survived. A rescan decides.
+                            printf("[PROCMGR] fastkill: pid %d status unknown (KRW read unavailable) — rescanning\n", pid);
+                            [self reloadProcs];
+                            return;
+                        }
                         if (!alive) {
                             [self pmRemoveRowForPid:pid];
                             return;
@@ -10434,15 +10453,17 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
         uint64_t elapsedMS = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - v0) / 1000000ULL;
         if ((int)elapsedMS < kVerdictCheckMS[i])
             usleep((useconds_t)(kVerdictCheckMS[i] - (int)elapsedMS) * 1000);
-        bool presentNow = false;
-        lastKst = procmgr_pid_status_krw(pid, &presentNow);   // ONE walk (round 13)
+        bool presentNow = false, knownNow = false;
+        lastKst = procmgr_pid_status_krw(pid, &presentNow, &knownNow);   // ONE walk (round 13)
         lastPresent = presentNow;
         uint64_t atMS = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - v0) / 1000000ULL;
         // "Not in the list" is only proof of death if the walk's reads really
         // happened. With crash→zero-fill, a transient socket failure zero-fills
         // every read and the walk reports not-found for a LIVE process — that
         // false "GONE" is exactly what krw_op_error() exists to catch.
-        if (!lastPresent && krw_op_error()) {
+        // !knownNow covers KRW not ready, which returns before any read and
+        // so never latches the op-error flag on its own.
+        if (!lastPresent && (!knownNow || krw_op_error())) {
             sawOpError = YES;
             printf("[PROCMGR] fastkill: verdict poll %d/4 at +%llu ms: pid %d not "
                    "found BUT KRW op-error latched (reads zero-filled) — "
@@ -10582,13 +10603,14 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
                                    : "no session (warm-up failed; warming now)");
     int rc = [self pmForceKillViaLaunchdLocked:pid allowRebuild:YES];
     [lock unlock];
-    // Round 46: kill confirmed dead and the session stays warm — schedule
-    // the foreground idle disarm so the trapped launchd thread + armed KRW
+    // Round 46: whenever the session stays warm after a kill, schedule the
+    // foreground idle disarm so the trapped launchd thread + armed KRW
     // exposure is shed after 10 idle seconds instead of persisting until
-    // backgrounding. (Failures keep whatever their paths already decided;
-    // a rebuilt/torn-down session leaves gPMKillSession nil and the fire
-    // path no-ops.)
-    if (rc == 0 && gPMKillSession)
+    // backgrounding. This used to require rc == 0, so a failed kill (-8,
+    // e.g. an inconclusive verdict) that kept the session had NO deadline --
+    // and the kill itself had cancelled the previous one. Every exit that
+    // keeps gPMKillSession gets one now; a torn-down session (nil) needs none.
+    if (gPMKillSession)
         pm_idle_disarm_schedule();
     return rc;
 }

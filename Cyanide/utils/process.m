@@ -184,9 +184,11 @@ int procmgr_pstat_krw(int pid) {
 // pair exactly: present=false when KRW is down or the pid is gone; pstat=-1
 // when KRW/the offset/the pid is unavailable (so "present + pstat=-1" is the
 // old alive=true + kst=-1 inconclusive case).
-int procmgr_pid_status_krw(int pid, bool *outPresent) {
+int procmgr_pid_status_krw(int pid, bool *outPresent, bool *outKnown) {
     if (outPresent) *outPresent = false;
+    if (outKnown) *outKnown = false;
     if (!kexploit_krw_ready()) return -1;
+    uint64_t errorsBefore = krw_op_error_count();
     krw_set_nonfatal(true);
     int stat = -1;
     uint64_t proc = proc_find(pid);
@@ -199,6 +201,10 @@ int procmgr_pid_status_krw(int pid, bool *outPresent) {
         }
     }
     krw_set_nonfatal(false);
+    // Any failed-safe read during this walk (ours, or a concurrent one -- we
+    // can't tell them apart, so err on "unknown") may have zero-filled a link
+    // and ended the walk early: then "not found" proves nothing.
+    if (outKnown) *outKnown = (krw_op_error_count() == errorsBefore);
     return stat;
 }
 
@@ -985,9 +991,15 @@ static bool pm_live_thread_sums(uint64_t task, uint64_t *uOut, uint64_t *sOut) {
             return false;
         }
         if (mappedGate && !kaddr_is_mapped(t + loOff, hiOff - loOff)) {
-            // Thread exited and its struct got unmapped mid-walk: skip it.
-            if (++skips > 8) return false;
-            goto next_thread;
+            // Thread exited and its struct got unmapped mid-walk. The span
+            // includes task_threads.next, so there is no safe way on to the
+            // next thread: drop this sample (the caller shows no CPU for the
+            // process this refresh) rather than read the link we just failed
+            // to prove mapped -- that read is the panic this gate exists for.
+            static int dbgU = 0;
+            if (dbgU++ < 3)
+                printf("[PROCMGR] thread walk: thread 0x%llx unmapped at i=%d — sample dropped\n", t, i);
+            return false;
         }
         if (g_pm_rc_cal) {
             uint64_t tu = 0, ts = 0;
@@ -1918,6 +1930,11 @@ static bool pm_validate_cache(void) {
                        cpu / 1000000ULL, ref / 1000000ULL);
                 g_pm_cpu_cal = false;
                 g_pm_thr_cal = false;   // cpu depends on the thread walk
+                // ...and so does the timing backend it used. Leaving g_pm_rc_cal
+                // set let a classic-timer rediscovery "succeed" while the walk
+                // kept reading the rejected recount layout. Its offsets are
+                // rewritten by whichever discovery succeeds next.
+                g_pm_rc_cal = false;
             }
         }
     }

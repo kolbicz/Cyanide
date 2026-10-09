@@ -66,7 +66,10 @@ int procmgr_pstat_krw(int pid);
 // whether the pid is still in the proc list, and the return value is its
 // p_stat (-1 when KRW/the offset/the pid is unavailable). Replaces a
 // procmgr_pid_alive + procmgr_pstat_krw pair (two walks) on the kill path.
-int procmgr_pid_status_krw(int pid, bool *outPresent);
+// *outKnown is true only when the walk really ran with every read succeeding:
+// when false (KRW not ready, or a read failed safely and was zero-filled),
+// "not present" means "could not check", NOT "the process is gone".
+int procmgr_pid_status_krw(int pid, bool *outPresent, bool *outKnown);
 
 // Runtime-calibrated task->suspend_count for pid. Returns -1 when
 // uncalibrated/unavailable, else the count (>0 means the task is suspended:
