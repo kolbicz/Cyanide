@@ -8,6 +8,7 @@
 #import "../SettingsViewController.h"
 #import "../tweaks/RepoTweaks.h"
 #import "../tweaks/remote_objc.h"
+#import "../LogTextView.h"
 
 static NSString * const kGitHubIssuesURL = @"https://github.com/kolbicz/cyanide/issues";
 static NSString * const kGitHubRepoURL   = @"https://github.com/kolbicz/cyanide";
@@ -96,7 +97,9 @@ static const CGFloat kMargin = 20.0;
 - (void)viewDidAppear:(BOOL)animated
 {
     [super viewDidAppear:animated];
-    [self offerFastestApplySpeedIfNeeded];
+    // One prompt per appearance: the pe_v3 offer waits until the Fastest
+    // offer (if any) has been answered.
+    if (![self offerFastestApplySpeedIfNeeded]) [self offerPeV3IfNeeded];
 }
 
 // One-time migration: "Fastest" is now the default apply speed, but an existing
@@ -104,12 +107,12 @@ static const CGFloat kMargin = 20.0;
 // Fastest, offer to switch — once. The "asked" flag is set before presenting so
 // declining (or dismissing) never re-prompts, and users already on Fastest are
 // never asked.
-- (void)offerFastestApplySpeedIfNeeded
+- (BOOL)offerFastestApplySpeedIfNeeded
 {
     static NSString * const kAskedKey = @"SettleFastestMigrationAsked";
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-    if ([d boolForKey:kAskedKey]) return;
-    if ([d integerForKey:kSettingsRemoteSettleMode] == 2) return; // already Fastest
+    if ([d boolForKey:kAskedKey]) return NO;
+    if ([d integerForKey:kSettingsRemoteSettleMode] == 2) return NO; // already Fastest
 
     [d setBool:YES forKey:kAskedKey];
 
@@ -117,12 +120,59 @@ static const CGFloat kMargin = 20.0;
         alertControllerWithTitle:@"Faster tweak apply"
                          message:@"Cyanide now defaults to the Fastest apply speed, which cuts the wait between remote calls. Switch to Fastest? You can change this any time in Settings → Launch Options."
                   preferredStyle:UIAlertControllerStyleAlert];
-    [ac addAction:[UIAlertAction actionWithTitle:@"Not Now" style:UIAlertActionStyleCancel handler:nil]];
+    __weak typeof(self) weakSelf = self;
+    [ac addAction:[UIAlertAction actionWithTitle:@"Not Now"
+                                           style:UIAlertActionStyleCancel
+                                         handler:^(UIAlertAction *_) {
+        [weakSelf offerPeV3AfterDismissal];
+    }]];
     [ac addAction:[UIAlertAction actionWithTitle:@"Switch to Fastest"
                                            style:UIAlertActionStyleDefault
                                          handler:^(UIAlertAction *_) {
         [d setInteger:2 forKey:kSettingsRemoteSettleMode];
         r_settle_set_mode(2);
+        [weakSelf offerPeV3AfterDismissal];
+    }]];
+    [self presentViewController:ac animated:YES completion:nil];
+    return YES;
+}
+
+// An alert action's handler runs while that alert is still being dismissed;
+// present the next one on the following main-queue turn.
+- (void)offerPeV3AfterDismissal
+{
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf offerPeV3IfNeeded]; });
+}
+
+// One-time offer on A18 / A18 Pro / M4 devices: switch the A18 exploit path to
+// pe_v3, which on our test data has caused fewer reboots (aperture panics)
+// than the other paths. Asked once per install, whatever the answer; users
+// already on pe_v3 are never asked. Takes effect on the next fresh chain run
+// (a parked/recovered session skips the exploit entirely).
+- (void)offerPeV3IfNeeded
+{
+    static NSString * const kAskedKey = @"A18PeV3SwitchAsked";
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    if (!settings_device_is_a18_family()) return;
+    if ([d boolForKey:kAskedKey]) return;
+    if ([d integerForKey:kSettingsA18ExploitPath] == 2) return; // already pe_v3 (stored 2)
+    if (self.presentedViewController) return;   // try again on the next appearance
+
+    [d setBool:YES forKey:kAskedKey];
+
+    UIAlertController *ac = [UIAlertController
+        alertControllerWithTitle:@"Try the pe_v3 exploit path?"
+                         message:@"This version adds pe_v3, a newer exploit method for A18 / M4 devices. It probably causes fewer reboots: it stops early instead of reading memory that is likely to panic the device, and retries cleanly instead.\n\nSwitch to pe_v3? You can change this any time in Settings → Launch Options → A18 exploit path."
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Keep Current" style:UIAlertActionStyleCancel handler:nil]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Switch to pe_v3"
+                                           style:UIAlertActionStyleDefault
+                                         handler:^(UIAlertAction *_) {
+        [d setInteger:2 forKey:kSettingsA18ExploitPath];
+        [d synchronize];
+        log_user("[KRW] A18 exploit path set to pe_v3 from the launch prompt. Takes effect on "
+                 "the next fresh chain run.\n");
     }]];
     [self presentViewController:ac animated:YES completion:nil];
 }

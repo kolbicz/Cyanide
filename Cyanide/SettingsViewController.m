@@ -3173,6 +3173,11 @@ static BOOL settings_device_is_a18_above(void)
     return result;
 }
 
+BOOL settings_device_is_a18_family(void)
+{
+    return settings_device_is_a18_above();
+}
+
 static BOOL settings_nano_load_override_enabled(void)
 {
     if (!settings_device_supported()) return NO;
@@ -15071,7 +15076,7 @@ void cyanide_present_contact(UIViewController *host)
         title.translatesAutoresizingMaskIntoConstraints = NO;
 
         UISegmentedControl *seg =
-            [[UISegmentedControl alloc] initWithItems:@[@"pe_v1 (default)", @"pe_v2 (fallback)", @"pe_v3 (single-hunt)"]];
+            [[UISegmentedControl alloc] initWithItems:@[@"pe_v1 (default)", @"pe_v2", @"pe_v3"]];
         seg.translatesAutoresizingMaskIntoConstraints = NO;
         // Display order is pe_v1 first, but the stored value is unchanged
         // (1 = pe_v1, 0 = pe_v2, 2 = pe_v3) so existing preferences keep their meaning.
@@ -15086,13 +15091,13 @@ void cyanide_present_contact(UIViewController *host)
         note.font = [UIFont systemFontOfSize:12.0];
         note.textColor = UIColor.secondaryLabelColor;
         note.text = settings_device_is_a18_above()
-            ? @"A18/M4 only. pe_v1 is the default and the only path with a measured acquire "
-               "rate (~50% per attempt; parked state makes it a one-time cost per boot). pe_v2 "
-               "stages 2 GB as 131,072 separate IOSurfaces, but iOS caps a process at 16,384 — so "
-               "most fail and it has not acquired reliably in testing. pe_v3 uses pe_v2's staging "
-               "but hunts only one mapping and retries reoccupation on already-proven pages "
-               "instead of re-hunting — built to cut the aperture panics. Leave this on pe_v1 "
-               "unless you are testing."
+            ? @"A18/M4 only. pe_v1 is the default (~50% per attempt; parked state makes it a "
+               "one-time cost per boot). pe_v2 stages 2 GB as 131,072 separate IOSurfaces, but iOS "
+               "caps a process at 16,384 — so most fail and it has not acquired reliably in "
+               "testing. pe_v3 uses pe_v2's staging but hunts only one mapping, retries on "
+               "already-proven pages instead of re-hunting, and stops early instead of reading "
+               "memory likely to panic the device (~50% per attempt in testing) — so it probably "
+               "causes fewer reboots."
             : @"A18/M4 devices only. This device uses pe_v1 already.";
         note.translatesAutoresizingMaskIntoConstraints = NO;
 
