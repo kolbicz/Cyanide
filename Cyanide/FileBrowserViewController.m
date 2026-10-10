@@ -1236,11 +1236,31 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
                 failure = @"The copy could not be created.";
             } else {
                 char buf[64 * 1024];
+                unsigned long long copied = 0;
                 ssize_t n;
-                while ((n = read(in, buf, sizeof(buf))) > 0) {
-                    if (write(out, buf, (size_t)n) != n) { failure = @"The copy could not be written."; break; }
+                while (!failure) {
+                    if (copied >= kFBMaxShareBytes) {
+                        n = read(in, buf, 1); // distinguish exactly-at-limit EOF from growth
+                        if (n > 0) failure = @"The file grew beyond the 64 MB sharing limit.";
+                        else if (n < 0 && errno != EINTR) failure = @"The file could not be read.";
+                        if (!failure && n == 0) break;
+                        if (n < 0 && errno == EINTR) continue;
+                        break;
+                    }
+                    size_t want = (size_t)MIN((unsigned long long)sizeof(buf), kFBMaxShareBytes - copied);
+                    n = read(in, buf, want);
+                    if (n < 0 && errno == EINTR) continue;
+                    if (n < 0) { failure = @"The file could not be read."; break; }
+                    if (n == 0) break;
+                    size_t done = 0;
+                    while (done < (size_t)n) {
+                        ssize_t w = write(out, buf + done, (size_t)n - done);
+                        if (w < 0 && errno == EINTR) continue;
+                        if (w <= 0) { failure = @"The copy could not be written."; break; }
+                        done += (size_t)w;
+                    }
+                    copied += (unsigned long long)n;
                 }
-                if (n < 0) failure = @"The file could not be read.";
             }
             if (in >= 0) close(in);
             if (out >= 0) close(out);
