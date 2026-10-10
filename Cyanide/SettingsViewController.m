@@ -15741,7 +15741,7 @@ static volatile int      g_cyanide_upload_seq = 0;
 // RemoteCall, tweak, and live-loop boundaries instead of timer noise.
 static void cyanide_upload_log_with_kind_event(NSString *kind, NSString *event) {
     if (![[NSUserDefaults standardUserDefaults] boolForKey:kSettingsLogUploadEnabled]) return;
-    NSString *path = log_most_recent_session_path();
+    NSString *path = log_current_session_path() ?: log_most_recent_session_path();
     if (!path) return;
     // Only the last 512 KiB: the end of a session is what matters, and this
     // runs at every milestone.

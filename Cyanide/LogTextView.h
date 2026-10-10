@@ -37,6 +37,11 @@ void log_live_flush(void);
 // Absolute path of the most recent session log file, or nil if none exist.
 NSString * _Nullable log_most_recent_session_path(void);
 
+// Absolute path owned by the currently open chain session, or nil when no
+// session is active. Uploads use this while a run is in progress instead of
+// inferring ownership from filesystem modification time.
+NSString * _Nullable log_current_session_path(void);
+
 // Snapshot of the in-app ring buffer (joined with '\n'). Always reflects the
 // current state of what the user sees in Settings → View Log — boot identity,
 // chain output, anything emitted via the printf macro / log_user. Returned

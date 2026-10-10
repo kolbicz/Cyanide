@@ -9,6 +9,7 @@
 #import <UIKit/UIKit.h>
 #import <unistd.h>
 #import <fcntl.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -337,33 +338,49 @@ static void log_prune_old_sessions(NSInteger keep) {
 }
 
 void log_session_begin(void) {
-    NSURL *fileURL = nil;
+    NSURL *dir = nil;
     @autoreleasepool {
-        NSURL *dir = log_session_dir_url();
+        dir = log_session_dir_url();
         if (!dir) return;
         [[NSFileManager defaultManager] createDirectoryAtURL:dir
                                  withIntermediateDirectories:YES
                                                   attributes:nil
                                                        error:nil];
-
-        NSDateFormatter *df = [[NSDateFormatter alloc] init];
-        df.dateFormat = @"yyyyMMdd-HHmmss";
-        df.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
-        df.timeZone = [NSTimeZone localTimeZone];
-        NSString *name = [NSString stringWithFormat:@"chain-%@.log",
-                          [df stringFromDate:[NSDate date]]];
-        fileURL = [dir URLByAppendingPathComponent:name];
     }
-    if (!fileURL) return;
+    if (!dir) return;
 
     pthread_mutex_lock(&log_mutex);
-    if (log_file) {
-        fclose(log_file);
-        log_file = NULL;
+    FILE *newFile = NULL;
+    NSString *newPath = nil;
+    NSDateFormatter *df = [[NSDateFormatter alloc] init];
+    df.dateFormat = @"yyyyMMdd-HHmmss-SSS";
+    df.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    df.timeZone = [NSTimeZone localTimeZone];
+    NSString *stamp = [df stringFromDate:[NSDate date]];
+    for (NSUInteger attempt = 0; attempt < 8 && !newFile; attempt++) {
+        NSString *name = [NSString stringWithFormat:@"chain-%@-%@.log", stamp, NSUUID.UUID.UUIDString];
+        NSString *candidate = [dir URLByAppendingPathComponent:name].path;
+        int fd = open(candidate.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (fd < 0) {
+            if (errno == EEXIST) continue;
+            break;
+        }
+        newFile = fdopen(fd, "w");
+        if (!newFile) {
+            close(fd);
+            unlink(candidate.fileSystemRepresentation);
+            break;
+        }
+        newPath = candidate;
     }
-    strlcpy(log_file_path_c, fileURL.path.fileSystemRepresentation, sizeof(log_file_path_c));
-    log_file = fopen(log_file_path_c, "w");
-    if (log_file) {
+    if (!newFile || !newPath.length) {
+        pthread_mutex_unlock(&log_mutex);
+        return;
+    }
+    if (log_file) fclose(log_file);
+    log_file = newFile;
+    strlcpy(log_file_path_c, newPath.fileSystemRepresentation, sizeof(log_file_path_c));
+    {
         time_t t = time(NULL);
         struct tm tm; localtime_r(&t, &tm);
         fprintf(log_file,
@@ -471,6 +488,13 @@ void log_session_flush(void) {
         log_last_fsync_ns = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     }
     pthread_mutex_unlock(&log_mutex);
+}
+
+NSString *log_current_session_path(void) {
+    pthread_mutex_lock(&log_mutex);
+    NSString *path = log_file_path_c[0] ? [NSString stringWithUTF8String:log_file_path_c] : nil;
+    pthread_mutex_unlock(&log_mutex);
+    return path;
 }
 
 // Force the live log all the way to media. fflush already makes each line
