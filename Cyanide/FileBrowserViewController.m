@@ -187,7 +187,11 @@ static FBFileIdentity fb_identity_path(NSString *path)
 {
     FBFileIdentity ident = {0};
     struct stat st;
-    if (lstat(path.fileSystemRepresentation, &st) == 0) {
+    // Save validation follows the path like open() does. Destructive entry
+    // validation separately uses lstat so a symlink itself remains the object
+    // being protected there; save validation must compare the opened target,
+    // otherwise every editable symlink would fail its own pre-commit check.
+    if (stat(path.fileSystemRepresentation, &st) == 0) {
         ident.valid = YES;
         ident.dev = st.st_dev;
         ident.ino = st.st_ino;
@@ -399,7 +403,10 @@ static BOOL fb_fsync_directory(NSString *path)
 // the original file is touched.
 static BOOL fb_write_durable_file(NSString *path, NSData *data, mode_t mode)
 {
-    int fd = open(path.fileSystemRepresentation, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
+    // Recovery names are UUID-derived. Never turn an accidental collision
+    // into truncation of an older preimage; failing closed keeps the original
+    // untouched and leaves the existing recovery artifact available.
+    int fd = open(path.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode);
     if (fd < 0) return NO;
     const uint8_t *p = data.bytes;
     size_t done = 0;
