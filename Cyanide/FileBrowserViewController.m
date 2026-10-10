@@ -14,6 +14,7 @@
 #import <grp.h>
 #import <pwd.h>
 #import <sys/stat.h>
+#import <stdatomic.h>
 
 // The pending-changes popup bar is hosted by the tab bar controller above
 // pushed content; hide it while a browser screen is on top (as the Process
@@ -29,9 +30,12 @@ static void fb_suppress_popup_bar(UIViewController *vc, BOOL suppressed)
 // Write mode: off by default and for this app launch only (never persisted),
 // so a later session can't delete anything by accident. Changes are made as
 // user mobile, so Unix permissions still apply.
-static BOOL g_fb_write_enabled = NO;
+static _Atomic(bool) g_fb_write_enabled = false;
 
-BOOL filebrowser_write_enabled(void) { return g_fb_write_enabled; }
+BOOL filebrowser_write_enabled(void)
+{
+    return atomic_load_explicit(&g_fb_write_enabled, memory_order_acquire);
+}
 
 // Bumped whenever a listing option changes, so folders further down the
 // navigation stack reload when they reappear.
@@ -153,6 +157,9 @@ static BOOL fb_pwrite_all(int fd, NSData *data)
 //    folder. A failed write is undone from them; if that fails too, the
 //    message names the surviving backup.
 static const NSUInteger kFBMaxBackupBytes = 64 * 1024 * 1024;
+static NSString *fb_backup_dir(void);
+static BOOL fb_fsync_directory(NSString *path);
+static BOOL fb_write_durable_file(NSString *path, NSData *data, mode_t mode);
 
 FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expected, NSData *loaded,
                               BOOL force, FBFileIdentity *newIdentity, NSString **message)
@@ -161,7 +168,7 @@ FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expec
     FBSaveResult result = FBSaveFailed;
     // Checked again here, at execution time: a save can wait in the file
     // queue behind other work while Changes get locked.
-    if (!g_fb_write_enabled) {
+    if (!filebrowser_write_enabled()) {
         if (message) *message = @"Changes are locked. Unlock them in the File Browser first.";
         return FBSaveFailed;
     }
@@ -188,8 +195,13 @@ FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expec
     } else if (!force && (!fb_same_object(expected, current) || !loaded || ![currentData isEqualToData:loaded])) {
         result = FBSaveConflict;
     } else {
-        NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"FileBrowserBackups"];
-        [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *dir = fb_backup_dir();
+        NSError *dirError = nil;
+        BOOL dirReady = dir.length && [NSFileManager.defaultManager createDirectoryAtPath:dir
+                                                               withIntermediateDirectories:YES
+                                                                                attributes:nil
+                                                                                     error:&dirError] &&
+                        fb_fsync_directory(dir);
         // "<name>.<UUID>.bak" must fit the 255-byte name limit: the UUID and
         // suffix take 41 bytes, so a name over ~214 bytes made every save of
         // that file fail with "backup couldn't be written". Keep at most 120
@@ -205,10 +217,15 @@ FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expec
         // mid-save can be traced to the file it belongs to (see
         // fb_leftover_backups / the notice on the next File Browser open).
         NSString *backupPath = [backup stringByAppendingString:@".path"];
-        if (![currentData writeToFile:backup atomically:YES]) {
-            msg = @"A backup of the current file couldn't be written. Nothing was changed.";
-        } else if (![path writeToFile:backupPath atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
+        if (!dirReady) {
+            msg = [NSString stringWithFormat:@"A durable recovery folder couldn't be prepared%@. Nothing was changed.",
+                   dirError.localizedDescription.length ? [NSString stringWithFormat:@" (%@)", dirError.localizedDescription] : @""];
+        } else if (!fb_write_durable_file(backup, currentData, 0600) ||
+                   !fb_write_durable_file(backupPath, [path dataUsingEncoding:NSUTF8StringEncoding], 0600)) {
+            // Nothing was changed: remove whatever got (partly) written, or
+            // the leftover would raise a false "Unfinished Saves" notice.
             [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
+            [NSFileManager.defaultManager removeItemAtPath:backupPath error:nil];
             msg = @"A backup of the current file couldn't be written. Nothing was changed.";
         } else if (fb_pwrite_all(fd, data)) {
             [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
@@ -243,20 +260,63 @@ FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expec
 // its own name), oldest first.
 static NSString *fb_backup_dir(void)
 {
+    NSArray<NSString *> *roots = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory,
+                                                                       NSUserDomainMask, YES);
+    NSString *root = roots.firstObject;
+    return root.length ? [root stringByAppendingPathComponent:@"FileBrowserRecovery"] : nil;
+}
+
+// Keep pre-1.7.2/legacy temporary backups visible after moving new recovery
+// artifacts to persistent application support.
+static NSString *fb_legacy_backup_dir(void)
+{
     return [NSTemporaryDirectory() stringByAppendingPathComponent:@"FileBrowserBackups"];
+}
+
+static BOOL fb_fsync_directory(NSString *path)
+{
+    int fd = open(path.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0) return NO;
+    int rc = fsync(fd);
+    close(fd);
+    return rc == 0;
+}
+
+// NSData writeToFile:atomically: does not establish a durable preimage.  Use
+// a descriptor, fsync the bytes, then fsync the containing directory before
+// the original file is touched.
+static BOOL fb_write_durable_file(NSString *path, NSData *data, mode_t mode)
+{
+    int fd = open(path.fileSystemRepresentation, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
+    if (fd < 0) return NO;
+    const uint8_t *p = data.bytes;
+    size_t done = 0;
+    BOOL ok = YES;
+    while (done < data.length) {
+        ssize_t n = write(fd, p + done, data.length - done);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) { ok = NO; break; }
+        done += (size_t)n;
+    }
+    if (ok && fsync(fd) != 0) ok = NO;
+    if (close(fd) != 0) ok = NO;
+    if (ok && !fb_fsync_directory([path stringByDeletingLastPathComponent])) ok = NO;
+    return ok;
 }
 
 static NSArray<NSString *> *fb_leftover_backups(void)
 {
-    NSString *dir = fb_backup_dir();
-    NSArray<NSString *> *names = [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil];
     NSMutableArray<NSString *> *out = [NSMutableArray array];
-    for (NSString *name in [names sortedArrayUsingSelector:@selector(compare:)]) {
-        if (![name hasSuffix:@".bak"]) continue;
-        NSString *bak = [dir stringByAppendingPathComponent:name];
-        NSString *orig = [NSString stringWithContentsOfFile:[bak stringByAppendingString:@".path"]
-                                                   encoding:NSUTF8StringEncoding error:nil];
-        [out addObject:orig.length ? orig : name];
+    for (NSString *dir in @[ fb_backup_dir() ?: @"", fb_legacy_backup_dir() ]) {
+        if (!dir.length) continue;
+        NSArray<NSString *> *names = [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil];
+        for (NSString *name in [names sortedArrayUsingSelector:@selector(compare:)]) {
+            if (![name hasSuffix:@".bak"]) continue;
+            NSString *bak = [dir stringByAppendingPathComponent:name];
+            NSString *orig = [NSString stringWithContentsOfFile:[bak stringByAppendingString:@".path"]
+                                                       encoding:NSUTF8StringEncoding error:nil];
+            [out addObject:orig.length ? orig : [NSString stringWithFormat:@"%@ (%@)", name, dir]];
+        }
     }
     return out;
 }
@@ -608,7 +668,7 @@ static const NSUInteger kFBMaxHexBytes = 64 * 1024;
 - (BOOL)canEdit
 {
     // Root access is read-only (edits would need a root write path we don't have).
-    return g_fb_write_enabled && !self.entry.viaRoot && self.data && !self.truncated &&
+    return filebrowser_write_enabled() && !self.entry.viaRoot && self.data && !self.truncated &&
            self.identity.valid && ([self plistText] || [self utf8Text]);
 }
 
@@ -1082,7 +1142,9 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
     }]];
     [ac addAction:[UIAlertAction actionWithTitle:@"Delete Backups" style:UIAlertActionStyleDestructive
                                          handler:^(UIAlertAction *a) {
+        // Both locations: the notice also lists backups in the old temp folder.
         [NSFileManager.defaultManager removeItemAtPath:fb_backup_dir() error:nil];
+        [NSFileManager.defaultManager removeItemAtPath:fb_legacy_backup_dir() error:nil];
     }]];
     [ac addAction:[UIAlertAction actionWithTitle:@"Later" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:ac animated:YES completion:nil];
@@ -1135,14 +1197,14 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
     UIBarButtonItem *go = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"ellipsis.circle"]
                                                             menu:optionsMenu];
     UIBarButtonItem *lock = [[UIBarButtonItem alloc]
-        initWithImage:[UIImage systemImageNamed:g_fb_write_enabled ? @"lock.open.fill" : @"lock.fill"]
+        initWithImage:[UIImage systemImageNamed:filebrowser_write_enabled() ? @"lock.open.fill" : @"lock.fill"]
                 style:UIBarButtonItemStylePlain
                target:self
                action:@selector(toggleWriteMode)];
-    lock.tintColor = g_fb_write_enabled ? UIColor.systemRedColor : nil;
-    lock.accessibilityLabel = g_fb_write_enabled ? @"Disable changes" : @"Enable changes";
+    lock.tintColor = filebrowser_write_enabled() ? UIColor.systemRedColor : nil;
+    lock.accessibilityLabel = filebrowser_write_enabled() ? @"Disable changes" : @"Enable changes";
     NSMutableArray *items = [NSMutableArray arrayWithObjects:go, lock, nil];
-    if (g_fb_write_enabled && !self.loadedViaRoot) {   // root access is read-only
+    if (filebrowser_write_enabled() && !self.loadedViaRoot) {   // root access is read-only
         __weak typeof(self) weakSelf = self;
         UIMenu *menu = [UIMenu menuWithChildren:@[
             [UIAction actionWithTitle:@"New Folder" image:[UIImage systemImageNamed:@"folder.badge.plus"]
@@ -1159,8 +1221,8 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
 
 - (void)toggleWriteMode
 {
-    if (g_fb_write_enabled) {
-        g_fb_write_enabled = NO;
+    if (filebrowser_write_enabled()) {
+        atomic_store_explicit(&g_fb_write_enabled, false, memory_order_release);
         [self updateBarButtons];
         return;
     }
@@ -1172,7 +1234,7 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
                   preferredStyle:UIAlertControllerStyleAlert];
     [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [ac addAction:[UIAlertAction actionWithTitle:@"Enable" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
-        g_fb_write_enabled = YES;
+        atomic_store_explicit(&g_fb_write_enabled, true, memory_order_release);
         [self updateBarButtons];
     }]];
     [self presentViewController:ac animated:YES completion:nil];
@@ -1184,7 +1246,7 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
 // execution: a prompt opened before the lock was closed must not still act.
 - (void)perform:(BOOL (^)(NSError **err))op failureTitle:(NSString *)title
 {
-    if (!g_fb_write_enabled || self.loadedViaRoot) {
+    if (!filebrowser_write_enabled() || self.loadedViaRoot) {
         fb_alert(self, title, @"Changes are locked.");
         return;
     }
@@ -1193,7 +1255,7 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
         // Re-check when the job actually starts: locking while it was queued
         // cancels it. (A job that has started is left to finish.)
         BOOL ok = NO;
-        if (g_fb_write_enabled) ok = op(&err);
+        if (filebrowser_write_enabled()) ok = op(&err);
         else err = fb_locked_error();
         NSString *message = err.localizedDescription;
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -1306,7 +1368,7 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
 {
     // The lock may have been closed while the picker was open.
-    if (!g_fb_write_enabled || self.loadedViaRoot) {
+    if (!filebrowser_write_enabled() || self.loadedViaRoot) {
         fb_alert(self, @"Not Imported", @"Changes are locked.");
         return;
     }
@@ -1314,7 +1376,7 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
     dispatch_async(fb_file_queue(), ^{
         NSMutableArray<NSString *> *failed = [NSMutableArray array];
         for (NSURL *url in urls) {
-            if (!g_fb_write_enabled) {   // locked mid-import: stop before the next item
+            if (!filebrowser_write_enabled()) {   // locked mid-import: stop before the next item
                 [failed addObject:[NSString stringWithFormat:@"%@: changes were locked", url.lastPathComponent]];
                 continue;
             }
@@ -1661,7 +1723,7 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
 - (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView
     trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-    if (!g_fb_write_enabled || self.loadedViaRoot || !self.shown.count) return nil;
+    if (!filebrowser_write_enabled() || self.loadedViaRoot || !self.shown.count) return nil;
     FBEntry *e = self.shown[indexPath.row];
     UIContextualAction *del = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive
                                                                       title:@"Delete"
@@ -1704,7 +1766,7 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
         }];
         NSMutableArray<UIMenuElement *> *items = [NSMutableArray arrayWithObject:copy];
         if (!e.isDirectory) [items addObject:info];
-        if (g_fb_write_enabled && !self.loadedViaRoot) {
+        if (filebrowser_write_enabled() && !self.loadedViaRoot) {
             UIAction *ren = [UIAction actionWithTitle:@"Rename" image:[UIImage systemImageNamed:@"pencil"]
                                            identifier:nil handler:^(UIAction *a) { [self promptRename:e]; }];
             UIAction *dup = [UIAction actionWithTitle:@"Duplicate" image:[UIImage systemImageNamed:@"plus.square.on.square"]
