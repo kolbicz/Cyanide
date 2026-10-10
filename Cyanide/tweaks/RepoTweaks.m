@@ -91,15 +91,77 @@ static BOOL repotweaks_generation_is_active(uint64_t generation) {
     return active;
 }
 
+static void repotweaks_cancel_timer_sources(NSArray *sources) {
+    for (id timerSource in sources) {
+        if (timerSource) dispatch_source_cancel((dispatch_source_t)timerSource);
+    }
+}
+
+// The caller must hold g_repo_queue_lock. Clearing the dictionaries while the
+// lock is held prevents an old timer callback from racing the abandoning
+// thread; cancellation itself happens after the lock is released.
+static NSArray *repotweaks_detach_timer_sources_locked(
+    NSMutableDictionary<NSString *, NSMutableDictionary<NSNumber *, id> *> *registry) {
+    if (!registry) return @[];
+
+    NSMutableArray *sources = [NSMutableArray array];
+    for (NSMutableDictionary<NSNumber *, id> *timers in registry.allValues) {
+        [sources addObjectsFromArray:timers.allValues];
+        [timers removeAllObjects];
+    }
+    [registry removeAllObjects];
+    return [sources copy];
+}
+
+static int repotweaks_next_timer_id(uint64_t generation) {
+    pthread_mutex_lock(&g_repo_queue_lock);
+    int timerID = 0;
+    if (!g_repo_shutting_down && generation == g_repo_generation) {
+        timerID = ++g_repo_timer_id_counter;
+        if (timerID == 0) timerID = ++g_repo_timer_id_counter;
+    }
+    pthread_mutex_unlock(&g_repo_queue_lock);
+    return timerID;
+}
+
+static BOOL repotweaks_register_timer(uint64_t generation,
+                                      NSMutableDictionary<NSNumber *, id> *timers,
+                                      NSNumber *timerID,
+                                      dispatch_source_t timer) {
+    pthread_mutex_lock(&g_repo_queue_lock);
+    BOOL active = !g_repo_shutting_down && generation == g_repo_generation;
+    if (active) timers[timerID] = timer;
+    pthread_mutex_unlock(&g_repo_queue_lock);
+    return active;
+}
+
+static dispatch_source_t repotweaks_remove_timer(NSMutableDictionary<NSNumber *, id> *timers,
+                                                 NSNumber *timerID) {
+    pthread_mutex_lock(&g_repo_queue_lock);
+    id timerSource = timers[timerID];
+    if (timerSource) [timers removeObjectForKey:timerID];
+    pthread_mutex_unlock(&g_repo_queue_lock);
+    return (dispatch_source_t)timerSource;
+}
+
 static void repotweaks_abandon_js_queue_after_timeout(const char *reason, BOOL shuttingDown) {
+    NSMutableDictionary<NSString *, NSMutableDictionary<NSNumber *, id> *> *abandonedRegistry = nil;
+    NSArray *abandonedSources = nil;
+
     pthread_mutex_lock(&g_repo_queue_lock);
     g_repo_generation++;
     if (g_repo_generation == 0) g_repo_generation = 1;
     g_repo_shutting_down = shuttingDown ? 1 : 0;
+    abandonedRegistry = g_repo_timers_registry;
+    g_repo_timers_registry = nil;
+    abandonedSources = repotweaks_detach_timer_sources_locked(abandonedRegistry);
     g_repo_queue = repotweaks_create_js_queue_locked();
     g_repo_contexts = nil;
-    g_repo_timers_registry = nil;
     pthread_mutex_unlock(&g_repo_queue_lock);
+
+    // Do not enqueue cleanup on the old queue: it is the queue that timed out.
+    // The generation was invalidated before these sources were cancelled.
+    repotweaks_cancel_timer_sources(abandonedSources);
     log_user("[RepoTweaks] Abandoned wedged JS queue after %s; future runs will use a fresh queue.\n",
              reason ? reason : "timeout");
 }
@@ -570,13 +632,16 @@ void repotweaks_seed_default_repos(void) {
 }
 
 static void repotweaks_cancel_tweak_locked(NSString *tweakID) {
+    NSArray *sources = nil;
+    pthread_mutex_lock(&g_repo_queue_lock);
     NSMutableDictionary *timers = g_repo_timers_registry[tweakID];
-    for (id timerSource in timers.allValues) {
-        dispatch_source_cancel((dispatch_source_t)timerSource);
-    }
+    sources = [timers.allValues copy] ?: @[];
     [timers removeAllObjects];
     [g_repo_timers_registry removeObjectForKey:tweakID];
     [g_repo_contexts removeObjectForKey:tweakID];
+    pthread_mutex_unlock(&g_repo_queue_lock);
+
+    repotweaks_cancel_timer_sources(sources);
 }
 
 void repotweaks_cancel_tweak(NSString *repoURL, NSString *tweakId) {
@@ -606,15 +671,26 @@ bool repotweaks_run_isolated_js(NSString *tweakID, NSString *tweakName, NSString
 
     bool completed = repotweaks_perform_sync_timeout(^{
         if (!repotweaks_generation_is_current(runGeneration)) return;
-        if (!g_repo_contexts) g_repo_contexts = [NSMutableDictionary dictionary];
-        if (!g_repo_timers_registry) g_repo_timers_registry = [NSMutableDictionary dictionary];
-
         repotweaks_cancel_tweak_locked(safeID);
         NSMutableDictionary<NSNumber *, id> *tweakTimers = [NSMutableDictionary dictionary];
-        g_repo_timers_registry[safeID] = tweakTimers;
+        pthread_mutex_lock(&g_repo_queue_lock);
+        BOOL registryInstalled = !g_repo_shutting_down && runGeneration == g_repo_generation;
+        if (registryInstalled) {
+            if (!g_repo_timers_registry) g_repo_timers_registry = [NSMutableDictionary dictionary];
+            g_repo_timers_registry[safeID] = tweakTimers;
+        }
+        pthread_mutex_unlock(&g_repo_queue_lock);
+        if (!registryInstalled) return;
 
         JSContext *context = [[JSContext alloc] init];
-        g_repo_contexts[safeID] = context;
+        pthread_mutex_lock(&g_repo_queue_lock);
+        BOOL contextInstalled = !g_repo_shutting_down && runGeneration == g_repo_generation;
+        if (contextInstalled) {
+            if (!g_repo_contexts) g_repo_contexts = [NSMutableDictionary dictionary];
+            g_repo_contexts[safeID] = context;
+        }
+        pthread_mutex_unlock(&g_repo_queue_lock);
+        if (!contextInstalled) return;
 
         context.exceptionHandler = ^(JSContext *ctx, JSValue *exception) {
             log_user("[RepoTweaks ERROR][%s] %s\n", safeName.UTF8String, [[exception toString] UTF8String]);
@@ -622,7 +698,8 @@ bool repotweaks_run_isolated_js(NSString *tweakID, NSString *tweakName, NSString
 
         context[@"setInterval"] = ^JSValue*(JSValue *func, JSValue *delay) {
             if (!repotweaks_generation_is_active(runGeneration)) return [JSValue valueWithInt32:0 inContext:[JSContext currentContext]];
-            int tId = ++g_repo_timer_id_counter;
+            int tId = repotweaks_next_timer_id(runGeneration);
+            if (tId == 0) return [JSValue valueWithInt32:0 inContext:[JSContext currentContext]];
             uint64_t ms = [delay toUInt32];
             if (ms < 16) ms = 16;
 
@@ -633,24 +710,27 @@ bool repotweaks_run_isolated_js(NSString *tweakID, NSString *tweakName, NSString
                 if (repotweaks_generation_is_active(runGeneration)) [func callWithArguments:@[]];
             });
 
-            tweakTimers[@(tId)] = timer;
             dispatch_resume(timer);
+            if (!repotweaks_register_timer(runGeneration, tweakTimers, @(tId), timer)) {
+                dispatch_source_cancel(timer);
+                return [JSValue valueWithInt32:0 inContext:[JSContext currentContext]];
+            }
             return [JSValue valueWithInt32:tId inContext:[JSContext currentContext]];
         };
 
         context[@"clearInterval"] = ^(JSValue *timerId) {
             if (!repotweaks_generation_is_active(runGeneration)) return;
             int tId = [timerId toInt32];
-            dispatch_source_t timer = (dispatch_source_t)tweakTimers[@(tId)];
+            dispatch_source_t timer = repotweaks_remove_timer(tweakTimers, @(tId));
             if (timer) {
                 dispatch_source_cancel(timer);
-                [tweakTimers removeObjectForKey:@(tId)];
             }
         };
 
         context[@"setTimeout"] = ^JSValue*(JSValue *func, JSValue *delay) {
             if (!repotweaks_generation_is_active(runGeneration)) return [JSValue valueWithInt32:0 inContext:[JSContext currentContext]];
-            int tId = ++g_repo_timer_id_counter;
+            int tId = repotweaks_next_timer_id(runGeneration);
+            if (tId == 0) return [JSValue valueWithInt32:0 inContext:[JSContext currentContext]];
             uint64_t ms = [delay toUInt32];
 
             dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, repotweaks_js_queue());
@@ -659,21 +739,23 @@ bool repotweaks_run_isolated_js(NSString *tweakID, NSString *tweakName, NSString
             dispatch_source_set_event_handler(timer, ^{
                 if (repotweaks_generation_is_active(runGeneration)) [func callWithArguments:@[]];
                 dispatch_source_cancel(timer);
-                [tweakTimers removeObjectForKey:@(tId)];
+                (void)repotweaks_remove_timer(tweakTimers, @(tId));
             });
 
-            tweakTimers[@(tId)] = timer;
             dispatch_resume(timer);
+            if (!repotweaks_register_timer(runGeneration, tweakTimers, @(tId), timer)) {
+                dispatch_source_cancel(timer);
+                return [JSValue valueWithInt32:0 inContext:[JSContext currentContext]];
+            }
             return [JSValue valueWithInt32:tId inContext:[JSContext currentContext]];
         };
 
         context[@"clearTimeout"] = ^(JSValue *timerId) {
             if (!repotweaks_generation_is_active(runGeneration)) return;
             int tId = [timerId toInt32];
-            dispatch_source_t timer = (dispatch_source_t)tweakTimers[@(tId)];
+            dispatch_source_t timer = repotweaks_remove_timer(tweakTimers, @(tId));
             if (timer) {
                 dispatch_source_cancel(timer);
-                [tweakTimers removeObjectForKey:@(tId)];
             }
         };
 
@@ -1104,13 +1186,12 @@ bool repotweaks_stop_in_session(void) {
     bool stopped = repotweaks_perform_sync_timeout(^{
         if (!repotweaks_generation_is_current(stopGeneration)) return;
         log_user("[RepoTweaks] Safe stop: stopping timers.\n");
-        if (g_repo_timers_registry) {
-            for (NSString *tweakID in [g_repo_timers_registry allKeys]) {
-                repotweaks_cancel_tweak_locked(tweakID);
-            }
-            [g_repo_timers_registry removeAllObjects];
-        }
+        NSArray *sources = nil;
+        pthread_mutex_lock(&g_repo_queue_lock);
+        sources = repotweaks_detach_timer_sources_locked(g_repo_timers_registry);
         [g_repo_contexts removeAllObjects];
+        pthread_mutex_unlock(&g_repo_queue_lock);
+        repotweaks_cancel_timer_sources(sources);
     }, 2 * NSEC_PER_SEC);
 
     if (!stopped) {

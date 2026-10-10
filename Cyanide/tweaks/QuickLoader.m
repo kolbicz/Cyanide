@@ -292,15 +292,83 @@ static BOOL quickloader_generation_is_active(uint64_t generation) {
     return active;
 }
 
+static void quickloader_cancel_timer_sources(NSArray *sources) {
+    for (id timerSource in sources) {
+        if (timerSource) dispatch_source_cancel((dispatch_source_t)timerSource);
+    }
+}
+
+// The caller must hold g_quickloader_queue_lock. Clearing the registry while
+// the lock is held prevents an old timer callback from racing the abandoning
+// thread; cancellation itself happens after the lock is released.
+static NSArray *quickloader_detach_timer_sources_locked(NSMutableDictionary *registry) {
+    if (!registry) return @[];
+
+    NSMutableArray *sources = [NSMutableArray array];
+    [sources addObjectsFromArray:registry.allValues];
+    [registry removeAllObjects];
+    return [sources copy];
+}
+
+static NSArray *quickloader_replace_timer_registry(NSMutableDictionary *newRegistry) {
+    NSArray *oldSources = nil;
+    pthread_mutex_lock(&g_quickloader_queue_lock);
+    NSMutableDictionary *oldRegistry = g_quickloader_timers;
+    g_quickloader_timers = newRegistry;
+    oldSources = quickloader_detach_timer_sources_locked(oldRegistry);
+    pthread_mutex_unlock(&g_quickloader_queue_lock);
+    return oldSources;
+}
+
+static int quickloader_next_timer_id(uint64_t generation) {
+    pthread_mutex_lock(&g_quickloader_queue_lock);
+    int timerID = 0;
+    if (!g_quickloader_shutting_down && generation == g_quickloader_generation) {
+        timerID = ++g_quickloader_timer_id;
+        if (timerID == 0) timerID = ++g_quickloader_timer_id;
+    }
+    pthread_mutex_unlock(&g_quickloader_queue_lock);
+    return timerID;
+}
+
+static BOOL quickloader_register_timer(uint64_t generation,
+                                       NSMutableDictionary *timers,
+                                       NSNumber *timerID,
+                                       dispatch_source_t timer) {
+    pthread_mutex_lock(&g_quickloader_queue_lock);
+    BOOL active = !g_quickloader_shutting_down && generation == g_quickloader_generation;
+    if (active) timers[timerID] = timer;
+    pthread_mutex_unlock(&g_quickloader_queue_lock);
+    return active;
+}
+
+static dispatch_source_t quickloader_remove_timer(NSMutableDictionary *timers,
+                                                  NSNumber *timerID) {
+    pthread_mutex_lock(&g_quickloader_queue_lock);
+    id timerSource = timers[timerID];
+    if (timerSource) [timers removeObjectForKey:timerID];
+    pthread_mutex_unlock(&g_quickloader_queue_lock);
+    return (dispatch_source_t)timerSource;
+}
+
 static void quickloader_abandon_js_queue_after_timeout(const char *reason, BOOL shuttingDown) {
+    NSMutableDictionary *abandonedRegistry = nil;
+    NSArray *abandonedSources = nil;
+
     pthread_mutex_lock(&g_quickloader_queue_lock);
     g_quickloader_generation++;
     if (g_quickloader_generation == 0) g_quickloader_generation = 1;
     g_quickloader_shutting_down = shuttingDown ? 1 : 0;
+    abandonedRegistry = g_quickloader_timers;
+    g_quickloader_timers = nil;
+    abandonedSources = quickloader_detach_timer_sources_locked(abandonedRegistry);
     g_quickloader_queue = quickloader_create_js_queue_locked();
     g_quickloader_context = nil;
-    g_quickloader_timers = nil;
     pthread_mutex_unlock(&g_quickloader_queue_lock);
+
+    // Do not enqueue cleanup on the old queue: it is the queue that timed out.
+    // The generation was invalidated before these sources were cancelled.
+    quickloader_cancel_timer_sources(abandonedSources);
     log_user("[QuickLoader] Abandoned wedged JS queue after %s; future runs will use a fresh queue.\n",
              reason ? reason : "timeout");
 }
@@ -411,20 +479,16 @@ bool quickloader_run_js_string(NSString *jsCode) {
         if (!quickloader_generation_is_current(runGeneration)) return;
         log_user("[JS Engine] Initializing long-living environment...\n");
 
-        if (g_quickloader_timers == nil) {
-            g_quickloader_timers = [[NSMutableDictionary alloc] init];
-        } else {
-            for (dispatch_source_t t in g_quickloader_timers.allValues) {
-                if (dispatch_testcancel(t) == 0) {
-                    dispatch_source_cancel(t);
-                }
-            }
-            [g_quickloader_timers removeAllObjects];
-        }
-        NSMutableDictionary *timers = g_quickloader_timers;
+        NSMutableDictionary *timers = [[NSMutableDictionary alloc] init];
+        NSArray *oldTimerSources = quickloader_replace_timer_registry(timers);
+        quickloader_cancel_timer_sources(oldTimerSources);
 
-        g_quickloader_context = [[JSContext alloc] init];
-        JSContext *context = g_quickloader_context;
+        JSContext *context = [[JSContext alloc] init];
+        pthread_mutex_lock(&g_quickloader_queue_lock);
+        BOOL contextInstalled = !g_quickloader_shutting_down && runGeneration == g_quickloader_generation;
+        if (contextInstalled) g_quickloader_context = context;
+        pthread_mutex_unlock(&g_quickloader_queue_lock);
+        if (!contextInstalled) return;
 
         context.exceptionHandler = ^(JSContext *ctx, JSValue *exception) {
             log_user("[JS ERROR] %s\n", [[exception toString] UTF8String]);
@@ -435,7 +499,8 @@ bool quickloader_run_js_string(NSString *jsCode) {
         // RemoteCall state is single-session by design.
         context[@"setInterval"] = ^JSValue*(JSValue *func, JSValue *delay) {
             if (!quickloader_generation_is_active(runGeneration)) return [JSValue valueWithInt32:0 inContext:[JSContext currentContext]];
-            int tId = ++g_quickloader_timer_id;
+            int tId = quickloader_next_timer_id(runGeneration);
+            if (tId == 0) return [JSValue valueWithInt32:0 inContext:[JSContext currentContext]];
             uint64_t ms = [delay toUInt32];
             if (ms < 16) ms = 16;
 
@@ -447,24 +512,27 @@ bool quickloader_run_js_string(NSString *jsCode) {
                 }
             });
 
-            timers[@(tId)] = timer;
             dispatch_resume(timer);
+            if (!quickloader_register_timer(runGeneration, timers, @(tId), timer)) {
+                dispatch_source_cancel(timer);
+                return [JSValue valueWithInt32:0 inContext:[JSContext currentContext]];
+            }
             return [JSValue valueWithInt32:tId inContext:[JSContext currentContext]];
         };
 
         context[@"clearInterval"] = ^(JSValue *timerId) {
             if (!quickloader_generation_is_active(runGeneration)) return;
             int tId = [timerId toInt32];
-            dispatch_source_t timer = timers[@(tId)];
+            dispatch_source_t timer = quickloader_remove_timer(timers, @(tId));
             if (timer) {
                 dispatch_source_cancel(timer);
-                [timers removeObjectForKey:@(tId)];
             }
         };
 
         context[@"setTimeout"] = ^JSValue*(JSValue *func, JSValue *delay) {
             if (!quickloader_generation_is_active(runGeneration)) return [JSValue valueWithInt32:0 inContext:[JSContext currentContext]];
-            int tId = ++g_quickloader_timer_id;
+            int tId = quickloader_next_timer_id(runGeneration);
+            if (tId == 0) return [JSValue valueWithInt32:0 inContext:[JSContext currentContext]];
             uint64_t ms = [delay toUInt32];
 
             dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, quickloader_js_queue());
@@ -474,21 +542,23 @@ bool quickloader_run_js_string(NSString *jsCode) {
                     [func callWithArguments:@[]];
                 }
                 dispatch_source_cancel(timer);
-                [timers removeObjectForKey:@(tId)];
+                (void)quickloader_remove_timer(timers, @(tId));
             });
 
-            timers[@(tId)] = timer;
             dispatch_resume(timer);
+            if (!quickloader_register_timer(runGeneration, timers, @(tId), timer)) {
+                dispatch_source_cancel(timer);
+                return [JSValue valueWithInt32:0 inContext:[JSContext currentContext]];
+            }
             return [JSValue valueWithInt32:tId inContext:[JSContext currentContext]];
         };
 
         context[@"clearTimeout"] = ^(JSValue *timerId) {
             if (!quickloader_generation_is_active(runGeneration)) return;
             int tId = [timerId toInt32];
-            dispatch_source_t timer = timers[@(tId)];
+            dispatch_source_t timer = quickloader_remove_timer(timers, @(tId));
             if (timer) {
                 dispatch_source_cancel(timer);
-                [timers removeObjectForKey:@(tId)];
             }
         };
 
@@ -633,17 +703,12 @@ bool quickloader_stop_in_session(void) {
         if (!quickloader_generation_is_current(stopGeneration)) return;
         log_user("[QuickLoader] Clean Up: Green light, safely stopping JS timer...\n");
 
-        if (g_quickloader_timers) {
-            for (id key in [g_quickloader_timers allKeys]) {
-                dispatch_source_t timer = (dispatch_source_t)g_quickloader_timers[key];
-                if (dispatch_testcancel(timer) == 0) {
-                    dispatch_source_cancel(timer);
-                }
-            }
-            [g_quickloader_timers removeAllObjects];
-        }
-
+        NSArray *sources = nil;
+        pthread_mutex_lock(&g_quickloader_queue_lock);
+        sources = quickloader_detach_timer_sources_locked(g_quickloader_timers);
         g_quickloader_context = nil;
+        pthread_mutex_unlock(&g_quickloader_queue_lock);
+        quickloader_cancel_timer_sources(sources);
     }, 2 * NSEC_PER_SEC);
 
     if (!stopped) {
