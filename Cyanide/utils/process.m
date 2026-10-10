@@ -2278,7 +2278,15 @@ bool procmgr_row_info(uint64_t kproc, int pid, procmgr_row_info_t *out) {
         if (exiting) break;
 
         uint64_t task = proc_task(kproc);
-        if (!procmgr_is_kern_ptr(task) || pm_task_matches_proc(task, kproc) == 0) break;
+        if (!procmgr_is_kern_ptr(task) || pm_task_matches_proc(task, kproc) == 0) {
+            // The proc pointer still had this pid, but its task was torn down
+            // or no longer belongs to it. That is not a live, usable row:
+            // return false so the controller marks it exiting/non-selectable.
+            valid = false;
+            break;
+        }
+
+        if (!procmgr_process_reads_safe()) { valid = false; break; }
 
         if (g_pm_off_task_suspcount) {
             uint32_t sc = kread32(task + g_pm_off_task_suspcount);

@@ -184,8 +184,9 @@ int procmgr_stats(int pid, uint64_t *residentBytes, uint64_t *cpuNs);
 // procmgr_stats / procmgr_suspend_count each re-walk the whole list) and no
 // per-call kexploit_krw_ready() probe. The caller must have verified KRW once
 // for the pass. The pointer is re-validated (p_pid must still equal pid)
-// before anything else is read; returns false when it no longer names pid
-// (exited / recycled) — the row should then be shown as exiting.
+// before anything else is read; returns false when it no longer names pid or
+// its task guard fails (exited / recycled / tearing down) — the row should then
+// be shown as exiting and treated as unusable.
 typedef struct {
     int      pstat;          // p_stat, -1 when unavailable
     int      suspend_count;  // -1 when uncalibrated/unavailable
