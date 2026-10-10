@@ -1488,6 +1488,13 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
                 if (me.view.window) [me reload];
                 return;
             }
+            if (fsGen != g_fb_fs_generation) {
+                // A filesystem operation completed while this result was
+                // being enumerated.  Do not mark the old rows current; a
+                // visible controller immediately requests a fresh listing.
+                if (me.view.window) [me reload];
+                return;
+            }
             me.loadedOptionsGeneration = optionsGen;
             me.loadedFsGeneration = fsGen;
             me.loadedViaRoot = viaRoot;
