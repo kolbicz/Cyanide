@@ -11627,6 +11627,13 @@ NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *trunc
                     [s remoteRead:buf + PM_ROOT_STAT_OFF to:&fst size:sizeof(fst)] && S_ISREG(fst.st_mode);
                 if (!ok) error = kPMRootTransportError;
                 else if (!regular) error = @"Only regular files can be read as root.";
+                // An iCloud placeholder: read() would block launchd's thread
+                // while the file downloads, far past our client-side timeout.
+                // (fstat itself never blocks on it.)
+                if (regular && (fst.st_flags & SF_DATALESS)) {
+                    error = @"This file is not downloaded from iCloud.";
+                    regular = NO;
+                }
                 NSMutableData *acc = regular ? [NSMutableData data] : nil;
                 BOOL readOK = regular;
                 while (readOK && acc.length < maxBytes) {
