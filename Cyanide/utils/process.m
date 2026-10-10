@@ -130,12 +130,18 @@ bool procmgr_comm_is_protected(const char *comm) {
 // Resolve a pid's comm via KRW ("" on any failure). For the kill hard-stops;
 // a lookup failure is NOT proof of safety — callers must keep the pid checks.
 int procmgr_comm_for_pid(int pid, char *buf, size_t len) {
+    return procmgr_identity_for_pid(pid, buf, len, NULL);
+}
+
+int procmgr_identity_for_pid(int pid, char *buf, size_t len, uint64_t *kprocOut) {
+    if (kprocOut) *kprocOut = 0;
     if (!buf || len == 0) return -1;
     buf[0] = '\0';
     if (pid <= 0) return -1;
     if (!kexploit_krw_session_active()) return -1;
     krw_set_nonfatal(true);
     uint64_t proc = proc_find(pid);
+    if (kprocOut && procmgr_is_kern_ptr(proc)) *kprocOut = proc;
     if (procmgr_is_kern_ptr(proc)) {
         char *nm = proc_get_p_name(proc);   // static buffer — copy out now
         if (nm) {

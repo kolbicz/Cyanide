@@ -46,6 +46,11 @@ typedef struct {
 // Requires an active KRW session.
 int procmgr_list(procmgr_entry_t *entries, int max);
 
+// comm (as procmgr_comm_for_pid) plus the struct proc address currently
+// registered for pid, for identity checks before a kill: a pid that exited and
+// was reused by a new process gets a new struct proc. Returns 0 on success.
+int procmgr_identity_for_pid(int pid, char *comm, size_t len, uint64_t *kprocOut);
+
 // True if a process with this pid currently exists in the kernel proc list.
 bool procmgr_pid_alive(int pid);
 

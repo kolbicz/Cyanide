@@ -9335,6 +9335,10 @@ typedef NS_ENUM(NSInteger, PMSortKey) { PMSortPID = 0, PMSortCPU, PMSortMem, PMS
 @property (nonatomic, strong) NSTimer *autoRefreshTimer;
 // Summary header (system memory / overall CPU / chip) above the list.
 @property (nonatomic, strong) UILabel *pmHdrChip;
+// Consecutive refresh passes whose process-list walk came back incomplete
+// (a kernel read failed, here or elsewhere in the app). The list keeps its
+// previous snapshot; from 2 in a row on, the prompt says it isn't updating.
+@property (nonatomic, assign) NSUInteger pmIncompletePasses;
 @property (nonatomic, strong) UILabel *pmHdrMem;
 @property (nonatomic, strong) UILabel *pmHdrCpu;
 @property (nonatomic, assign) uint64_t prevCpuBusyTicks;
@@ -9550,6 +9554,16 @@ static BOOL pm_comm_matches_row(const char *comm, NSString *rowName) {
     const char *expected = rowName.UTF8String;
     if (!comm || !comm[0] || !expected || !expected[0]) return NO;
     return strncmp(comm, expected, sizeof(((procmgr_entry_t *)0)->name) - 1) == 0;
+}
+
+// Same process the user tapped? The name alone passes when the same app
+// relaunched into a reused pid; the struct proc address from the list walk
+// (row "kproc") changes with every new process. rowKproc 0 = unknown (older
+// snapshot): the name check alone decides, as before.
+static BOOL pm_identity_matches_row(const char *comm, uint64_t kproc,
+                                    NSString *rowName, uint64_t rowKproc) {
+    if (!pm_comm_matches_row(comm, rowName)) return NO;
+    return rowKproc == 0 || kproc == rowKproc;
 }
 
 // --- summary header: live system info above the process list -----------------
@@ -9974,6 +9988,8 @@ static NSString *pm_chip_name(NSString *machine) {
             printf("[PROCMGR] refresh: process list incomplete — keeping previous snapshot\n");
             if (buf) free(buf);
             dispatch_async(dispatch_get_main_queue(), ^{
+                self.pmIncompletePasses++;
+                [self applyFilter];   // prompt shows "not updating" from the 2nd pass on
                 [self.refreshControl endRefreshing];
                 [self pm_reloadFinished];
             });
@@ -10007,6 +10023,7 @@ static NSString *pm_chip_name(NSString *machine) {
             NSString *pname = [NSString stringWithUTF8String:buf[i].name]
                            ?: [NSString stringWithFormat:@"pid %d", pid];
             NSMutableDictionary *row = [@{ @"pid": @(pid), @"name": pname } mutableCopy];
+            if (buf[i].kproc) row[@"kproc"] = @(buf[i].kproc);   // identity for kill checks
             // One read pass per row from the proc pointer the list walk
             // already found (procmgr_row_info): p_stat FIRST (round 14) — a
             // zombie or mid-reap p_stat (outside SIDL..SZOMB) skips the task
@@ -10113,6 +10130,7 @@ static NSString *pm_chip_name(NSString *machine) {
                 }
             }
             self.allProcs = rows;
+            self.pmIncompletePasses = 0;
             [self applyFilter];   // sets the "N processes" prompt
             [self.refreshControl endRefreshing];
             [self pm_reloadFinished];
@@ -10184,6 +10202,11 @@ static NSString *pm_chip_name(NSString *machine) {
             [NSString stringWithFormat:@"%lu of %lu", (unsigned long)self.procs.count,
              (unsigned long)self.allProcs.count];
     }
+    // One incomplete pass is a normal hiccup; two in a row means the list on
+    // screen is going stale -- say so instead of freezing silently.
+    if (self.pmIncompletePasses >= 2)
+        self.navigationItem.prompt = [self.navigationItem.prompt
+            stringByAppendingString:@" · not updating (kernel reads failing)"];
     [self.tableView reloadData];
 }
 
@@ -10478,6 +10501,7 @@ static NSString *pm_chip_name(NSString *machine) {
     NSDictionary *p = self.procs[indexPath.row];
     int pid = [p[@"pid"] intValue];
     NSString *name = p[@"name"];
+    uint64_t rowKproc = [p[@"kproc"] unsignedLongLongValue];   // 0 if unknown
     if (procmgr_pid_is_protected(pid) || procmgr_comm_is_protected(name.UTF8String)) return;
     if ([self.terminatingPids containsObject:@(pid)]) return;   // kill already in flight
 
@@ -10513,9 +10537,10 @@ static NSString *pm_chip_name(NSString *machine) {
             // off-main; alerts and row dimming hop back to main.
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                 char quitComm[64];
-                BOOL lookupOK = (procmgr_comm_for_pid(pid, quitComm, sizeof(quitComm)) == 0);
+                uint64_t quitKproc = 0;
+                BOOL lookupOK = (procmgr_identity_for_pid(pid, quitComm, sizeof(quitComm), &quitKproc) == 0);
                 if (!lookupOK || procmgr_comm_is_protected(quitComm) ||
-                    !pm_comm_matches_row(quitComm, name)) {
+                    !pm_identity_matches_row(quitComm, quitKproc, name, rowKproc)) {
                     printf("[PROCMGR] kill: REFUSING pid %d — %s\n", pid,
                            !lookupOK
                                ? "comm lookup failed, cannot verify it is not a protected process"
@@ -10624,7 +10649,7 @@ static NSString *pm_chip_name(NSString *machine) {
             // both EFAULT'd on-device on 21D61 AND 22F76. The launchd
             // RemoteCall is the only privileged kill path.
             if (rc == -6)
-                rc = [self pmForceKillViaLaunchd:pid expectedName:name];
+                rc = [self pmForceKillViaLaunchd:pid expectedName:name expectedKproc:rowKproc];
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (showBanner) [self pmHideKillShield];   // verdict known — paired with the cold-kill show
                 if (self.killsInFlight > 0) self.killsInFlight--;
@@ -11442,6 +11467,7 @@ NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *trunc
 }
 
 - (int)pmForceKillViaLaunchdLocked:(int)pid expectedName:(NSString *)expectedName
+                     expectedKproc:(uint64_t)expectedKproc
                       allowRebuild:(BOOL)allowRebuild
 {
     // ONE guard hold across warm-up + kill + verdict: a pending detach waits
@@ -11455,13 +11481,14 @@ NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *trunc
                "aborting kill(%d) before touching launchd\n", pid);
         return -2;
     }
-    int rc = [self pmForceKillViaLaunchdGated:pid expectedName:expectedName
+    int rc = [self pmForceKillViaLaunchdGated:pid expectedName:expectedName expectedKproc:expectedKproc
                                  allowRebuild:allowRebuild];
     remote_call_guard_release_external("fastkill");
     return rc;
 }
 
 - (int)pmForceKillViaLaunchdGated:(int)pid expectedName:(NSString *)expectedName
+                    expectedKproc:(uint64_t)expectedKproc
                      allowRebuild:(BOOL)allowRebuild
 {
     // Deepest refusal, at the layer that builds the remote-call args (round 5):
@@ -11509,7 +11536,8 @@ NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *trunc
     // kill — the warm-up can take ~2 s, long enough for exit + pid reuse.
     BOOL (^commOK)(const char *) = ^BOOL(const char *when) {
         char gComm[64];
-        if (procmgr_comm_for_pid(pid, gComm, sizeof(gComm)) != 0) {
+        uint64_t gKproc = 0;
+        if (procmgr_identity_for_pid(pid, gComm, sizeof(gComm), &gKproc) != 0) {
             printf("[PROCMGR] kill: REFUSING pid %d (%s) — comm lookup failed, "
                    "cannot verify it is not a protected process\n", pid, when);
             return NO;
@@ -11519,10 +11547,11 @@ NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *trunc
                    "(call-layer hard-stop, %s)\n", pid, gComm, when);
             return NO;
         }
-        if (!pm_comm_matches_row(gComm, expectedName)) {
-            printf("[PROCMGR] fastkill: REFUSING pid %d (%s) — comm '%s' no longer "
-                   "matches row '%s' (pid recycled?)\n", pid, when, gComm,
-                   expectedName.UTF8String ?: "(nil)");
+        if (!pm_identity_matches_row(gComm, gKproc, expectedName, expectedKproc)) {
+            printf("[PROCMGR] fastkill: REFUSING pid %d (%s) — '%s' proc=0x%llx no longer "
+                   "matches row '%s' proc=0x%llx (pid recycled?)\n", pid, when, gComm,
+                   (unsigned long long)gKproc, expectedName.UTF8String ?: "(nil)",
+                   (unsigned long long)expectedKproc);
             return NO;
         }
         return YES;
@@ -11660,11 +11689,12 @@ NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *trunc
     if (kexploit_krw_ready()) [gPMKillSession destroyRemoteCall];   // symmetrical
     else                     [gPMKillSession abandonRemoteCall];    // KRW down: no IPC
     gPMKillSession = nil;
-    return [self pmForceKillViaLaunchdGated:pid expectedName:expectedName
+    return [self pmForceKillViaLaunchdGated:pid expectedName:expectedName expectedKproc:expectedKproc
                                allowRebuild:NO];
 }
 
 - (int)pmForceKillViaLaunchd:(int)pid expectedName:(NSString *)expectedName
+              expectedKproc:(uint64_t)expectedKproc
 {
     if (pid <= 1) {
         printf("[PROCMGR] fastkill: REFUSING protected pid %d (kernel_task/launchd)\n", pid);
@@ -11718,7 +11748,7 @@ NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *trunc
         printf("[PROCMGR] fastkill: in-flight warm-up finished — kill(%d) uses %s\n",
                pid, gPMKillSession ? "the warmed session"
                                    : "no session (warm-up failed; warming now)");
-    int rc = [self pmForceKillViaLaunchdLocked:pid expectedName:expectedName
+    int rc = [self pmForceKillViaLaunchdLocked:pid expectedName:expectedName expectedKproc:expectedKproc
                                   allowRebuild:YES];
     [lock unlock];
     // Round 46: whenever the session stays warm after a kill, schedule the
