@@ -4632,6 +4632,18 @@ static int init_remote_call_internal(const char* process, bool useMigFilterBypas
                     [g_RC_threadList addObject:@(currThread)];
                     rc_armed_snapshot_add(currThread);
                     rc_livearm_register(currThread);   // round 20: other sessions must not arm it
+                    // A stop may have landed between the arm and the
+                    // snapshot add: its un-arm pass then copied a snapshot
+                    // without this thread. The snapshot mutex orders the two:
+                    // either the stop's pass saw this entry (and un-arms it),
+                    // or its flag store is visible here. Un-arm it ourselves
+                    // in the second case (a second un-arm is a verified no-op).
+                    if (remote_call_stop_requested()) {
+                        printf("[RemoteCall] walk: stop landed while arming %#llx — "
+                               "un-arming it; aborting walk\n", currThread);
+                        (void)clear_guard_exception(currThread);
+                        break;
+                    }
                     // Round 10: post-mortem identity of every armed thread —
                     // if the device dies while one is armed (17:45:56 shape),
                     // the analysis needs to know WHICH thread it was, not just
