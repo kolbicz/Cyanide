@@ -353,12 +353,16 @@ void log_session_begin(void) {
     FILE *newFile = NULL;
     NSString *newPath = nil;
     NSDateFormatter *df = [[NSDateFormatter alloc] init];
-    df.dateFormat = @"yyyyMMdd-HHmmss-SSS";
+    df.dateFormat = @"yyyyMMdd-HHmmss";
     df.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     df.timeZone = [NSTimeZone localTimeZone];
     NSString *stamp = [df stringFromDate:[NSDate date]];
+    // Keep the familiar chain-YYYYMMDD-HHMMSS.log name; O_EXCL below refuses
+    // an existing file, so a second session in the same second gets -2, -3, …
     for (NSUInteger attempt = 0; attempt < 8 && !newFile; attempt++) {
-        NSString *name = [NSString stringWithFormat:@"chain-%@-%@.log", stamp, NSUUID.UUID.UUIDString];
+        NSString *name = attempt == 0
+            ? [NSString stringWithFormat:@"chain-%@.log", stamp]
+            : [NSString stringWithFormat:@"chain-%@-%lu.log", stamp, (unsigned long)(attempt + 1)];
         NSString *candidate = [dir URLByAppendingPathComponent:name].path;
         int fd = open(candidate.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL, 0600);
         if (fd < 0) {
