@@ -18,6 +18,8 @@
 // A shortcut URL waiting for the scene to become active: kernel access is
 // gated off until then (excport gate), so actions can't run any earlier.
 @property (nonatomic, strong) NSURL *pendingActionURL;
+// A cyanide://location-services link arrived while links are off; told once active.
+@property (nonatomic, assign) BOOL blockedLinkNotice;
 // Who asked for pendingActionURL, if it was the Control Center toggle.
 @property (nonatomic, copy) CYLocationRequestCompletion pendingActionCompletion;
 // A successful quiet run that couldn't go Home because Cyanide was inactive
@@ -69,6 +71,7 @@ static CYLocationRequestCompletion g_scene_intent_completion = nil;
     // Cold launch from a shortcut URL (or a Control Center toggle that ran
     // before this scene existed); handled once the scene is active.
     NSURL *linkURL = connectionOptions.URLContexts.anyObject.URL;
+    if (linkURL && ![self acceptLinkURL:linkURL]) linkURL = nil;
     if (linkURL) {
         [self setPendingURL:linkURL completion:nil];
         if (g_scene_intent_completion) g_scene_intent_completion(NO, @"Another Location Services request came first.");
@@ -83,7 +86,34 @@ static CYLocationRequestCompletion g_scene_intent_completion = nil;
 
 - (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts {
     NSURL *url = URLContexts.anyObject.URL;
-    if (url) [self receiveActionURL:url scene:scene];
+    if (!url || ![self acceptLinkURL:url]) {
+        if (scene.activationState == UISceneActivationStateForegroundActive) [self showBlockedLinkNoticeIfNeeded];
+        return;
+    }
+    [self receiveActionURL:url scene:scene];
+}
+
+// cyanide:// links can be opened by ANY app, without a prompt (only Safari
+// asks), and a Location Services link changes a system-wide setting (and
+// Find My). So links are off unless the user turns on Settings → Launch
+// Options → "Location Services links". Control Center and the Shortcuts
+// action are not links: they come in through +cy_runLocationURL:completion:,
+// which iOS only calls for the user's own controls and shortcuts.
+- (BOOL)acceptLinkURL:(NSURL *)url {
+    if (![url.host.lowercaseString isEqualToString:@"location-services"]) return YES;   // other links: unchanged
+    if ([NSUserDefaults.standardUserDefaults boolForKey:kSettingsLocationServicesLinksEnabled]) return YES;
+    printf("[LOCSVC] link ignored (Location Services links are off): %s\n", url.absoluteString.UTF8String);
+    self.blockedLinkNotice = YES;
+    return NO;
+}
+
+- (void)showBlockedLinkNoticeIfNeeded {
+    if (!self.blockedLinkNotice) return;
+    self.blockedLinkNotice = NO;
+    [self showAlertTitle:@"Location Services Link"
+                 message:@"A link asked Cyanide to change Location Services. Links are off, so nothing was changed. "
+                         @"Use the Control Center toggle or the Shortcuts action instead, or turn on "
+                         @"Settings → Launch Options → Location Services links."];
 }
 
 // A request waiting for activation. A newer one replaces it; the replaced
@@ -586,6 +616,7 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     cyanide_launch_trace("sceneDidBecomeActive: entry");
     [self selectInitialTabIfNeeded];
     settings_application_did_become_active();
+    [self showBlockedLinkNoticeIfNeeded];
     if (self.pendingActionURL) {
         NSURL *url = self.pendingActionURL;
         CYLocationRequestCompletion completion = self.pendingActionCompletion;

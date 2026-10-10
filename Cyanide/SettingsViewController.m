@@ -6736,6 +6736,7 @@ BOOL settings_filesystem_access_available(void)
     return YES;
 }
 
+NSString * const kSettingsLocationServicesLinksEnabled = @"LocationServicesLinksEnabled";
 NSString * const kSettingsFullExploitRequiredMessage =
     @"No saved kernel access — this needs a full exploit run first.";
 
@@ -7975,6 +7976,7 @@ void settings_register_defaults(void)
 
         kSettingsRunAutoRetry: @NO,
         kRepoSourcesEnabledKey: @YES,
+        kSettingsLocationServicesLinksEnabled: @NO,
         kSettingsRunAutoRetryMaxAttempts: @8,
         kRemoteCallControlledPanicOnWedge: @NO,
 
@@ -12523,6 +12525,8 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
            @"subtitle": @"Logs the full RemoteCall internals for every exploit run, tweak apply and Process Viewer action. Off keeps the log readable; turn it on before reproducing an issue, then share the log." },
         @{ @"key": kSettingsAutoRunKexploit,    @"title": @"Auto-run kexploit on launch" },
         @{ @"key": kSettingsRunSandboxEscape,   @"title": @"Sandbox escape (escape_sbx_demo2)" },
+        @{ @"key": kSettingsLocationServicesLinksEnabled, @"title": @"Location Services links",
+           @"subtitle": @"Lets cyanide://location-services links turn Location Services on or off. Any app can open these links without asking, so this is off by default. The Control Center toggle and the Shortcuts action work without it." },
         @{ @"key": kRepoSourcesEnabledKey,      @"title": @"Repo sources",
            @"subtitle": @"Off hides the Sources tab and repo packages, stops refreshing sources, and skips repo tweaks when applying (running ones are stopped). Local QuickLoader .js files still work." },
         @{ @"key": kSettingsKeepAlive,          @"title": @"Keep app alive in background",

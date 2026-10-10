@@ -249,6 +249,8 @@ BOOL settings_filesystem_access_available(void);
 // kSettingsFullExploitRequiredMessage, so the caller can ask the user first
 // (a full run can reboot A18/M4 devices) and retry with YES.
 extern NSString * const kSettingsFullExploitRequiredMessage;
+// cyanide://location-services links accepted (default NO: any app could open them).
+extern NSString * const kSettingsLocationServicesLinksEnabled;
 void settings_unlock_filesystem_async(BOOL allowFullExploit,
                                       void (^completion)(BOOL ok, NSString *message));
 // System-wide Location Services: desired 1 = on, 0 = off, -1 = toggle.
