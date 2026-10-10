@@ -13,6 +13,31 @@
 #import "UpdateChecker.h"
 #import "TaskRop/Exception.h"   // round 30: excport lifecycle gate (early close)
 
+// Did this request launch Cyanide? "A scene already exists" is not the test:
+// a Control Center toggle or Shortcuts action (openAppWhenRun) launches the
+// app first, its scene connects, and only then does the request arrive -- so
+// a run that started Cyanide from nothing (card swiped away before) looked
+// like "Cyanide was already open" and kept the card. Instead: the first
+// request since this process started, arriving within a few seconds of the
+// start, launched it. Cyanide that was already running is older than that,
+// or has handled a request before. (Opening Cyanide by hand and using the
+// toggle within those seconds would count as a launch -- rare, and the card
+// would be one the user just created.)
+static uint64_t g_scene_process_start_ns = 0;
+__attribute__((constructor)) static void scene_note_process_start(void)
+{
+    g_scene_process_start_ns = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+}
+static BOOL g_scene_any_request = NO;   // main thread only
+
+static BOOL scene_request_launched_app(void)
+{
+    BOOL first = !g_scene_any_request;
+    g_scene_any_request = YES;
+    uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    return first && now - g_scene_process_start_ns < 8ULL * NSEC_PER_SEC;
+}
+
 @interface SceneDelegate ()
 @property (nonatomic, assign) BOOL didSelectInitialTab;
 // A shortcut URL waiting for the scene to become active: kernel access is
@@ -80,10 +105,12 @@ static CYLocationRequestCompletion g_scene_intent_completion = nil;
     NSURL *linkURL = connectionOptions.URLContexts.anyObject.URL;
     if (linkURL && ![self acceptLinkURL:linkURL]) linkURL = nil;
     if (linkURL) {
-        [self setPendingURL:linkURL completion:nil coldLaunched:YES];
+        [self setPendingURL:linkURL completion:nil coldLaunched:scene_request_launched_app()];
         if (g_scene_intent_completion) g_scene_intent_completion(NO, @"Another Location Services request came first.");
     } else {
-        [self setPendingURL:g_scene_intent_url completion:g_scene_intent_completion coldLaunched:YES];
+        // (No request yet when g_scene_intent_url is nil: don't count one.)
+        BOOL launched = g_scene_intent_url ? scene_request_launched_app() : NO;
+        [self setPendingURL:g_scene_intent_url completion:g_scene_intent_completion coldLaunched:launched];
     }
     g_scene_intent_url = nil;
     g_scene_intent_completion = nil;
@@ -98,7 +125,7 @@ static CYLocationRequestCompletion g_scene_intent_completion = nil;
         return;
     }
     // A URL delivered to an already-connected scene: Cyanide was open.
-    [self receiveActionURL:url scene:scene completion:nil coldLaunched:NO];
+    [self receiveActionURL:url scene:scene completion:nil coldLaunched:scene_request_launched_app()];
 }
 
 // cyanide:// links can be opened by ANY app, without a prompt (only Safari
@@ -162,7 +189,10 @@ static CYLocationRequestCompletion g_scene_intent_completion = nil;
         if ([scene.delegate isKindOfClass:SceneDelegate.class]) {
             // A live scene means Cyanide was already open (in front or
             // suspended with a switcher card): not a cold launch.
-            [(SceneDelegate *)scene.delegate receiveActionURL:url scene:scene completion:once coldLaunched:NO];
+            // The scene may exist only because iOS just launched Cyanide for
+            // this request (openAppWhenRun): decide by the request, not the scene.
+            [(SceneDelegate *)scene.delegate receiveActionURL:url scene:scene completion:once
+                                                coldLaunched:scene_request_launched_app()];
             return;
         }
     }
