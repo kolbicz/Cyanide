@@ -18,6 +18,11 @@
 // A shortcut URL waiting for the scene to become active: kernel access is
 // gated off until then (excport gate), so actions can't run any earlier.
 @property (nonatomic, strong) NSURL *pendingActionURL;
+// Who asked for pendingActionURL, if it was the Control Center toggle.
+@property (nonatomic, copy) CYLocationRequestCompletion pendingActionCompletion;
+// A successful quiet run that couldn't go Home because Cyanide was inactive
+// at that moment: done on the next activation.
+@property (nonatomic, assign) BOOL homeOnNextActivation;
 // Identifies the current shortcut run: a delayed return-to-Home from an
 // earlier run must not act on a later one.
 @property (nonatomic, assign) NSUInteger actionGeneration;
@@ -38,6 +43,7 @@
 
 // Control Center request that arrived before any scene connected.
 static NSURL *g_scene_intent_url = nil;
+static CYLocationRequestCompletion g_scene_intent_completion = nil;
 
 @implementation SceneDelegate
 
@@ -62,8 +68,15 @@ static NSURL *g_scene_intent_url = nil;
     }
     // Cold launch from a shortcut URL (or a Control Center toggle that ran
     // before this scene existed); handled once the scene is active.
-    self.pendingActionURL = connectionOptions.URLContexts.anyObject.URL ?: g_scene_intent_url;
+    NSURL *linkURL = connectionOptions.URLContexts.anyObject.URL;
+    if (linkURL) {
+        [self setPendingURL:linkURL completion:nil];
+        if (g_scene_intent_completion) g_scene_intent_completion(NO, @"Another Location Services request came first.");
+    } else {
+        [self setPendingURL:g_scene_intent_url completion:g_scene_intent_completion];
+    }
     g_scene_intent_url = nil;
+    g_scene_intent_completion = nil;
     [self coverEarlyForURL:self.pendingActionURL];
     cyanide_launch_trace("scene willConnect: exit");
 }
@@ -73,28 +86,51 @@ static NSURL *g_scene_intent_url = nil;
     if (url) [self receiveActionURL:url scene:scene];
 }
 
-- (void)receiveActionURL:(NSURL *)url scene:(UIScene *)scene {
+// A request waiting for activation. A newer one replaces it; the replaced
+// one's requester is told it didn't run.
+- (void)setPendingURL:(NSURL *)url completion:(CYLocationRequestCompletion)completion {
+    CYLocationRequestCompletion replaced = self.pendingActionCompletion;
+    self.pendingActionURL = url;
+    self.pendingActionCompletion = completion;
+    if (replaced && replaced != completion) replaced(NO, @"A newer Location Services request replaced this one.");
+}
+
+- (void)receiveActionURL:(NSURL *)url scene:(UIScene *)scene completion:(CYLocationRequestCompletion)completion {
     if (scene.activationState == UISceneActivationStateForegroundActive) {
-        [self handleActionURL:url];
+        [self handleActionURL:url completion:completion];
     } else {
-        self.pendingActionURL = url;   // sceneDidBecomeActive runs it
+        [self setPendingURL:url completion:completion];   // sceneDidBecomeActive runs it
         [self coverEarlyForURL:url];
     }
+}
+
+- (void)receiveActionURL:(NSURL *)url scene:(UIScene *)scene {
+    [self receiveActionURL:url scene:scene completion:nil];
 }
 
 // A request from the Control Center toggle (SetLocationServicesIntent, run
 // in this process via openAppWhenRun). Handled exactly like the matching
 // cyanide://location-services URL. Before any scene exists (cold launch)
-// it waits for the first one to connect (g_scene_intent_url).
-+ (void)cy_runLocationURL:(NSURL *)url {
-    if (![url isKindOfClass:NSURL.class]) return;
+// it waits for the first one to connect (g_scene_intent_url). `completion`
+// runs once on the main thread: when the state is confirmed (or the request
+// failed or was rejected), before Cyanide goes Home.
++ (void)cy_runLocationURL:(NSURL *)url completion:(CYLocationRequestCompletion)completion {
+    __block BOOL called = NO;
+    CYLocationRequestCompletion once = ^(BOOL ok, NSString *message) {
+        if (called || !completion) return;
+        called = YES;
+        completion(ok, message ?: @"");
+    };
+    if (![url isKindOfClass:NSURL.class]) { once(NO, @"Invalid request."); return; }
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if ([scene.delegate isKindOfClass:SceneDelegate.class]) {
-            [(SceneDelegate *)scene.delegate receiveActionURL:url scene:scene];
+            [(SceneDelegate *)scene.delegate receiveActionURL:url scene:scene completion:once];
             return;
         }
     }
+    if (g_scene_intent_completion) g_scene_intent_completion(NO, @"A newer Location Services request replaced this one.");
     g_scene_intent_url = url;
+    g_scene_intent_completion = once;
 }
 
 // Strictly parses cyanide://location-services/<toggle|on|off>
@@ -392,20 +428,31 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
 //  - log=1: the activity log is shown, with a short pause on the result.
 // While one request runs, another is rejected without touching its screen.
 - (void)handleActionURL:(NSURL *)url {
+    [self handleActionURL:url completion:nil];
+}
+
+- (void)handleActionURL:(NSURL *)url completion:(CYLocationRequestCompletion)requester {
     if (![url.host.lowercaseString isEqualToString:@"location-services"]) {
         NSLog(@"[URL] unhandled %@", url);
+        if (requester) requester(NO, @"Unsupported link.");
         return;
     }
     if (self.actionInProgress) {
-        [self showAlertTitle:@"Location Services" message:@"A change is already in progress."];
+        // The running request owns the screen: no alert over its progress
+        // or log, just tell the requester and VoiceOver.
+        NSLog(@"[URL] rejected while a change is in progress: %@", url);
+        scene_announce(@"A Location Services change is already in progress.");
+        if (requester) requester(NO, @"A Location Services change is already in progress.");
         return;
     }
+    self.homeOnNextActivation = NO;
     int desired = -1;
     BOOL keepCard = NO, showLog = NO;
     NSString *parseError = nil;
     if (!scene_parse_location_url(url, &desired, &keepCard, &showLog, &parseError)) {
         [self hideQuietCover];   // an early cover for this link must not stay
         [self showAlertTitle:@"Location Services Link" message:parseError];
+        if (requester) requester(NO, parseError);
         return;
     }
     NSUInteger generation = ++self.actionGeneration;
@@ -423,7 +470,14 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
         }];
     } else if (!self.quietCover || self.quietFinished) {
         [self beginQuietRunForTarget:scene_expected_target(desired)];
+    } else {
+        // Adopting the early cover: it may have been put up for an earlier
+        // link that this one replaced.
+        int expected = scene_expected_target(desired);
+        if (expected != self.quietTarget) [self applyQuietTarget:expected done:NO];
     }
+    // log=1: the result stays readable for a moment before Home.
+    static const double kLogResultPause = 0.75;
     __weak typeof(self) weakSelf = self;
     dispatch_block_t run = ^{
         SettingsProgressBlock progress = showLog ? nil : ^(float fraction, NSString *step, NSTimeInterval over, int target) {
@@ -431,9 +485,11 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
             if (me && generation == me.actionGeneration)
                 [me quietPhase:fraction step:step over:over target:target];
         };
-        settings_location_services_set_async(desired, !keepCard, progress, ^(BOOL ok, NSString *message,
-                                                                              NSTimeInterval resultAge) {
+        settings_location_services_set_async(desired, !keepCard, showLog ? kLogResultPause : 0, progress,
+                                             ^(BOOL ok, NSString *message, NSTimeInterval resultAge) {
             if (observer) [NSNotificationCenter.defaultCenter removeObserver:observer];
+            // The requester hears the outcome first, before Cyanide leaves.
+            if (requester) requester(ok, message);
             typeof(self) me = weakSelf;
             if (!me || generation != me.actionGeneration) return;
             me.actionInProgress = NO;
@@ -448,7 +504,7 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
             if (showLog) {
                 double shownFor = resultShownNs
                     ? (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - resultShownNs) / 1e9 : 0;
-                wait = MAX(0.0, 0.75 - shownFor);
+                wait = MAX(0.0, kLogResultPause - shownFor);
             }
             // Quiet: leave at once — the result has been on screen during the
             // cleanup, and no presentation delay may outlast the card-removal
@@ -458,7 +514,12 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
                 typeof(self) me2 = weakSelf;
                 // Only for this run, and only while still in front.
                 if (!me2 || generation != me2.actionGeneration) return;
-                if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+                if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
+                    // Briefly inactive (Control Center, a call banner): go
+                    // Home when it is back, instead of staying on the result.
+                    me2.homeOnNextActivation = YES;
+                    return;
+                }
                 scene_suspend_to_home();
             });
         });
@@ -521,8 +582,13 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     settings_application_did_become_active();
     if (self.pendingActionURL) {
         NSURL *url = self.pendingActionURL;
+        CYLocationRequestCompletion completion = self.pendingActionCompletion;
         self.pendingActionURL = nil;
-        [self handleActionURL:url];
+        self.pendingActionCompletion = nil;
+        [self handleActionURL:url completion:completion];
+    } else if (self.homeOnNextActivation && !self.actionInProgress) {
+        self.homeOnNextActivation = NO;
+        scene_suspend_to_home();
     }
     // Runs every foreground; UpdateChecker enforces a per-process + 24-hour
     // persisted throttle so the API isn't hammered.
@@ -556,6 +622,7 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     // A quiet shortcut run that sent Cyanide home leaves its cover behind;
     // a normal reopen must show the app (a new shortcut run puts it back).
     if (!self.actionInProgress) [self hideQuietCover];
+    self.homeOnNextActivation = NO;   // a real reopen: the user wants the app
     settings_application_will_enter_foreground();
 }
 

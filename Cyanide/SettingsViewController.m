@@ -1522,6 +1522,23 @@ static uint64_t settings_settle_until_after_activation(void)
     uint64_t until = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) + kActivationSettleNs;
     return MAX(until, g_removal_fire_bound_ns);
 }
+// Kernel work of any kind (exploit, parked-KRW restore, launchd reads) must
+// not be in flight when a pending card removal ends Cyanide: wait out the
+// bound first. Only matters when Cyanide is reopened within a few seconds of
+// a shortcut run. The bound is an estimate (the timer can run later if
+// SpringBoard's main thread is busy), hence its generous margin. Returns NO
+// if the app goes to the background meanwhile.
+static BOOL settings_wait_for_pending_switcher_removal(void)
+{
+    uint64_t bound = g_removal_fire_bound_ns;
+    if (bound <= clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) return YES;
+    log_user("[SWITCHER] waiting for the pending App Switcher card removal before kernel work\n");
+    while (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) < bound) {
+        if (g_app_in_background || excport_gate_blocked()) return NO;
+        usleep(100000);
+    }
+    return YES;
+}
 // Progress hook for the location shortcut: called when a fresh SpringBoard
 // connection actually starts (after the settle wait). Set only while that
 // action runs.
@@ -3153,6 +3170,7 @@ static void settings_log_run_context(void)
 
 static BOOL settings_ensure_kexploit(void)
 {
+    if (!settings_wait_for_pending_switcher_removal()) return NO;
     if (!settings_device_supported()) {
         printf("[SETTINGS] unsupported device: %s\n", settings_unsupported_message().UTF8String);
         return NO;
@@ -3201,6 +3219,7 @@ static BOOL settings_krw_available_without_exploit(void)
 // footprint from the live staging mapping). A query must never cost that.
 static BOOL settings_ensure_kexploit_for_read(void)
 {
+    if (!settings_wait_for_pending_switcher_removal()) return NO;
     // Round 31: trace the parked-KRW restore boundaries — this is the one
     // launch-adjacent path that talks to the launchd-anchored primitive, and
     // it must never wedge the caller without a trace of where it stopped.
@@ -3261,6 +3280,7 @@ static BOOL settings_nano_load_override_enabled(void)
 
 static BOOL settings_ensure_kexploit_recovery_only(void)
 {
+    if (!settings_wait_for_pending_switcher_removal()) return NO;
     if (!settings_device_supported()) {
         printf("[SETTINGS] unsupported device: %s\n", settings_unsupported_message().UTF8String);
         return NO;
@@ -6498,6 +6518,7 @@ void settings_application_will_enter_foreground(void)
 // a successful SpringBoard run also has SpringBoard delete Cyanide's App
 // Switcher card a little later (after the caller has gone to the Home Screen).
 void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
+                                          NSTimeInterval homeDelay,
                                           SettingsProgressBlock progress,
                                           void (^completion)(BOOL ok, NSString *message,
                                                              NSTimeInterval resultAge))
@@ -6512,6 +6533,7 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
     void (^finishEarly)(NSString *) = ^(NSString *message) {
         log_user("[WARN] %s\n", message.UTF8String);
         settings_post_actions_complete_async(NO, message);
+        [CYControlReloader reloadLocationControl];   // the request didn't change it: show the real state
         if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, message, 0); });
     };
     if (!settings_device_supported()) {
@@ -6597,8 +6619,11 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                         // orphan it.
                         if (removeFromSwitcher && !settings_has_persistent_springboard_remote_call_user()) {
                             removalDelay = locsvc_switcher_delay();
+                            // The caller stays in front up to homeDelay longer
+                            // (log=1 result pause): the card goes that much later.
+                            if (removalDelay > 0) removalDelay += MAX(0.0, homeDelay);
                             if (removalDelay > 0) {
-                                locsvc_switcher_begin_run(YES, removalDelay);   // before the call: the timer may start first
+                                locsvc_switcher_begin_run(YES, removalDelay - MAX(0.0, homeDelay));   // before the call: the timer may start first
                                 removalScheduledNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
                                 ASRemovalResult rr = appswitcher_schedule_remove_in_session(
                                     NSBundle.mainBundle.bundleIdentifier.UTF8String, removalDelay);
@@ -6606,12 +6631,13 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                                     locsvc_switcher_disarm();
                                     removalScheduledNs = 0;
                                 } else {
-                                    // The timer can't fire before the call returned + delay
-                                    // (later if SpringBoard's main thread is busy): bound it
-                                    // from here with a margin, and hold off any new
-                                    // injection until then.
+                                    // Estimated latest firing: the timer was armed before
+                                    // the call returned, so return + delay is late enough
+                                    // for a normally running SpringBoard; the margin
+                                    // covers a busy main thread (not a guarantee). No new
+                                    // kernel work or injection starts before it.
                                     uint64_t bound = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)
-                                                   + (uint64_t)((removalDelay + 0.5) * 1e9);
+                                                   + (uint64_t)((removalDelay + 1.0) * 1e9);
                                     g_removal_fire_bound_ns = bound;
                                     g_activation_settle_until_ns = MAX(g_activation_settle_until_ns, bound);
                                 }
@@ -16683,7 +16709,7 @@ void cyanide_present_contact(UIViewController *host)
     if (!settings_device_supported()) return;
     [self presentActivityLog];
     __weak typeof(self) weakSelf = self;
-    settings_location_services_set_async(-1, NO, nil, ^(BOOL ok, NSString *message, NSTimeInterval resultAge) {
+    settings_location_services_set_async(-1, NO, 0, nil, ^(BOOL ok, NSString *message, NSTimeInterval resultAge) {
         [weakSelf reloadLocationSimUI];
     });
 }
