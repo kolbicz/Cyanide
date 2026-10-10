@@ -201,10 +201,18 @@ FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expec
         }
         NSString *backup = [dir stringByAppendingPathComponent:
                             [NSString stringWithFormat:@"%@.%@.bak", base, NSUUID.UUID.UUIDString]];
+        // Sidecar with the original path, so a backup left behind by a crash
+        // mid-save can be traced to the file it belongs to (see
+        // fb_leftover_backups / the notice on the next File Browser open).
+        NSString *backupPath = [backup stringByAppendingString:@".path"];
         if (![currentData writeToFile:backup atomically:YES]) {
+            msg = @"A backup of the current file couldn't be written. Nothing was changed.";
+        } else if (![path writeToFile:backupPath atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
+            [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
             msg = @"A backup of the current file couldn't be written. Nothing was changed.";
         } else if (fb_pwrite_all(fd, data)) {
             [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
+            [NSFileManager.defaultManager removeItemAtPath:backupPath error:nil];
             if (newIdentity) *newIdentity = filebrowser_identity_fd(fd);
             filebrowser_note_filesystem_changed();
             result = FBSaveOK;
@@ -213,6 +221,7 @@ FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expec
             filebrowser_note_filesystem_changed();   // the file may have changed
             if (fb_pwrite_all(fd, currentData)) {
                 [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
+                [NSFileManager.defaultManager removeItemAtPath:backupPath error:nil];
                 if (newIdentity) *newIdentity = filebrowser_identity_fd(fd);
                 msg = [NSString stringWithFormat:@"Writing failed (%s). The file's previous contents were written back.", strerror(werr)];
             } else {
@@ -225,6 +234,31 @@ FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expec
     close(fd);
     if (message) *message = msg;
     return result;
+}
+
+// Backups left behind: a successful save (or a successful write-back) removes
+// its backup, so any *.bak still here means a save was interrupted -- the app
+// or device died mid-write -- or failed and could not restore. Returns the
+// original paths (from the .path sidecars; a backup without one is listed by
+// its own name), oldest first.
+static NSString *fb_backup_dir(void)
+{
+    return [NSTemporaryDirectory() stringByAppendingPathComponent:@"FileBrowserBackups"];
+}
+
+static NSArray<NSString *> *fb_leftover_backups(void)
+{
+    NSString *dir = fb_backup_dir();
+    NSArray<NSString *> *names = [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil];
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (NSString *name in [names sortedArrayUsingSelector:@selector(compare:)]) {
+        if (![name hasSuffix:@".bak"]) continue;
+        NSString *bak = [dir stringByAppendingPathComponent:name];
+        NSString *orig = [NSString stringWithContentsOfFile:[bak stringByAppendingString:@".path"]
+                                                   encoding:NSUTF8StringEncoding error:nil];
+        [out addObject:orig.length ? orig : name];
+    }
+    return out;
 }
 
 // File operations (delete/rename/duplicate/create/import) run one at a
@@ -986,6 +1020,42 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
     self.refreshControl = [UIRefreshControl new];
     [self.refreshControl addTarget:self action:@selector(reload) forControlEvents:UIControlEventValueChanged];
     [self reload];
+}
+
+- (void)viewDidAppear:(BOOL)animated
+{
+    [super viewDidAppear:animated];
+    [self notifyLeftoverBackupsIfNeeded];
+}
+
+// Once per app launch: if a save was interrupted (crash mid-write), say which
+// file may be incomplete and where its previous contents are.
+- (void)notifyLeftoverBackupsIfNeeded
+{
+    static BOOL checked = NO;
+    if (checked || self.presentedViewController) return;
+    checked = YES;
+    NSArray<NSString *> *left = fb_leftover_backups();
+    if (!left.count) return;
+    NSMutableString *list = [NSMutableString string];
+    for (NSUInteger i = 0; i < left.count && i < 3; i++) [list appendFormat:@"\n• %@", left[i]];
+    if (left.count > 3) [list appendFormat:@"\n…and %lu more", (unsigned long)(left.count - 3)];
+    UIAlertController *ac = [UIAlertController
+        alertControllerWithTitle:@"Unfinished Saves"
+                         message:[NSString stringWithFormat:@"A save didn't finish (for example because the app or the device stopped mid-write), so these files may be incomplete:%@\n\nTheir previous contents were backed up.", list]
+                  preferredStyle:UIAlertControllerStyleAlert];
+    __weak typeof(self) weakSelf = self;
+    [ac addAction:[UIAlertAction actionWithTitle:@"Show Backups" style:UIAlertActionStyleDefault
+                                         handler:^(UIAlertAction *a) {
+        [weakSelf.navigationController pushViewController:
+            [[FileBrowserViewController alloc] initWithPath:fb_backup_dir()] animated:YES];
+    }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Delete Backups" style:UIAlertActionStyleDestructive
+                                         handler:^(UIAlertAction *a) {
+        [NSFileManager.defaultManager removeItemAtPath:fb_backup_dir() error:nil];
+    }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Later" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:ac animated:YES completion:nil];
 }
 
 - (void)viewWillAppear:(BOOL)animated
