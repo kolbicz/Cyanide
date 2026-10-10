@@ -80,7 +80,7 @@ bool inject_guard_exception(uint64_t thread, uint64_t code)
     return true;
 }
 
-void clear_guard_exception(uint64_t thread)
+bool clear_guard_exception(uint64_t thread)
 {
     // Round 16: validity + ownership gates. The un-arm runs on timeout/
     // abandon/stop — possibly seconds after arming — and launchd threads die
@@ -94,16 +94,30 @@ void clear_guard_exception(uint64_t thread)
     if (!is_kaddr_valid(thread)) {
         printf("[%s:%d] un-arm skipped: thread %#llx not a kernel pointer\n",
                __FUNCTION__, __LINE__, thread);
-        return;
+        return false;
     }
     uint32_t span = MAX(off_thread_ast + 4,
                     MAX(off_thread_mach_exc_info_code + 8,
                         off_thread_guard_exc_info_code + 8));
+    // The ksafe map is a snapshot taken when it was brought up (e.g. by the
+    // Process Viewer). A thread created after that -- like the SpringBoard
+    // threads armed for a later File Browser unlock -- reads as "not mapped"
+    // although it is live and armed; skipping its un-arm left the guard
+    // pending, and SpringBoard died of that EXC_GUARD (INVALID_RIGHT) seconds
+    // later (SpringBoard-2026-10-10-151450). A skipped un-arm of a live thread
+    // is a certain crash, so refresh the snapshot and re-check before
+    // skipping; only a thread still unmapped in a fresh snapshot is skipped.
     if (ksafe_available() && !kaddr_is_mapped(thread, span)) {
-        printf("[%s:%d] un-arm skipped: thread %#llx outside the ksafe map "
-               "(never-committed window) — no deref\n",
+        (void)ksafe_refresh();   // rate-limited; a refresh just done counts too
+        if (!kaddr_is_mapped(thread, span)) {
+            printf("[%s:%d] un-arm skipped: thread %#llx outside the ksafe map "
+                   "even after a refresh — no deref\n",
+                   __FUNCTION__, __LINE__, thread);
+            ksafe_describe(thread, span);
+            return false;
+        }
+        printf("[%s:%d] thread %#llx mapped after a ksafe refresh — un-arming\n",
                __FUNCTION__, __LINE__, thread);
-        return;
     }
     krw_op_error_clear();   // sticky/process-wide — reflect only THIS read
     uint32_t ast = kread32(thread + off_thread_ast);
@@ -117,14 +131,14 @@ void clear_guard_exception(uint64_t thread)
                "zero-filled (KRW op-error); NOT writing. If the thread is live "
                "and armed, its guard may orphan at teardown\n",
                __FUNCTION__, __LINE__, thread);
-        return;
+        return false;
     }
     if (!(ast & AST_GUARD)) {
         // Not armed: already cleared, the trap was already consumed, or the
         // slot was freed/reused — nothing of ours is there, and writing would
         // touch an object we do not own. Common path for threads that already
         // trapped.
-        return;
+        return true;
     }
 
     kwrite32(thread + off_thread_ast, ast & ~AST_GUARD);
@@ -134,7 +148,8 @@ void clear_guard_exception(uint64_t thread)
     // (exception to a dead port → launchd exits ~22 s later). The arm path
     // readback-verifies; the un-arm now does too, loudly.
     uint32_t astAfter = kread32(thread + off_thread_ast);
-    if (astAfter & AST_GUARD) {
+    bool cleared = !(astAfter & AST_GUARD);
+    if (!cleared) {
         printf("[%s:%d] UN-ARM VERIFY FAILED on thread %#llx (ast=%#x still has "
                "AST_GUARD) — orphaned-guard risk if this session tears down\n",
                __FUNCTION__, __LINE__, thread, astAfter);
@@ -149,6 +164,7 @@ void clear_guard_exception(uint64_t thread)
     } else {
         kwrite64(thread + off_thread_guard_exc_info_code, 0);
     }
+    return cleared;
 }
 
 bool thread_get_state_wrapper(mach_port_t machThread, arm_thread_state64_internal *outState)

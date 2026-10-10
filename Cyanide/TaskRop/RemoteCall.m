@@ -3049,14 +3049,20 @@ static void rc_teardown_unarm_all(const char *where)
                where, (unsigned long)g_RC_threadList.count);
         return;
     }
-    NSUInteger n = 0;
+    NSUInteger n = 0, unverified = 0;
     for (NSNumber *thread in g_RC_threadList) {
-        clear_guard_exception(thread.unsignedLongLongValue);
+        if (!clear_guard_exception(thread.unsignedLongLongValue)) unverified++;
         n++;
     }
-    if (n)
+    // Report what was actually verified: this used to say "none left armed"
+    // even when every un-arm had been skipped (SpringBoard-2026-10-10-151450).
+    if (n && !unverified)
         printf("[RC] teardown un-arm audit (%s): re-verified %lu injected "
                "thread(s) — none left armed\n", where, (unsigned long)n);
+    else if (n)
+        log_user("[RC] teardown un-arm audit (%s): %lu of %lu injected thread(s) "
+                 "could NOT be verified un-armed — the target may crash if one "
+                 "is still armed\n", where, (unsigned long)unverified, (unsigned long)n);
 }
 
 // Round 19: post-drain settle + verification pass — the TEARDOWN INVARIANT:
@@ -4523,9 +4529,14 @@ static int init_remote_call_internal(const char* process, bool useMigFilterBypas
         // ksafe map is a boot-time snapshot, so this catches never-committed
         // windows only; the freed-after-snapshot residual is a µs-scale
         // zone-GC race, accepted and documented in the round-16 report.
+        // A stale snapshot (threads created after it) reads as "not mapped":
+        // refresh once and re-check before ending the walk early.
         if (ksafe_available() &&
             !kaddr_is_mapped(currThread, MAX(off_thread_t_tro,
-                                             off_thread_task_threads_next) + 8)) {
+                                             off_thread_task_threads_next) + 8) &&
+            ((void)ksafe_refresh(),   // rate-limited; a refresh just done counts too
+             !kaddr_is_mapped(currThread, MAX(off_thread_t_tro,
+                                              off_thread_task_threads_next) + 8))) {
             printf("[RC] walk: candidate %#llx outside the ksafe map "
                    "(never-committed window) — ending walk, no deref\n",
                    currThread);
