@@ -461,6 +461,153 @@ static NSString *fb_unique_path(NSString *dir, NSString *name)
     return path;
 }
 
+static const NSUInteger kFBMaxImportItems = 20000;
+static const unsigned long long kFBMaxImportBytes = 512ULL * 1024ULL * 1024ULL;
+static const unsigned long long kFBMaxImportItemBytes = 128ULL * 1024ULL * 1024ULL;
+
+static BOOL fb_import_add_item(NSUInteger *items, NSString **failure)
+{
+    if (*items >= kFBMaxImportItems) {
+        if (failure) *failure = [NSString stringWithFormat:@"Import exceeds the %lu-item limit.",
+                                  (unsigned long)kFBMaxImportItems];
+        return NO;
+    }
+    (*items)++;
+    return YES;
+}
+
+static BOOL fb_import_copy_regular(NSString *source, NSString *target, const struct stat *sourceStat,
+                                   unsigned long long *totalBytes, NSString **failure)
+{
+    int in = open(source.fileSystemRepresentation, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (in < 0) {
+        if (failure) *failure = [NSString stringWithFormat:@"Couldn't open %@: %s", source.lastPathComponent, strerror(errno)];
+        return NO;
+    }
+    struct stat opened;
+    if (fstat(in, &opened) != 0 || !S_ISREG(opened.st_mode)) {
+        close(in);
+        if (failure) *failure = [NSString stringWithFormat:@"%@ is no longer a regular file.", source.lastPathComponent];
+        return NO;
+    }
+    int out = open(target.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
+                   sourceStat->st_mode & 0777);
+    if (out < 0) {
+        close(in);
+        if (failure) *failure = [NSString stringWithFormat:@"Couldn't create %@: %s", target.lastPathComponent, strerror(errno)];
+        return NO;
+    }
+    BOOL ok = YES;
+    unsigned long long copied = 0;
+    char buf[64 * 1024];
+    while (ok) {
+        if (!filebrowser_write_enabled()) {
+            if (failure) *failure = @"Changes were locked while the import was running.";
+            ok = NO;
+            break;
+        }
+        unsigned long long remaining = MIN(kFBMaxImportItemBytes - MIN(copied, kFBMaxImportItemBytes),
+                                           kFBMaxImportBytes - MIN(*totalBytes, kFBMaxImportBytes));
+        if (!remaining) {
+            ssize_t probe = read(in, buf, 1);
+            if (probe > 0 && failure) *failure = @"Import exceeds the 128 MB per-file or 512 MB aggregate limit.";
+            else if (probe < 0 && errno != EINTR && failure) *failure = @"The source could not be read.";
+            ok = probe == 0;
+            break;
+        }
+        size_t want = (size_t)MIN((unsigned long long)sizeof(buf), remaining);
+        ssize_t n = read(in, buf, want);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) {
+            if (failure) *failure = [NSString stringWithFormat:@"Couldn't read %@: %s", source.lastPathComponent, strerror(errno)];
+            ok = NO;
+            break;
+        }
+        if (n == 0) break;
+        size_t done = 0;
+        while (done < (size_t)n) {
+            ssize_t w = write(out, buf + done, (size_t)n - done);
+            if (w < 0 && errno == EINTR) continue;
+            if (w <= 0) {
+                if (failure) *failure = [NSString stringWithFormat:@"Couldn't write %@: %s", target.lastPathComponent, strerror(errno)];
+                ok = NO;
+                break;
+            }
+            done += (size_t)w;
+        }
+        copied += (unsigned long long)n;
+        *totalBytes += (unsigned long long)n;
+    }
+    if (close(in) != 0) ok = NO;
+    if (close(out) != 0) ok = NO;
+    if (!ok) [NSFileManager.defaultManager removeItemAtPath:target error:nil];
+    return ok;
+}
+
+static BOOL fb_import_copy_path(NSString *source, NSString *target, NSUInteger *items,
+                                unsigned long long *totalBytes, NSString **failure)
+{
+    struct stat st;
+    if (lstat(source.fileSystemRepresentation, &st) != 0) {
+        if (failure) *failure = [NSString stringWithFormat:@"Couldn't inspect %@: %s", source.lastPathComponent, strerror(errno)];
+        return NO;
+    }
+    if (!fb_import_add_item(items, failure)) return NO;
+    if (S_ISREG(st.st_mode)) return fb_import_copy_regular(source, target, &st, totalBytes, failure);
+    if (S_ISLNK(st.st_mode)) {
+        char link[PATH_MAX];
+        ssize_t n = readlink(source.fileSystemRepresentation, link, sizeof(link) - 1);
+        if (n < 0 || n >= (ssize_t)sizeof(link) - 1 || symlink(link, target.fileSystemRepresentation) != 0) {
+            if (failure) *failure = [NSString stringWithFormat:@"Couldn't copy link %@.", source.lastPathComponent];
+            return NO;
+        }
+        return YES;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        if (failure) *failure = [NSString stringWithFormat:@"%@ is a special file and cannot be imported.", source.lastPathComponent];
+        return NO;
+    }
+    if (mkdir(target.fileSystemRepresentation, st.st_mode & 0777) != 0) {
+        if (failure) *failure = [NSString stringWithFormat:@"Couldn't create %@: %s", target.lastPathComponent, strerror(errno)];
+        return NO;
+    }
+    NSDirectoryEnumerator *enumerator = [NSFileManager.defaultManager enumeratorAtPath:source];
+    for (NSString *relative in enumerator) {
+        if (!filebrowser_write_enabled()) {
+            if (failure) *failure = @"Changes were locked while the import was running.";
+            return NO;
+        }
+        NSString *child = [source stringByAppendingPathComponent:relative];
+        NSString *destination = [target stringByAppendingPathComponent:relative];
+        struct stat childStat;
+        if (lstat(child.fileSystemRepresentation, &childStat) != 0) {
+            if (failure) *failure = [NSString stringWithFormat:@"Couldn't inspect %@: %s", relative, strerror(errno)];
+            return NO;
+        }
+        if (!fb_import_add_item(items, failure)) return NO;
+        if (S_ISDIR(childStat.st_mode)) {
+            if (mkdir(destination.fileSystemRepresentation, childStat.st_mode & 0777) != 0) {
+                if (failure) *failure = [NSString stringWithFormat:@"Couldn't create %@: %s", relative, strerror(errno)];
+                return NO;
+            }
+        } else if (S_ISREG(childStat.st_mode)) {
+            // The item was counted above; the regular helper only streams it.
+            if (!fb_import_copy_regular(child, destination, &childStat, totalBytes, failure)) return NO;
+        } else if (S_ISLNK(childStat.st_mode)) {
+            char link[PATH_MAX];
+            ssize_t n = readlink(child.fileSystemRepresentation, link, sizeof(link) - 1);
+            if (n < 0 || n >= (ssize_t)sizeof(link) - 1 || symlink(link, destination.fileSystemRepresentation) != 0) {
+                if (failure) *failure = [NSString stringWithFormat:@"Couldn't copy link %@.", relative];
+                return NO;
+            }
+        } else {
+            if (failure) *failure = [NSString stringWithFormat:@"%@ contains a special file and cannot be imported.", relative];
+            return NO;
+        }
+    }
+    return YES;
+}
+
 #pragma mark - Entries
 
 @interface FBEntry : NSObject
@@ -1437,18 +1584,36 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
     NSString *dir = self.path;
     dispatch_async(fb_file_queue(), ^{
         NSMutableArray<NSString *> *failed = [NSMutableArray array];
+        NSUInteger importedItems = 0;
+        unsigned long long importedBytes = 0;
+        BOOL changed = NO;
         for (NSURL *url in urls) {
             if (!filebrowser_write_enabled()) {   // locked mid-import: stop before the next item
                 [failed addObject:[NSString stringWithFormat:@"%@: changes were locked", url.lastPathComponent]];
                 continue;
             }
             NSString *target = fb_unique_path(dir, url.lastPathComponent);
-            NSError *err = nil;
-            if (![NSFileManager.defaultManager copyItemAtURL:url toURL:[NSURL fileURLWithPath:target] error:&err])
-                [failed addObject:[NSString stringWithFormat:@"%@: %@", url.lastPathComponent, err.localizedDescription]];
+            NSString *failure = nil;
+            if (fb_import_copy_path(url.path, target, &importedItems, &importedBytes, &failure)) {
+                changed = YES;
+            } else {
+                // Foundation/provider copies can leave a destination behind
+                // after an error.  The bounded helper may have created part
+                // of a tree; always remove it before reporting incomplete.
+                struct stat partial;
+                if (lstat(target.fileSystemRepresentation, &partial) == 0) {
+                    changed = YES;
+                    NSError *cleanupError = nil;
+                    [NSFileManager.defaultManager removeItemAtPath:target error:&cleanupError];
+                    if (lstat(target.fileSystemRepresentation, &partial) == 0)
+                        failure = [NSString stringWithFormat:@"%@ Cleanup failed: %@", failure ?: @"Import failed.", cleanupError.localizedDescription ?: @"the partial item remains"];
+                }
+                [failed addObject:[NSString stringWithFormat:@"%@: %@", url.lastPathComponent,
+                                   failure ?: @"Import failed."]];
+            }
         }
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (failed.count < urls.count) filebrowser_note_filesystem_changed();
+            if (changed) filebrowser_note_filesystem_changed();
             if (failed.count) fb_alert(self, @"Import Incomplete", [failed componentsJoinedByString:@"\n"]);
             [self reload];
         });
