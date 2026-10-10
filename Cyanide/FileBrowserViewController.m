@@ -14,6 +14,7 @@
 #import <grp.h>
 #import <pwd.h>
 #import <sys/stat.h>
+#import <sys/file.h>
 #import <stdatomic.h>
 
 // The pending-changes popup bar is hosted by the tab bar controller above
@@ -132,6 +133,20 @@ static BOOL fb_same_object(FBFileIdentity a, FBFileIdentity b)
     return a.valid && b.valid && a.dev == b.dev && a.ino == b.ino;
 }
 
+static FBFileIdentity fb_identity_path(NSString *path)
+{
+    FBFileIdentity ident = {0};
+    struct stat st;
+    if (lstat(path.fileSystemRepresentation, &st) == 0) {
+        ident.valid = YES;
+        ident.dev = st.st_dev;
+        ident.ino = st.st_ino;
+        ident.size = st.st_size;
+        ident.mtime = st.st_mtimespec;
+    }
+    return ident;
+}
+
 static BOOL fb_pwrite_all(int fd, NSData *data)
 {
     const uint8_t *p = data.bytes;
@@ -172,6 +187,10 @@ FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expec
         if (message) *message = @"Changes are locked. Unlock them in the File Browser first.";
         return FBSaveFailed;
     }
+    if (data.length > kFBMaxBackupBytes) {
+        if (message) *message = @"The new file is too large for a durable recovery preimage.";
+        return FBSaveFailed;
+    }
     int fd = open(path.fileSystemRepresentation, O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
         if (message) *message = [NSString stringWithFormat:@"The file can't be opened for writing: %s.", strerror(errno)];
@@ -184,6 +203,13 @@ FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expec
         return FBSaveFailed;
     }
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        int lockError = errno;
+        close(fd);
+        if (message) *message = [NSString stringWithFormat:@"The file is busy or could not be locked: %s. Nothing was changed.",
+                                  strerror(lockError)];
+        return FBSaveFailed;
+    }
     FBFileIdentity current = filebrowser_identity_fd(fd);
     BOOL tooBig = NO;
     int rerr = 0;
@@ -227,13 +253,47 @@ FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expec
             [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
             [NSFileManager.defaultManager removeItemAtPath:backupPath error:nil];
             msg = @"A backup of the current file couldn't be written. Nothing was changed.";
-        } else if (fb_pwrite_all(fd, data)) {
-            [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
-            [NSFileManager.defaultManager removeItemAtPath:backupPath error:nil];
-            if (newIdentity) *newIdentity = filebrowser_identity_fd(fd);
-            filebrowser_note_filesystem_changed();
-            result = FBSaveOK;
         } else {
+            // Recheck after the durable preimage was made.  This catches a
+            // cooperative writer that ignores flock and a pathname replaced
+            // while the backup was being prepared, before touching the inode.
+            FBFileIdentity beforeCommit = filebrowser_identity_fd(fd);
+            FBFileIdentity visibleBefore = fb_identity_path(path);
+            BOOL stableTooBig = NO;
+            int stableError = 0;
+            NSData *stableData = filebrowser_read_fd(fd, kFBMaxBackupBytes, &stableTooBig, &stableError);
+            if (!fb_same_object(current, beforeCommit) || !fb_same_object(current, visibleBefore) ||
+                stableTooBig || !stableData || ![stableData isEqualToData:currentData]) {
+                result = FBSaveConflict;
+                msg = @"The file changed while it was being prepared. Nothing was written; reload and try again.";
+                [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
+                [NSFileManager.defaultManager removeItemAtPath:backupPath error:nil];
+            } else if (fb_pwrite_all(fd, data)) {
+                FBFileIdentity afterWrite = filebrowser_identity_fd(fd);
+                BOOL postTooBig = NO;
+                int postError = 0;
+                NSData *postData = filebrowser_read_fd(fd, kFBMaxBackupBytes, &postTooBig, &postError);
+                BOOL postcondition = fb_same_object(afterWrite, fb_identity_path(path)) &&
+                                     !postTooBig && postData && [postData isEqualToData:data];
+                filebrowser_note_filesystem_changed();
+                if (postcondition) {
+                    [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
+                    [NSFileManager.defaultManager removeItemAtPath:backupPath error:nil];
+                    if (newIdentity) *newIdentity = afterWrite;
+                    result = FBSaveOK;
+                } else {
+                    // Someone else wrote to (or replaced) the file during our
+                    // write. Writing our old contents back would overwrite
+                    // THEIR change, so write nothing more: report a conflict
+                    // and drop our backup -- it holds the pre-save contents,
+                    // not what is in the file now, and a leftover would raise
+                    // a false "Unfinished Saves" notice.
+                    [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
+                    [NSFileManager.defaultManager removeItemAtPath:backupPath error:nil];
+                    result = FBSaveConflict;
+                    msg = @"Another program changed the file while it was being saved, so what is in it now may not be your edit. Reload to see the current contents before trying again.";
+                }
+            } else {
             int werr = errno;
             filebrowser_note_filesystem_changed();   // the file may have changed
             if (fb_pwrite_all(fd, currentData)) {
@@ -246,8 +306,10 @@ FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expec
                                                  @"The file may be damaged. A backup of its previous contents is at:\n%@",
                                                  strerror(werr), backup];
             }
+            }
         }
     }
+    flock(fd, LOCK_UN);
     close(fd);
     if (message) *message = msg;
     return result;
