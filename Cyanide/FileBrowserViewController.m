@@ -1865,7 +1865,10 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
         }
         [entries sortUsingComparator:order];
         if (!names && !status) {
-            NSError *posix = err.userInfo[NSUnderlyingErrorKey];
+            // The bounded readdir listing returns a POSIX error directly;
+            // NSFileManager wrapped it as the underlying error. Accept both.
+            NSError *posix = [err.domain isEqualToString:NSPOSIXErrorDomain] ? err
+                                                                              : err.userInfo[NSUnderlyingErrorKey];
             NSInteger code = [posix.domain isEqualToString:NSPOSIXErrorDomain] ? posix.code : 0;
             if (code == ENOENT || err.code == NSFileReadNoSuchFileError)
                 status = @"This folder does not exist.";
