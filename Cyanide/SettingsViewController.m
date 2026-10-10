@@ -15908,6 +15908,53 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
     [self presentViewController:vc animated:YES completion:nil];
 }
 
+static NSString *cyanide_sanitize_diagnostic_payload(NSString *rawLog)
+{
+    if (![rawLog isKindOfClass:NSString.class]) return @"";
+
+    // Privacy: only what identifies the user's own data is redacted before the
+    // log leaves the device -- paths into the user's data and app containers,
+    // file URLs, and every path in a [FILES] line (what was browsed, including
+    // as root). System paths, ratios like "3/8" and the rest of the log stay:
+    // they are what makes a report diagnosable. The local log keeps everything.
+    static NSRegularExpression *userPathRe;
+    static NSRegularExpression *fileURLRe;
+    static NSRegularExpression *anyPathRe;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        userPathRe = [NSRegularExpression regularExpressionWithPattern:
+                      @"(?:/private)?/var/(?:mobile|containers|root)\\b(?:/[^\\s\"'<>]*)?"
+                                                               options:0 error:nil];
+        fileURLRe = [NSRegularExpression regularExpressionWithPattern:@"(?i)file://[^\\s\"'<>]+"
+                                                              options:0 error:nil];
+        anyPathRe = [NSRegularExpression regularExpressionWithPattern:@"/[^\\s]*"
+                                                              options:0 error:nil];
+    });
+
+    NSMutableArray<NSString *> *safeLines = [NSMutableArray array];
+    for (NSString *rawLine in [rawLog componentsSeparatedByString:@"\n"]) {
+        NSString *line = [fileURLRe stringByReplacingMatchesInString:rawLine
+                                                                options:0
+                                                                  range:NSMakeRange(0, rawLine.length)
+                                                           withTemplate:@"<file-url>"];
+        NSRegularExpression *pathRe = [line containsString:@"[FILES]"] ? anyPathRe : userPathRe;
+        line = [pathRe stringByReplacingMatchesInString:line
+                                                options:0
+                                                  range:NSMakeRange(0, line.length)
+                                           withTemplate:@"<path>"];
+
+        // Some importers intentionally log a basename without a slash. Keep
+        // the operation and outcome, but never send a user-selected filename.
+        if ([line containsString:@"[LIVEWP]"] && [line containsString:@"Selected video:"]) {
+            NSRange marker = [line rangeOfString:@"Selected video:"];
+            line = [[line substringToIndex:marker.location + marker.length]
+                    stringByAppendingString:@" <video>"];
+        }
+        [safeLines addObject:line];
+    }
+    return [safeLines componentsJoinedByString:@"\n"];
+}
+
 // Session-scoped state so uploaded snapshots from one chain run get grouped on
 // the server side (same sessionId, monotonically increasing seq). A fresh
 // session begins at every settings_run_actions() entry.
@@ -15953,29 +16000,12 @@ static void cyanide_upload_log_with_kind_event(NSString *kind, NSString *event) 
                                        encoding:NSUTF8StringEncoding];
     if (!rawLog.length) return;
     if (clipped) rawLog = [@"[… earlier part of the log omitted …]\n" stringByAppendingString:rawLog];
-    // Privacy: [FILES] lines name what the user browsed (including as root).
-    // Only the fact of a file operation matters for diagnosis, so paths in
-    // those lines are replaced before the log leaves the device. The local
-    // log keeps them.
-    {
-        static NSRegularExpression *pathRe;
-        static dispatch_once_t once;
-        dispatch_once(&once, ^{
-            pathRe = [NSRegularExpression regularExpressionWithPattern:@"/[^\\s]*" options:0 error:nil];
-        });
-        NSMutableArray<NSString *> *lines = [[rawLog componentsSeparatedByString:@"\n"] mutableCopy];
-        for (NSUInteger i = 0; i < lines.count; i++) {
-            NSString *line = lines[i];
-            if (![line containsString:@"[FILES]"]) continue;
-            lines[i] = [pathRe stringByReplacingMatchesInString:line options:0
-                                                          range:NSMakeRange(0, line.length)
-                                                   withTemplate:@"<path>"];
-        }
-        rawLog = [lines componentsJoinedByString:@"\n"];
-    }
+    rawLog = cyanide_sanitize_diagnostic_payload(rawLog);
 
     int seq = __sync_add_and_fetch(&g_cyanide_upload_seq, 1);
     NSString *sessionId = g_cyanide_upload_session_id ?: @"adhoc";
+    NSString *safeKind = cyanide_sanitize_diagnostic_payload(kind ?: @"");
+    NSString *safeEvent = cyanide_sanitize_diagnostic_payload(event ?: @"");
 
     NSString *appVersion = settings_app_version_string();
     NSString *appBuild = settings_app_build_string();
@@ -15999,7 +16029,7 @@ static void cyanide_upload_log_with_kind_event(NSString *kind, NSString *event) 
         @"seq         : %d\n"
         @"==============================\n\n",
         appVersion, appBuild, iosVersion, machine, path.lastPathComponent,
-        sessionId, kind, event ?: @"", seq];
+        sessionId, safeKind, safeEvent, seq];
 
     NSDictionary *body = @{
         @"log": [header stringByAppendingString:rawLog],
@@ -16011,8 +16041,8 @@ static void cyanide_upload_log_with_kind_event(NSString *kind, NSString *event) 
             @"ios":        iosVersion,
             @"device":     machine,
             @"sessionId":  sessionId,
-            @"kind":       kind,
-            @"event":      event ?: @"",
+            @"kind":       safeKind,
+            @"event":      safeEvent,
             @"seq":        @(seq),
         }
     };
