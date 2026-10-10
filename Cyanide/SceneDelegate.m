@@ -52,11 +52,26 @@ static void scene_note_session(UISceneSession *session)
                                       : "new: no earlier switcher card");
 }
 
+// When the scene first became active with no request waiting (0 = not yet).
+// The user opening Cyanide looks like that; so does a Control Center launch
+// on iOS 18, where the request can follow the activation by a moment. A
+// request arriving well after such an activation found the app opened by the
+// user -- e.g. opened, then left within seconds to use the toggle, which the
+// 8 s process-age window alone took for a cold launch and closed the app.
+static uint64_t g_scene_idle_activation_ns = 0;   // main thread only
+static const uint64_t kSceneRequestFollowsLaunchNs = 2ULL * NSEC_PER_SEC;
+
 static BOOL scene_request_launched_app(void)
 {
     BOOL first = !g_scene_any_request;
     g_scene_any_request = YES;
     uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    if (g_scene_idle_activation_ns &&
+        now - g_scene_idle_activation_ns > kSceneRequestFollowsLaunchNs) {
+        log_user("[URL] request %.1fs after the app was opened: not a cold launch, card kept\n",
+                 (double)(now - g_scene_idle_activation_ns) / 1e9);
+        return NO;
+    }
     return first && !g_scene_session_restored &&
            now - g_scene_process_start_ns < 8ULL * NSEC_PER_SEC;
 }
@@ -727,6 +742,8 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     [self selectInitialTabIfNeeded];
     settings_application_did_become_active();
     [self showBlockedLinkNoticeIfNeeded];
+    if (!self.pendingActionURL && !self.actionInProgress && !g_scene_idle_activation_ns)
+        g_scene_idle_activation_ns = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     if (self.pendingActionURL) {
         NSURL *url = self.pendingActionURL;
         CYLocationRequestCompletion completion = self.pendingActionCompletion;
@@ -788,6 +805,13 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
 
 - (void)sceneDidEnterBackground:(UIScene *)scene {
     cyanide_launch_trace("sceneDidEnterBackground: entry");
+    // The App Switcher snapshot is taken after this returns: a finished quiet
+    // run's progress screen would become the card's picture. Show Cyanide's
+    // own UI there instead (a card that is being removed doesn't matter).
+    if (!self.actionInProgress && self.quietCover) {
+        [self hideQuietCover];
+        [self.window layoutIfNeeded];
+    }
     settings_application_did_enter_background();
     cyanide_launch_trace("sceneDidEnterBackground: exit");
 }

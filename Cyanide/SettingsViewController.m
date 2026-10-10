@@ -6677,7 +6677,12 @@ void settings_location_services_set_async(int desired, BOOL allowFullExploit,
                         // Never while a live tweak keeps this channel open
                         // across the background: ending Cyanide would
                         // orphan it.
-                        if (removeFromSwitcher && !settings_has_persistent_springboard_remote_call_user()) {
+                        // settings_krw_idle_detach_allowed also covers live
+                        // tweak loops, not only applied tweaks holding the
+                        // SpringBoard session: Cyanide never closes under them.
+                        if (removeFromSwitcher && !settings_krw_idle_detach_allowed())
+                            log_user("[SWITCHER] card kept: live tweaks are running\n");
+                        if (removeFromSwitcher && settings_krw_idle_detach_allowed()) {
                             removalDelay = locsvc_switcher_delay();
                             // The caller stays in front up to homeDelay longer
                             // (log=1 result pause): the card goes that much later.
