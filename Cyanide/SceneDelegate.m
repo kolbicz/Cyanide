@@ -22,6 +22,9 @@
 @property (nonatomic, assign) NSUInteger actionGeneration;
 @property (nonatomic, assign) BOOL actionInProgress;
 @property (nonatomic, strong) UIView *quietCover;   // shown during a quiet shortcut run
+@property (nonatomic, strong) UIImageView *quietIcon;
+@property (nonatomic, strong) UILabel *quietStatus;
+@property (nonatomic, strong) UIProgressView *quietProgress;
 
 @end
 
@@ -136,20 +139,86 @@ static void scene_suspend_to_home(void)
     [[self topViewController] presentViewController:ac animated:YES completion:nil];
 }
 
-// A plain full-window cover for quiet shortcut runs: nothing of Cyanide's UI
-// shows while it works.
+// A small progress screen for quiet shortcut runs instead of Cyanide's UI:
+// icon, title, a short status line and a progress bar.
 - (void)showQuietCover {
     if (self.quietCover) return;
     UIView *cover = [[UIView alloc] initWithFrame:self.window.bounds];
     cover.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     cover.backgroundColor = UIColor.systemBackgroundColor;
+
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:56 weight:UIImageSymbolWeightRegular];
+    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"location.fill" withConfiguration:cfg]];
+    icon.tintColor = UIColor.systemBlueColor;
+    icon.contentMode = UIViewContentModeCenter;
+
+    UILabel *title = [UILabel new];
+    title.text = @"Location Services";
+    title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
+    title.textColor = UIColor.labelColor;
+
+    UILabel *status = [UILabel new];
+    status.text = @"Getting ready…";
+    status.font = [UIFont systemFontOfSize:15];
+    status.textColor = UIColor.secondaryLabelColor;
+
+    UIProgressView *bar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+    bar.progress = 0.05f;
+    bar.translatesAutoresizingMaskIntoConstraints = NO;
+    [bar.widthAnchor constraintEqualToConstant:220].active = YES;
+
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[ icon, title, status, bar ]];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.alignment = UIStackViewAlignmentCenter;
+    stack.spacing = 12;
+    [stack setCustomSpacing:20 afterView:icon];
+    [stack setCustomSpacing:18 afterView:status];
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [cover addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],
+        [stack.centerYAnchor constraintEqualToAnchor:cover.centerYAnchor constant:-30],
+    ]];
     [self.window addSubview:cover];
+    // A gentle pulse while it works.
+    if (@available(iOS 17.0, *)) [icon addSymbolEffect:[NSSymbolPulseEffect effect]];
+
     self.quietCover = cover;
+    self.quietIcon = icon;
+    self.quietStatus = status;
+    self.quietProgress = bar;
+}
+
+// Progress from the running action: move the bar to `fraction` (animated
+// over `over` seconds, e.g. the remaining activation window) and show `step`.
+- (void)updateQuietProgress:(float)fraction step:(NSString *)step over:(NSTimeInterval)over {
+    if (!self.quietCover) return;
+    BOOL done = fraction >= 1.0f;
+    self.quietStatus.text = done ? step : [step stringByAppendingString:@"…"];
+    UIProgressView *bar = self.quietProgress;
+    if (fraction > bar.progress) {
+        [bar layoutIfNeeded];
+        [UIView animateWithDuration:MAX(over, 0.15) delay:0
+                            options:UIViewAnimationOptionCurveLinear | UIViewAnimationOptionBeginFromCurrentState
+                         animations:^{
+            [bar setProgress:fraction animated:NO];
+            [bar layoutIfNeeded];
+        } completion:nil];
+    }
+    if (done) {
+        if (@available(iOS 17.0, *)) [self.quietIcon removeAllSymbolEffects];
+        UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:56 weight:UIImageSymbolWeightRegular];
+        self.quietIcon.image = [UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:cfg];
+        self.quietIcon.tintColor = UIColor.systemGreenColor;
+    }
 }
 
 - (void)hideQuietCover {
     [self.quietCover removeFromSuperview];
     self.quietCover = nil;
+    self.quietIcon = nil;
+    self.quietStatus = nil;
+    self.quietProgress = nil;
 }
 
 // A quiet shortcut link arriving before the scene is active: cover the
@@ -193,7 +262,11 @@ static void scene_suspend_to_home(void)
     }
     __weak typeof(self) weakSelf = self;
     dispatch_block_t run = ^{
-        settings_location_services_set_async(desired, !keepCard, ^(BOOL ok, NSString *message,
+        SettingsProgressBlock progress = showLog ? nil : ^(float fraction, NSString *step, NSTimeInterval over) {
+            typeof(self) me = weakSelf;
+            if (me && generation == me.actionGeneration) [me updateQuietProgress:fraction step:step over:over];
+        };
+        settings_location_services_set_async(desired, !keepCard, progress, ^(BOOL ok, NSString *message,
                                                                     NSTimeInterval resultAge) {
             if (observer) [NSNotificationCenter.defaultCenter removeObserver:observer];
             typeof(self) me = weakSelf;

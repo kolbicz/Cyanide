@@ -6497,9 +6497,13 @@ void settings_application_will_enter_foreground(void)
 // a successful SpringBoard run also has SpringBoard delete Cyanide's App
 // Switcher card a little later (after the caller has gone to the Home Screen).
 void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
+                                          SettingsProgressBlock progress,
                                           void (^completion)(BOOL ok, NSString *message,
                                                              NSTimeInterval resultAge))
 {
+    void (^step)(float, NSString *, NSTimeInterval) = ^(float f, NSString *text, NSTimeInterval over) {
+        if (progress) dispatch_async(dispatch_get_main_queue(), ^{ progress(f, text, over); });
+    };
     // Every exit — including the early ones — posts the actions-complete
     // result, so an activity log opened for this request always finishes.
     void (^finishEarly)(NSString *) = ^(NSString *message) {
@@ -6521,6 +6525,8 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
         // reading — not when the request was made (the state may have
         // changed since, and a toggle must flip what is actually there).
         BOOL enable = desired < 0 ? (locationservices_enabled_local() != 1) : (desired != 0);
+        NSString *verb = enable ? @"Turning on" : @"Turning off";
+        step(0.1f, @"Getting ready", 0);
         __block BOOL ok = NO;
         __block NSString *message = nil;
         __block uint64_t resultPostedNs = 0;
@@ -6537,6 +6543,7 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
             if (locationservices_enabled_local() == (enable ? 1 : 0)) {
                 ok = YES;
                 message = [NSString stringWithFormat:@"Location Services already %@.", enable ? @"on" : @"off"];
+                step(1.0f, enable ? @"Already on" : @"Already off", 0);
                 return;
             }
             log_user("[LOCSVC] Turning Location Services %s…\n", enable ? "on" : "off");
@@ -6547,8 +6554,18 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                 message = @"Failed: kernel primitives were not acquired. Run the chain, then try again.";
                 return;
             }
+            // The longest step is the activation settle window before the
+            // SpringBoard channel can open (plus ~0.5 s to open it): let the
+            // bar fill over exactly that time instead of standing still.
+            {
+                uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+                uint64_t until = g_activation_settle_until_ns;
+                double wait = (until > now ? (double)(until - now) / 1e9 : 0) + (g_springboard_rc_ready ? 0 : 0.5);
+                step(0.75f, g_springboard_rc_ready ? @"Connecting" : @"Waiting for the system", wait);
+            }
             @synchronized (settings_rc_lock()) {
                 if (settings_ensure_springboard_remote_call_locked()) {
+                    step(0.85f, verb, 0.3);
                     LSCallResult sent = locationservices_set_enabled_in_session(enable);
                     // Not sent: nothing can change, don't wait for it.
                     // Sent/uncertain: the readback decides.
@@ -6559,6 +6576,7 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                         // Report now; the teardown below runs while the
                         // result is already on screen.
                         message = doneText();
+                        step(1.0f, @"Done", 0.2);
                         postResult();
                         // Switcher card: SpringBoard deletes it removalDelay
                         // from now (measured; see locsvc_switcher_delay).
@@ -6602,6 +6620,7 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                 if (locationservices_enabled_local() == (enable ? 1 : 0)) {
                     ok = YES;
                     message = doneText();
+                    step(1.0f, @"Done", 0.2);
                     return;
                 }
                 if (settings_any_registered_live_loop_running() || settings_has_persistent_springboard_remote_call_user()) {
@@ -6612,6 +6631,7 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                 // Fallback: Preferences, only if it's already running (see
                 // locationservices_set_enabled_via_running_preferences).
                 log_user("[LOCSVC] No change from SpringBoard; trying a running Preferences…\n");
+                step(0.9f, @"Trying another way", 0.3);
                 LSCallResult sent;
                 @synchronized (settings_rc_lock()) {
                     settings_destroy_springboard_remote_call_locked_internal("switching to Preferences", NO);
@@ -6624,6 +6644,7 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                     return;
                 }
             }
+            if (ok) step(1.0f, @"Done", 0.2);
             message = ok ? doneText() : @"Location Services did not change. Check the log.";
         } @finally {
             settings_release_actions_lock();
@@ -16640,7 +16661,7 @@ void cyanide_present_contact(UIViewController *host)
     if (!settings_device_supported()) return;
     [self presentActivityLog];
     __weak typeof(self) weakSelf = self;
-    settings_location_services_set_async(-1, NO, ^(BOOL ok, NSString *message, NSTimeInterval resultAge) {
+    settings_location_services_set_async(-1, NO, nil, ^(BOOL ok, NSString *message, NSTimeInterval resultAge) {
         [weakSelf reloadLocationSimUI];
     });
 }
