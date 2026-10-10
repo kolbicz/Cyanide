@@ -824,8 +824,8 @@ uint64_t r_msg2_main(uint64_t obj, const char *selName,
 // Returns false when the invocation couldn't be built or the dispatch didn't
 // complete; on a setter failure nothing is dispatched. A false after the
 // perform itself means the selector may or may not run — never blindly retry.
-bool r_msg2_main_async(uint64_t obj, const char *selName,
-                       uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3)
+static bool r_msg2_main_async_args(uint64_t obj, const char *selName,
+                                   const void *const argData[4], const size_t argSizes[4])
 {
     if (!r_is_objc_ptr(obj) || !selName) return false;
     uint64_t sel = r_sel(selName);
@@ -856,15 +856,15 @@ bool r_msg2_main_async(uint64_t obj, const char *selName,
     r_msg2(inv, "setSelector:", sel, 0, 0, 0);
     argsOK = argsOK && t_r_last_ok;
 
-    uint64_t userArgs[4] = { a0, a1, a2, a3 };
     for (uint64_t i = 0; argsOK && i < maxUserArgs; i++) {
+        size_t argBufLen = (argSizes[i] > 8) ? argSizes[i] : 8;
         uint64_t argBuf = r_call_stable(R_TIMEOUT, "malloc",
-                                        8, 0, 0, 0, 0, 0, 0, 0);
+                                        argBufLen, 0, 0, 0, 0, 0, 0, 0);
         if (!argBuf) {
             argsOK = false;
             continue;
         }
-        if (remote_write64(argBuf, userArgs[i])) {
+        if (r_write_remote_arg(argBuf, argData[i], argSizes[i], argBufLen)) {
             r_msg2(inv, "setArgument:atIndex:", argBuf, i + 2, 0, 0);
             if (!t_r_last_ok) argsOK = false;
         } else {
@@ -895,6 +895,26 @@ bool r_msg2_main_async(uint64_t obj, const char *selName,
     // return, so the next remote interaction owes a settle.
     if (ok) gSettleOwed = true;
     return ok;
+}
+
+bool r_msg2_main_async(uint64_t obj, const char *selName,
+                       uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3)
+{
+    const uint64_t args[4] = { a0, a1, a2, a3 };
+    const void *const data[4] = { &args[0], &args[1], &args[2], &args[3] };
+    const size_t sizes[4] = { 8, 8, 8, 8 };
+    return r_msg2_main_async_args(obj, selName, data, sizes);
+}
+
+bool r_msg2_main_raw_async(uint64_t obj, const char *selName,
+                           const void *a0, size_t a0Size,
+                           const void *a1, size_t a1Size,
+                           const void *a2, size_t a2Size,
+                           const void *a3, size_t a3Size)
+{
+    const void *const data[4] = { a0, a1, a2, a3 };
+    const size_t sizes[4] = { a0Size, a1Size, a2Size, a3Size };
+    return r_msg2_main_async_args(obj, selName, data, sizes);
 }
 
 uint64_t r_msg2_main_raw(uint64_t obj, const char *selName,

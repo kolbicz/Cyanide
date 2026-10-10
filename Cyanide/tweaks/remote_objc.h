@@ -30,6 +30,12 @@ uint64_t r_msg2_main(uint64_t obj, const char *selName,
 // false: not dispatched, or dispatch status unknown (may still run).
 bool     r_msg2_main_async(uint64_t obj, const char *selName,
                           uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3);
+// Same, with arguments passed by value from local buffers (structs too).
+bool     r_msg2_main_raw_async(uint64_t obj, const char *selName,
+                               const void *a0, size_t a0Size,
+                               const void *a1, size_t a1Size,
+                               const void *a2, size_t a2Size,
+                               const void *a3, size_t a3Size);
 // Status of the calling thread's last r_msg / r_call (r_last_call_ok) or
 // r_msg_main* (r_last_main_ok): false when the call didn't complete, so a 0
 // return can be told apart from a failure. A failed main-thread call may or

@@ -100,48 +100,23 @@ static uint64_t rc_safe_msg(uint64_t obj, const char *selname,
     return r_msg(obj, sel, a, b, c, d);
 }
 
+// The setters below go through remote_objc's main-thread helpers, which
+// check every setup step and release their invocations; the hand-built
+// NSInvocations used here before were autoreleased on the RemoteCall thread,
+// whose pool never drains, and leaked one per call. clsInv is unused now.
 static void rc_force_manager_relayout(uint64_t mgr, uint64_t clsInv)
 {
-    if (!mgr || !clsInv) return;
-
-    uint64_t selSig     = r_sel("methodSignatureForSelector:");
-    uint64_t selWithSig = r_sel("invocationWithMethodSignature:");
-    uint64_t selSetTgt  = r_sel("setTarget:");
-    uint64_t selSetSel  = r_sel("setSelector:");
-    uint64_t selSetArg  = r_sel("setArgument:atIndex:");
-    uint64_t selInvoke  = r_sel("invoke");
-    uint64_t selPerform = r_sel("performSelectorOnMainThread:withObject:waitUntilDone:");
-    uint64_t selResponds = r_sel("respondsToSelector:");
+    (void)clsInv;
+    if (!mgr) return;
 
     // setNeedsRelayout:YES — safe on both iOS 18 (SBIconManager) and iOS 26+
     // (SBHIconManager). Just an ivar setter on both.
-    {
-        uint64_t selSNR = r_sel("setNeedsRelayout:");
-        uint64_t sig = r_msg(mgr, selSig, selSNR, 0, 0, 0);
-        if (sig) {
-            uint64_t inv = r_msg(clsInv, selWithSig, sig, 0, 0, 0);
-            if (inv) {
-                r_msg(inv, selSetTgt, mgr, 0, 0, 0);
-                r_msg(inv, selSetSel, selSNR, 0, 0, 0);
-                uint64_t one = do_remote_call_stable(R_TIMEOUT, "calloc", 1, 8, 0, 0, 0, 0, 0, 0);
-                if (one) {
-                    uint8_t yes = 1;
-                    remote_write(one, &yes, 1);
-                    r_msg(inv, selSetArg, one, 2, 0, 0);
-                    r_msg(inv, selPerform, selInvoke, 0, 1, 0);
-                    r_free(one);
-                }
-            }
-        }
-    }
+    r_msg2_main(mgr, "setNeedsRelayout:", 1, 0, 0, 0);
 
     // -relayout: only iOS 18's SBIconManager exposes this. iOS 26's
     // SBHIconManager doesn't.
-    if (ds_layout_ios_major() < 26) {
-        uint64_t selR = r_sel("relayout");
-        if (r_msg(mgr, selResponds, selR, 0, 0, 0)) {
-            r_msg(mgr, selPerform, selR, 0, 1, 0);
-        }
+    if (ds_layout_ios_major() < 26 && r_responds(mgr, "relayout")) {
+        r_msg2_main(mgr, "relayout", 0, 0, 0, 0);
     }
 
     // -layoutIconListsWithAnimationType:forceRelayout: — iOS 18 only.
@@ -149,29 +124,9 @@ static void rc_force_manager_relayout(uint64_t mgr, uint64_t clsInv)
     // tore down SpringBoard in testing (likely an internal precondition
     // around UIUpdateScheduler). Skip; setNeedsRelayout:YES above plus the
     // next natural display refresh picks up the new layoutConfiguration.
-    if (ds_layout_ios_major() < 26) {
-        uint64_t selLI = r_sel("layoutIconListsWithAnimationType:forceRelayout:");
-        if (r_msg(mgr, selResponds, selLI, 0, 0, 0)) {
-            uint64_t sig = r_msg(mgr, selSig, selLI, 0, 0, 0);
-            if (sig) {
-                uint64_t inv = r_msg(clsInv, selWithSig, sig, 0, 0, 0);
-                if (inv) {
-                    r_msg(inv, selSetTgt, mgr, 0, 0, 0);
-                    r_msg(inv, selSetSel, selLI, 0, 0, 0);
-                    uint64_t typeMem  = do_remote_call_stable(R_TIMEOUT, "calloc", 1, 8, 0, 0, 0, 0, 0, 0);
-                    uint64_t forceMem = do_remote_call_stable(R_TIMEOUT, "calloc", 1, 8, 0, 0, 0, 0, 0, 0);
-                    if (forceMem) {
-                        uint8_t yes = 1;
-                        remote_write(forceMem, &yes, 1);
-                    }
-                    if (typeMem)  r_msg(inv, selSetArg, typeMem,  2, 0, 0);
-                    if (forceMem) r_msg(inv, selSetArg, forceMem, 3, 0, 0);
-                    r_msg(inv, selPerform, selInvoke, 0, 1, 0);
-                    if (typeMem)  r_free(typeMem);
-                    if (forceMem) r_free(forceMem);
-                }
-            }
-        }
+    if (ds_layout_ios_major() < 26 &&
+        r_responds(mgr, "layoutIconListsWithAnimationType:forceRelayout:")) {
+        r_msg2_main(mgr, "layoutIconListsWithAnimationType:forceRelayout:", 0, 1, 0, 0);
     }
 }
 
@@ -204,35 +159,12 @@ static uint64_t rc_root_layout_config(uint64_t ctrl, uint64_t mgr)
 static bool rc_set_insets_on(uint64_t cfg, uint64_t clsInv,
                              const RC_UIEdgeInsets *insets)
 {
-    if (!cfg || !clsInv) return false;
-    uint64_t selSetInsets = r_sel("setPortraitLayoutInsets:");
-    uint64_t selSig       = r_sel("methodSignatureForSelector:");
-    uint64_t selWithSig   = r_sel("invocationWithMethodSignature:");
-    uint64_t selSetTgt    = r_sel("setTarget:");
-    uint64_t selSetSel    = r_sel("setSelector:");
-    uint64_t selSetArg    = r_sel("setArgument:atIndex:");
-    uint64_t selInvoke    = r_sel("invoke");
-    uint64_t selPerform   = r_sel("performSelectorOnMainThread:withObject:waitUntilDone:");
-
-    uint64_t sig = r_msg(cfg, selSig, selSetInsets, 0, 0, 0);
-    if (!sig) return false;
-    uint64_t inv = r_msg(clsInv, selWithSig, sig, 0, 0, 0);
-    if (!inv) return false;
-    r_msg(inv, selSetTgt, cfg, 0, 0, 0);
-    if (!r_last_call_ok()) return false;
-    r_msg(inv, selSetSel, selSetInsets, 0, 0, 0);
-    if (!r_last_call_ok()) return false;
-
-    uint64_t mem = do_remote_call_stable(R_TIMEOUT, "calloc", 1, 32, 0, 0, 0, 0, 0, 0);
-    if (!mem) return false;
-    if (!remote_write(mem, insets, sizeof(*insets))) { r_free(mem); return false; }
-    r_msg(inv, selSetArg, mem, 2, 0, 0);
-    if (!r_last_call_ok()) { r_free(mem); return false; }
-    r_msg(inv, selPerform, selInvoke, 0, 1, 0);
+    (void)clsInv;
+    if (!cfg) return false;
+    r_msg2_main_raw(cfg, "setPortraitLayoutInsets:", insets, sizeof(*insets),
+                    NULL, 0, NULL, 0, NULL, 0);
     // false = the dispatch didn't complete; the setter may or may not have run.
-    bool ok = r_last_call_ok();
-    r_free(mem);
-    return ok;
+    return r_last_main_ok();
 }
 
 // When async is true the invocation is fired onto SpringBoard's main thread
@@ -246,39 +178,17 @@ static bool rc_set_insets_on(uint64_t cfg, uint64_t clsInv,
 static bool rc_set_icon_info_on(uint64_t cfg, uint64_t clsInv,
                                 const RC_SBIconImageInfo *info, bool async)
 {
-    if (!cfg || !clsInv) return false;
-    uint64_t selSetIconInfo = r_sel("setIconImageInfo:");
-    uint64_t selSig         = r_sel("methodSignatureForSelector:");
-    uint64_t selWithSig     = r_sel("invocationWithMethodSignature:");
-    uint64_t selSetTgt      = r_sel("setTarget:");
-    uint64_t selSetSel      = r_sel("setSelector:");
-    uint64_t selSetArg      = r_sel("setArgument:atIndex:");
-    uint64_t selInvoke      = r_sel("invoke");
-    uint64_t selPerform     = r_sel("performSelectorOnMainThread:withObject:waitUntilDone:");
-
-    uint64_t sig = r_msg(cfg, selSig, selSetIconInfo, 0, 0, 0);
-    if (!sig) return false;
-    uint64_t inv = r_msg(clsInv, selWithSig, sig, 0, 0, 0);
-    if (!inv) return false;
-    r_msg(inv, selSetTgt, cfg, 0, 0, 0);
-    if (!r_last_call_ok()) return false;
-    r_msg(inv, selSetSel, selSetIconInfo, 0, 0, 0);
-    if (!r_last_call_ok()) return false;
-
-    uint64_t mem = do_remote_call_stable(R_TIMEOUT, "calloc", 1, 32, 0, 0, 0, 0, 0, 0);
-    if (!mem) return false;
-    if (!remote_write(mem, info, sizeof(*info))) { r_free(mem); return false; }
-    r_msg(inv, selSetArg, mem, 2, 0, 0);
-    if (!r_last_call_ok()) { r_free(mem); return false; }
+    (void)clsInv;
+    if (!cfg) return false;
     if (async) {
-        r_msg(inv, r_sel("retainArguments"), 0, 0, 0, 0);
-        if (!r_last_call_ok()) { r_free(mem); return false; }
+        // retainArguments inside: the invocation owns the copied struct.
+        return r_msg2_main_raw_async(cfg, "setIconImageInfo:", info, sizeof(*info),
+                                     NULL, 0, NULL, 0, NULL, 0);
     }
-    r_msg(inv, selPerform, selInvoke, 0, async ? 0 : 1, 0);
+    r_msg2_main_raw(cfg, "setIconImageInfo:", info, sizeof(*info),
+                    NULL, 0, NULL, 0, NULL, 0);
     // false = the dispatch didn't complete; the setter may or may not have run.
-    bool ok = r_last_call_ok();
-    r_free(mem);
-    return ok;
+    return r_last_main_ok();
 }
 
 // True for the icon classes we resize: real app icons, PLUS the special dynamic
