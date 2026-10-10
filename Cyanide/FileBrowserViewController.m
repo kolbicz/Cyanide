@@ -190,8 +190,17 @@ FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expec
     } else {
         NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"FileBrowserBackups"];
         [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        // "<name>.<UUID>.bak" must fit the 255-byte name limit: the UUID and
+        // suffix take 41 bytes, so a name over ~214 bytes made every save of
+        // that file fail with "backup couldn't be written". Keep at most 120
+        // bytes of the name, cut at a whole character (UTF-8 safe).
+        NSString *base = path.lastPathComponent;
+        while ([base lengthOfBytesUsingEncoding:NSUTF8StringEncoding] > 120 && base.length > 0) {
+            NSRange last = [base rangeOfComposedCharacterSequenceAtIndex:base.length - 1];
+            base = [base substringToIndex:last.location];
+        }
         NSString *backup = [dir stringByAppendingPathComponent:
-                            [NSString stringWithFormat:@"%@.%@.bak", path.lastPathComponent, NSUUID.UUID.UUIDString]];
+                            [NSString stringWithFormat:@"%@.%@.bak", base, NSUUID.UUID.UUIDString]];
         if (![currentData writeToFile:backup atomically:YES]) {
             msg = @"A backup of the current file couldn't be written. Nothing was changed.";
         } else if (fb_pwrite_all(fd, data)) {
@@ -880,9 +889,16 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
             else if (![full writeToFile:copy atomically:YES]) failure = @"The copy could not be written.";
         } else {
             int in = filebrowser_open_regular(path);
-            int out = in < 0 ? -1 : open(copy.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+            // Same 64 MB limit as the root path: the copy goes to the data
+            // partition's temp folder, and a multi-GB file could fill it.
+            struct stat inSt;
+            BOOL tooLarge = in >= 0 && fstat(in, &inSt) == 0 && inSt.st_size > (off_t)kFBMaxShareBytes;
+            int out = (in < 0 || tooLarge) ? -1
+                    : open(copy.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
             if (in < 0) {
                 failure = @"Only regular files can be shared.";
+            } else if (tooLarge) {
+                failure = @"The file is larger than 64 MB. Sharing files that large is not supported.";
             } else if (out < 0) {
                 failure = @"The copy could not be created.";
             } else {
