@@ -6,7 +6,32 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		CC0C0A01000000000000000C /* CyanideControls.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = CC0C0A010000000000000001 /* CyanideControls.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		CC0C0A01000000000000000E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AAA2976F2F72D439000B5902 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CC0C0A010000000000000007;
+			remoteInfo = CyanideControls;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXCopyFilesBuildPhase section */
+		CC0C0A01000000000000000D /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				CC0C0A01000000000000000C /* CyanideControls.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AAA2989D2F7418CC000B5902 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -21,6 +46,7 @@
 /* Begin PBXFileReference section */
 		AA73F7982F7BC6CB00134C31 /* ChOma.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ChOma.xcodeproj; sourceTree = "<group>"; };
 		AA794BC92F828668001F0544 /* ChOma.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ChOma.xcodeproj; sourceTree = "<group>"; };
+		CC0C0A010000000000000001 /* CyanideControls.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CyanideControls.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		AAA297772F72D439000B5902 /* Cyanide.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Cyanide.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AAA2982D2F741178000B5902 /* ChOma.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ChOma.xcodeproj; sourceTree = "<group>"; };
 		FB0A9F7E2FBBBE5100C03573 /* ChOma.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ChOma.xcodeproj; sourceTree = "<group>"; };
@@ -113,6 +139,13 @@
 			);
 			target = AAA297762F72D439000B5902 /* Cyanide */;
 		};
+		CC0C0A010000000000000003 /* Exceptions for "CyanideControls" folder in "CyanideControls" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = CC0C0A010000000000000007 /* CyanideControls */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
@@ -138,10 +171,25 @@
 			path = Cyanide;
 			sourceTree = "<group>";
 		};
+		CC0C0A010000000000000002 /* CyanideControls */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				CC0C0A010000000000000003 /* Exceptions for "CyanideControls" folder in "CyanideControls" target */,
+			);
+			path = CyanideControls;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		AAA297742F72D439000B5902 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CC0C0A010000000000000005 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -169,6 +217,7 @@
 			isa = PBXGroup;
 			children = (
 				AAA297792F72D439000B5902 /* Cyanide */,
+				CC0C0A010000000000000002 /* CyanideControls */,
 				AAA298702F74153F000B5902 /* Frameworks */,
 				AAA297782F72D439000B5902 /* Products */,
 			);
@@ -178,6 +227,7 @@
 			isa = PBXGroup;
 			children = (
 				AAA297772F72D439000B5902 /* Cyanide.app */,
+				CC0C0A010000000000000001 /* CyanideControls.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -405,10 +455,12 @@
 				AAA297752F72D439000B5902 /* Resources */,
 				AAA2989D2F7418CC000B5902 /* CopyFiles */,
 				FBC0A0012FD6000000C0A001 /* Copy Simulator XPF */,
+				CC0C0A01000000000000000D /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				CC0C0A01000000000000000F /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				AAA297792F72D439000B5902 /* Cyanide */,
@@ -420,6 +472,28 @@
 			productReference = AAA297772F72D439000B5902 /* Cyanide.app */;
 			productType = "com.apple.product-type.application";
 		};
+		CC0C0A010000000000000007 /* CyanideControls */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CC0C0A010000000000000008 /* Build configuration list for PBXNativeTarget "CyanideControls" */;
+			buildPhases = (
+				CC0C0A010000000000000004 /* Sources */,
+				CC0C0A010000000000000005 /* Frameworks */,
+				CC0C0A010000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				CC0C0A010000000000000002 /* CyanideControls */,
+			);
+			name = CyanideControls;
+			packageProductDependencies = (
+			);
+			productName = CyanideControls;
+			productReference = CC0C0A010000000000000001 /* CyanideControls.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -430,6 +504,9 @@
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					AAA297762F72D439000B5902 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					CC0C0A010000000000000007 = {
 						CreatedOnToolsVersion = 26.2;
 					};
 				};
@@ -575,12 +652,20 @@
 			projectRoot = "";
 			targets = (
 				AAA297762F72D439000B5902 /* Cyanide */,
+				CC0C0A010000000000000007 /* CyanideControls */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		AAA297752F72D439000B5902 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CC0C0A010000000000000006 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -637,7 +722,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CC0C0A010000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		CC0C0A01000000000000000F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CC0C0A010000000000000007 /* CyanideControls */;
+			targetProxy = CC0C0A01000000000000000E /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		AAA297902F72D43A000B5902 /* Debug */ = {
@@ -1068,6 +1168,87 @@
 			};
 			name = "VPhone Debug";
 		};
+		CC0C0A010000000000000009 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1007003;
+				DEVELOPMENT_TEAM = 7LGY4NE2VM;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = CyanideControls/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Cyanide Controls";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.7.3;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.zeroxjf.ios-cyanide1.controls";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = "Debug";
+		};
+		CC0C0A01000000000000000A /* VPhone Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1007003;
+				DEVELOPMENT_TEAM = 7LGY4NE2VM;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = CyanideControls/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Cyanide Controls";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.7.3;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.zeroxjf.ios-cyanide1.controls";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = "VPhone Debug";
+		};
+		CC0C0A01000000000000000B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1007003;
+				DEVELOPMENT_TEAM = 7LGY4NE2VM;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = CyanideControls/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Cyanide Controls";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.7.3;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.zeroxjf.ios-cyanide1.controls";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = "Release";
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1087,6 +1268,16 @@
 				AAA297902F72D43A000B5902 /* Debug */,
 				C0D3C0DE0000000000000010 /* VPhone Debug */,
 				AAA297912F72D43A000B5902 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CC0C0A010000000000000008 /* Build configuration list for PBXNativeTarget "CyanideControls" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CC0C0A010000000000000009 /* Debug */,
+				CC0C0A01000000000000000A /* VPhone Debug */,
+				CC0C0A01000000000000000B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

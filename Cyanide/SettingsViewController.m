@@ -6220,6 +6220,12 @@ static void settings_apply_axonlite_once_async(const char *reason)
     });
 }
 
+// Swift (ControlReloader.swift): asks Control Center to refresh Cyanide's
+// Location Services control after a change.
+@interface CYControlReloader : NSObject
++ (void)reloadLocationControl;
+@end
+
 // --- Location shortcut: measured switcher-card removal delay ---------------
 //
 // SpringBoard removes Cyanide's switcher card (ending Cyanide, like a
@@ -6665,6 +6671,7 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
             g_springboard_connect_progress = nil;
             settings_release_actions_lock();
             postResult();   // no-op if already reported
+            [CYControlReloader reloadLocationControl];   // show the real state in Control Center
             NSString *finalMessage = message ?: @"";
             NSTimeInterval resultAge =
                 (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - resultPostedNs) / 1e9;
