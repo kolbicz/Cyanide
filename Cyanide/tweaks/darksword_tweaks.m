@@ -154,8 +154,15 @@ static bool ds_disable_app_library_flags_on_target(uint64_t obj, const char *tag
             continue;
         }
         r_msg2_main(obj, properties[i].setter, 0, 0, 0, 0);
-        bool verified = !r_responds(obj, properties[i].getter) ||
-                        r_msg2_main(obj, properties[i].getter, 0, 0, 0, 0) == 0;
+        bool verified = r_last_main_ok();
+        bool hasGetter = r_responds(obj, properties[i].getter);
+        if (verified && hasGetter) {
+            uint64_t value = r_msg2_main(obj, properties[i].getter, 0, 0, 0, 0);
+            verified = r_last_main_ok() && value == 0;
+        }
+        // No getter: a setter whose reply confirms it ran is the best
+        // evidence available (as before). Counting it as unverified made App
+        // Library report failure on objects where the change did apply.
         printf("[DST:APPLIB] %s via %s verified=%d\n",
                tag, properties[i].setter, verified);
         changed |= verified;
@@ -192,8 +199,9 @@ static bool ds_set_trailing_controllers(uint64_t obj, uint64_t value, const char
     for (size_t i = 0; i < sizeof(setters) / sizeof(setters[0]); i++) {
         if (!r_responds(obj, setters[i])) continue;
         r_msg2_main(obj, setters[i], value, 0, 0, 0);
-        printf("[DST:APPLIB] %s via %s\n", tag, setters[i]);
-        return true;
+        bool ok = r_last_main_ok();
+        printf("[DST:APPLIB] %s via %s confirmed=%d\n", tag, setters[i], ok);
+        return ok;
     }
 
     uint64_t cls = ds_object_class(obj);
@@ -211,8 +219,9 @@ static bool ds_set_trailing_controller(uint64_t obj, uint64_t value, const char 
     for (size_t i = 0; i < sizeof(setters) / sizeof(setters[0]); i++) {
         if (!r_responds(obj, setters[i])) continue;
         r_msg2_main(obj, setters[i], value, 0, 0, 0);
-        printf("[DST:APPLIB] %s via %s\n", tag, setters[i]);
-        return true;
+        bool ok = r_last_main_ok();
+        printf("[DST:APPLIB] %s via %s confirmed=%d\n", tag, setters[i], ok);
+        return ok;
     }
 
     // No ivar fallback. Writing _trailingCustomViewController directly skips the
@@ -231,8 +240,10 @@ static bool ds_clear_overlay_library_controller(uint64_t mgr)
 
     if (r_responds(mgr, "setOverlayLibraryViewController:")) {
         r_msg2_main(mgr, "setOverlayLibraryViewController:", 0, 0, 0, 0);
-        printf("[DST:APPLIB] iconManager via setOverlayLibraryViewController:\n");
-        return true;
+        bool ok = r_last_main_ok();
+        printf("[DST:APPLIB] iconManager via setOverlayLibraryViewController: confirmed=%d\n",
+               ok);
+        return ok;
     }
 
     uint64_t cls = ds_object_class(mgr);
@@ -417,9 +428,11 @@ static bool ds_poke_double_ivar(uint64_t obj, uint64_t cls, const char *name, do
     union { double d; uint64_t u; } out = { .d = value };
     if (!remote_write(target, &out.u, sizeof(out.u))) return false;
 
+    // remote_read64 is a memory read, not a remote call: r_last_call_ok()
+    // would report some earlier call. The value comparison is the check.
     union { uint64_t u; double d; } readback = { .u = remote_read64(target) };
     printf("[DST]   %-40s @ 0x%llx -> %f\n", name, target, readback.d);
-    return true;
+    return readback.u == out.u;
 }
 
 static void ds_main_set_needs_layout(uint64_t view, const char *tag)
