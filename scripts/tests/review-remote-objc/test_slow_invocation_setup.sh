@@ -4,7 +4,7 @@
 # it can enqueue the prepared invocation.
 set -eu
 
-SOURCE="/Users/christoph/Documents/Claude/Cyanide/.work/fixes-post-1.7.2/worktrees/remote-objc/Cyanide/tweaks/remote_objc.m"
+SOURCE="$(cd "$(dirname "$0")/../../.." && pwd)/Cyanide/tweaks/remote_objc.m"
 export SOURCE
 python3 - <<'PY'
 import os

@@ -2286,8 +2286,6 @@ bool procmgr_row_info(uint64_t kproc, int pid, procmgr_row_info_t *out) {
             break;
         }
 
-        if (!procmgr_process_reads_safe()) { valid = false; break; }
-
         if (g_pm_off_task_suspcount) {
             uint32_t sc = kread32(task + g_pm_off_task_suspcount);
             if (sc <= 64) out->suspend_count = (int)sc;     // >64 is implausible: torn/bad read
