@@ -485,8 +485,14 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
             if (me && generation == me.actionGeneration)
                 [me quietPhase:fraction step:step over:over target:target];
         };
-        settings_location_services_set_async(desired, !keepCard, showLog ? kLogResultPause : 0, progress,
-                                             ^(BOOL ok, NSString *message, NSTimeInterval resultAge) {
+        // Never a fresh exploit run from outside the app (Control Center,
+        // Shortcuts, links): it can reboot A18/M4 devices, and nobody tapped
+        // "Run Full Exploit". Live or parked kernel access only.
+        settings_location_services_set_async(desired, NO, !keepCard, showLog ? kLogResultPause : 0, progress,
+                                             ^(BOOL ok, NSString *rawMessage, NSTimeInterval resultAge) {
+            NSString *message = [rawMessage isEqualToString:kSettingsFullExploitRequiredMessage]
+                ? @"Cyanide has no saved kernel access (for example after a restart). Open Cyanide and run it once, then try again."
+                : rawMessage;
             if (observer) [NSNotificationCenter.defaultCenter removeObserver:observer];
             // The requester hears the outcome first, before Cyanide leaves.
             if (requester) requester(ok, message);

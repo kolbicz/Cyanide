@@ -244,7 +244,13 @@ void settings_application_did_become_active(void);
 // File Browser: whether this process can read outside its sandbox, and lifting
 // it through SpringBoard if not (`completion` on the main queue).
 BOOL settings_filesystem_access_available(void);
-void settings_unlock_filesystem_async(void (^completion)(BOOL ok, NSString *message));
+// allowFullExploit: NO recovers a live or parked kernel session only; when a
+// full exploit run would be needed it fails with
+// kSettingsFullExploitRequiredMessage, so the caller can ask the user first
+// (a full run can reboot A18/M4 devices) and retry with YES.
+extern NSString * const kSettingsFullExploitRequiredMessage;
+void settings_unlock_filesystem_async(BOOL allowFullExploit,
+                                      void (^completion)(BOOL ok, NSString *message));
 // System-wide Location Services: desired 1 = on, 0 = off, -1 = toggle.
 // The result is posted as soon as it is confirmed; `completion` (optional)
 // runs on the main queue after cleanup, with how long ago that was.
@@ -256,7 +262,10 @@ void settings_unlock_filesystem_async(void (^completion)(BOOL ok, NSString *mess
 // `animateOver` seconds (0 = at once), and show `step`. `target` is what the
 // action is setting (Location Services: 1 = on, 0 = off). Main queue.
 typedef void (^SettingsProgressBlock)(float fraction, NSString *step, NSTimeInterval animateOver, int target);
-void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
+// allowFullExploit: as for settings_unlock_filesystem_async -- NO never starts
+// a fresh exploit run and fails with kSettingsFullExploitRequiredMessage instead.
+void settings_location_services_set_async(int desired, BOOL allowFullExploit,
+                                          BOOL removeFromSwitcher,
                                           NSTimeInterval homeDelay,
                                           SettingsProgressBlock progress,
                                           void (^completion)(BOOL ok, NSString *message,

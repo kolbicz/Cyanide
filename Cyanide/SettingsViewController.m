@@ -6517,7 +6517,8 @@ void settings_application_will_enter_foreground(void)
 // `resultAge` is how long ago the result was posted. With removeFromSwitcher,
 // a successful SpringBoard run also has SpringBoard delete Cyanide's App
 // Switcher card a little later (after the caller has gone to the Home Screen).
-void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
+void settings_location_services_set_async(int desired, BOOL allowFullExploit,
+                                          BOOL removeFromSwitcher,
                                           NSTimeInterval homeDelay,
                                           SettingsProgressBlock progress,
                                           void (^completion)(BOOL ok, NSString *message,
@@ -6579,17 +6580,20 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
             // (~10 s on A18) — say so.
             // A parked state can still turn out unusable: the chain says so
             // when it falls back to a full run.
-            NSString *fullRun = @"No saved kernel access — running the full exploit";
-            if (!settings_krw_available_without_exploit()) step(0.45f, fullRun, 12.0);
-            else                                            step(0.1f, @"Getting kernel ready", 0);
-            __block BOOL fullRunShown = !settings_krw_available_without_exploit();
-            kexploit_set_full_run_notice(^{
-                if (fullRunShown) return;
-                fullRunShown = YES;
-                step(0.45f, fullRun, 12.0);
-            });
-            BOOL kernelReady = settings_ensure_kexploit();
-            kexploit_set_full_run_notice(nil);
+            // Live or parked kernel access only, unless the caller has the
+            // user's go-ahead for a full run (it can reboot A18/M4 devices):
+            // without it, report kSettingsFullExploitRequiredMessage and let
+            // the caller ask (in-app) or tell the user to open Cyanide.
+            step(0.1f, @"Getting kernel ready", 0);
+            BOOL kernelReady = settings_ensure_kexploit_for_read();
+            if (!kernelReady && !allowFullExploit) {
+                message = kSettingsFullExploitRequiredMessage;
+                return;
+            }
+            if (!kernelReady) {
+                step(0.45f, @"Running the full exploit", 12.0);
+                kernelReady = settings_ensure_kexploit();
+            }
             if (!kernelReady) {
                 message = @"Failed: kernel primitives were not acquired. Run the chain, then try again.";
                 return;
@@ -6732,9 +6736,13 @@ BOOL settings_filesystem_access_available(void)
     return YES;
 }
 
+NSString * const kSettingsFullExploitRequiredMessage =
+    @"No saved kernel access — this needs a full exploit run first.";
+
 // Lifts the sandbox for the File Browser if it isn't already. `completion`
-// runs on the main queue.
-void settings_unlock_filesystem_async(void (^completion)(BOOL ok, NSString *message))
+// runs on the main queue. See the header for allowFullExploit.
+void settings_unlock_filesystem_async(BOOL allowFullExploit,
+                                      void (^completion)(BOOL ok, NSString *message))
 {
     void (^finish)(BOOL, NSString *) = ^(BOOL ok, NSString *message) {
         if (message) log_user("%s %s\n", ok ? "[OK]" : "[WARN]", message.UTF8String);
@@ -6752,7 +6760,15 @@ void settings_unlock_filesystem_async(void (^completion)(BOOL ok, NSString *mess
         NSString *message = nil;
         @try {
             log_user("[FILES] Lifting the filesystem sandbox…\n");
-            if (!settings_ensure_kexploit()) {
+            // Live or parked kernel access only, unless the user confirmed a
+            // full run: opening a browser must not reboot an A18 device unasked.
+            BOOL kernelReady = settings_ensure_kexploit_for_read();
+            if (!kernelReady && !allowFullExploit) {
+                message = kSettingsFullExploitRequiredMessage;
+                return;
+            }
+            if (!kernelReady) kernelReady = settings_ensure_kexploit();
+            if (!kernelReady) {
                 message = @"Kernel access could not be acquired. Run the chain, then try again.";
                 return;
             }
@@ -16809,8 +16825,30 @@ void cyanide_present_contact(UIViewController *host)
     if (!settings_device_supported()) return;
     [self presentActivityLog];
     __weak typeof(self) weakSelf = self;
-    settings_location_services_set_async(-1, NO, 0, nil, ^(BOOL ok, NSString *message, NSTimeInterval resultAge) {
-        [weakSelf reloadLocationSimUI];
+    [self runLocationServicesToggleAllowingFullExploit:NO];
+}
+
+- (void)runLocationServicesToggleAllowingFullExploit:(BOOL)allowFullExploit
+{
+    __weak typeof(self) weakSelf = self;
+    settings_location_services_set_async(-1, allowFullExploit, NO, 0, nil,
+                                         ^(BOOL ok, NSString *message, NSTimeInterval resultAge) {
+        typeof(self) me = weakSelf;
+        [me reloadLocationSimUI];
+        if (!me || ok || allowFullExploit ||
+            ![message isEqualToString:kSettingsFullExploitRequiredMessage]) return;
+        // Only a full exploit run would do: ask first, like the Process Viewer.
+        UIAlertController *ac = [UIAlertController
+            alertControllerWithTitle:@"No parked kernel state"
+                             message:@"Changing Location Services needs kernel access, and there is no saved session to reuse. Running the full exploit can reboot the device on A18/M4. Continue?"
+                      preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        [ac addAction:[UIAlertAction actionWithTitle:@"Run Full Exploit"
+                                               style:UIAlertActionStyleDefault
+                                             handler:^(UIAlertAction *a) {
+            [weakSelf runLocationServicesToggleAllowingFullExploit:YES];
+        }]];
+        settings_present_controller(ac, me);
     });
 }
 
