@@ -72,6 +72,7 @@ static const CGFloat kMargin = 20.0;
     for (UIView *v in self.stack.arrangedSubviews) [v removeFromSuperview];
     [self.stack addArrangedSubview:[self buildHero]];
     [self.stack addArrangedSubview:[self buildQuickActions]];
+    [self.stack addArrangedSubview:[self buildTools]];
     [self.stack addArrangedSubview:[self buildWhatsNew]];
     [self.stack addArrangedSubview:[self buildGetStarted]];
     [self.stack addArrangedSubview:[self buildCommunity]];
@@ -362,13 +363,34 @@ static const CGFloat kMargin = 20.0;
     UILabel *header = [self sectionHeader:@"What's New"];
     [s addArrangedSubview:header];
 
-    [s addArrangedSubview:[self compactRow:@"JavaScript tweak support by @MinePlayer16"
-                                     icon:@"bolt.fill" color:UIColor.systemOrangeColor]];
-    [s addArrangedSubview:[self compactRow:@"Source repos with browsable tweak catalogs"
-                                     icon:@"tray.and.arrow.down.fill" color:UIColor.systemGreenColor]];
-    [s addArrangedSubview:[self compactRow:@"SnowBoard Lite and SpringBoard stability fixes"
-                                     icon:@"wrench.and.screwdriver.fill" color:UIColor.systemBlueColor]];
+    [s addArrangedSubview:[self compactRow:@"File Browser with a plist editor, optional write mode and read-only root access"
+                                     icon:@"folder.fill" color:UIColor.systemBlueColor]];
+    [s addArrangedSubview:[self compactRow:@"Location Services toggle for Control Center (iOS 18)"
+                                     icon:@"location.fill" color:UIColor.systemTealColor]];
+    [s addArrangedSubview:[self compactRow:@"Shortcut links: cyanide://location-services/on, /off or /toggle"
+                                     icon:@"link" color:UIColor.systemOrangeColor]];
 
+    return card;
+}
+
+#pragma mark - Tools
+
+- (UIView *)buildTools
+{
+    UIView *card = [self card];
+    UIStackView *s = [self vstackInCard:card spacing:12.0];
+
+    [s addArrangedSubview:[self sectionHeader:@"Tools"]];
+    [s addArrangedSubview:[self bigActionButton:@"Process Viewer"
+                                          sub:@"See and quit running processes"
+                                         icon:@"list.bullet.rectangle.fill"
+                                        color:UIColor.systemIndigoColor
+                                          sel:@selector(openProcessViewer)]];
+    [s addArrangedSubview:[self bigActionButton:@"File Browser"
+                                          sub:@"Browse files and edit plists"
+                                         icon:@"folder.fill"
+                                        color:UIColor.systemBlueColor
+                                          sel:@selector(openFileBrowser)]];
     return card;
 }
 
@@ -694,6 +716,16 @@ static const CGFloat kMargin = 20.0;
             return;
         }
     }
+}
+
+- (void)openProcessViewer
+{
+    [self.navigationController pushViewController:settings_make_process_viewer() animated:YES];
+}
+
+- (void)openFileBrowser
+{
+    [self.navigationController pushViewController:settings_make_file_browser() animated:YES];
 }
 
 - (void)openSourcesTab

@@ -202,6 +202,10 @@ BOOL settings_has_reappliable_tweaks(void);
 
 void settings_register_defaults(void);
 BOOL settings_device_supported(void);
+// The Process Viewer and File Browser screens, for pushing from elsewhere
+// (Home's quick tools).
+UIViewController *settings_make_process_viewer(void);
+UIViewController *settings_make_file_browser(void);
 // A18 / A18 Pro / M4 family: the only devices with an A18 exploit path choice.
 BOOL settings_device_is_a18_family(void);
 // Opens the Contact email composer (MFMailComposeViewController if Mail is

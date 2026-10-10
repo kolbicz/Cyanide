@@ -13228,6 +13228,16 @@ static const NSInteger kPasscodePreviewRow = 1;
     ];
 }
 
+UIViewController *settings_make_process_viewer(void)
+{
+    return [[ProcessManagerViewController alloc] initWithStyle:UITableViewStylePlain];
+}
+
+UIViewController *settings_make_file_browser(void)
+{
+    return [[FileBrowserViewController alloc] initWithPath:@"/"];
+}
+
 - (NSArray<NSDictionary *> *)allSystemBundleRows
 {
     return @[
