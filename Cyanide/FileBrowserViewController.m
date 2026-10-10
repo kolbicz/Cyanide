@@ -344,6 +344,7 @@ static NSString *fb_unique_path(NSString *dir, NSString *name)
 @interface FBEntry : NSObject
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic, copy) NSString *path;
+@property (nonatomic, assign) FBFileIdentity identity; // lstat identity of the listed pathname
 @property (nonatomic, copy) NSString *linkTarget;   // symlinks only
 @property (nonatomic, assign) BOOL isDirectory;     // after following a symlink
 @property (nonatomic, assign) BOOL isSymlink;
@@ -431,6 +432,15 @@ static FBEntry *fb_entry_at(NSString *dir, NSString *name)
         return e;
     }
     e.mode = ls.st_mode;
+    // Build the struct locally: a field of a struct property can't be
+    // assigned through the property.
+    FBFileIdentity ident = {0};
+    ident.valid = YES;
+    ident.dev = ls.st_dev;
+    ident.ino = ls.st_ino;
+    ident.size = ls.st_size;
+    ident.mtime = ls.st_mtimespec;
+    e.identity = ident;
     e.uid = ls.st_uid;
     e.gid = ls.st_gid;
     e.size = ls.st_size;
@@ -446,6 +456,26 @@ static FBEntry *fb_entry_at(NSString *dir, NSString *name)
     }
     e.readable = access(e.path.fileSystemRepresentation, e.isDirectory ? (R_OK | X_OK) : R_OK) == 0;
     return e;
+}
+
+// Destructive actions retain an entry while a confirmation/menu is open.  The
+// pathname is not an identity: re-lstat it immediately before the queued
+// operation and reject a missing, replaced, or type-changed object.  Darwin
+// has no atomic unlink-if-inode primitive for arbitrary external writers, so
+// this closes the stale-prompt/queued-target window without claiming to stop
+// a non-cooperating writer racing the final syscall.
+static BOOL fb_entry_still_matches(FBEntry *entry, NSError **error)
+{
+    struct stat st;
+    if (!entry.identity.valid || lstat(entry.path.fileSystemRepresentation, &st) != 0 ||
+        st.st_dev != entry.identity.dev || st.st_ino != entry.identity.ino ||
+        (st.st_mode & S_IFMT) != (entry.mode & S_IFMT)) {
+        if (error) *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:EBUSY
+                                            userInfo:@{ NSLocalizedDescriptionKey:
+                                                            @"The file changed or was replaced. Reload the folder and try again." }];
+        return NO;
+    }
+    return YES;
 }
 
 #pragma mark - File viewer
@@ -1174,6 +1204,15 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
     });
 }
 
+- (void)performForEntry:(FBEntry *)entry operation:(BOOL (^)(NSError **err))op
+           failureTitle:(NSString *)title
+{
+    [self perform:^BOOL(NSError **err) {
+        if (!fb_entry_still_matches(entry, err)) return NO;
+        return op(err);
+    } failureTitle:title];
+}
+
 - (void)promptNewItem:(BOOL)folder
 {
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:folder ? @"New Folder" : @"New File"
@@ -1220,7 +1259,7 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
         NSString *name = [ac.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
         if (!name.length || [name containsString:@"/"] || [name isEqualToString:e.name]) return;
         NSString *target = [self.path stringByAppendingPathComponent:name];
-        [self perform:^BOOL(NSError **err) {
+        [self performForEntry:e operation:^BOOL(NSError **err) {
             return [NSFileManager.defaultManager moveItemAtPath:e.path toPath:target error:err];
         } failureTitle:@"Couldn't Rename"];
     }]];
@@ -1230,7 +1269,7 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
 - (void)duplicate:(FBEntry *)e
 {
     NSString *dir = self.path;
-    [self perform:^BOOL(NSError **err) {
+    [self performForEntry:e operation:^BOOL(NSError **err) {
         // Picked on the file queue, so two quick duplicates get two names.
         NSString *target = fb_unique_path(dir, e.name);
         return [NSFileManager.defaultManager copyItemAtPath:e.path toPath:target error:err];
@@ -1247,7 +1286,7 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
                                                          preferredStyle:UIAlertControllerStyleAlert];
     [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [ac addAction:[UIAlertAction actionWithTitle:@"Delete" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
-        [self perform:^BOOL(NSError **err) {
+        [self performForEntry:e operation:^BOOL(NSError **err) {
             // A symlink is removed itself, never what it points to.
             return [NSFileManager.defaultManager removeItemAtPath:e.path error:err];
         } failureTitle:@"Couldn't Delete"];
