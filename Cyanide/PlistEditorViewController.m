@@ -547,7 +547,7 @@ static const NSUInteger kPLMaxDataEditBytes = 64 * 1024;
     FBFileIdentity expected = doc.identity;
     NSData *loaded = doc.original;
     [self setBusy:YES];
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    dispatch_async(filebrowser_file_queue(), ^{
         FBFileIdentity newIdent = {0};
         NSString *msg = nil;
         FBSaveResult r = filebrowser_save(path, data, expected, loaded, force, &newIdent, &msg);

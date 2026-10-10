@@ -10977,10 +10977,14 @@ static int pm_launchd_session_ensure_locked(const char *what)
 // launchd thread can never block on a FIFO/device/socket (a blocked launchd
 // thread is a watchdog panic).
 
+static uint64_t pm_root_call(RemoteCallSession *s, int timeoutMS, const char *fn,
+                             uint64_t a0, uint64_t a1, uint64_t a2, BOOL *ok);
 static NSString *pm_root_errno_text(RemoteCallSession *session, const char *what)
 {
-    uint64_t errPtr = [session doRemoteCallStableWithTimeout:100 functionName:"__error"
-                                                          x0:0 x1:0 x2:0 x3:0 x4:0 x5:0 x6:0 x7:0];
+    // Through pm_root_call, so a transport failure marks the session suspect.
+    BOOL ok = NO;
+    uint64_t errPtr = pm_root_call(session, 100, "__error", 0, 0, 0, &ok);
+    if (!ok) errPtr = 0;
     // errno is a 4-byte int: copy exactly that, never 8 bytes.
     int err = 0;
     if (errPtr && ![session remoteRead:errPtr to:&err size:sizeof(err)]) err = 0;

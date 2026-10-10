@@ -15,6 +15,8 @@
 BOOL filebrowser_write_enabled(void);
 // Call after any accepted change on disk, so open folders refresh.
 void filebrowser_note_filesystem_changed(void);
+// Serial queue for every file change (saves included), in request order.
+dispatch_queue_t filebrowser_file_queue(void);
 
 // Identity of an opened file (fstat on the descriptor that was read).
 typedef struct {

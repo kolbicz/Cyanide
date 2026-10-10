@@ -9,6 +9,7 @@
 #import "installer/MainTabBarController.h"
 
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <ImageIO/ImageIO.h>
 #import <fcntl.h>
 #import <grp.h>
 #import <pwd.h>
@@ -38,7 +39,12 @@ static NSUInteger g_fb_options_generation = 0;
 // Bumped after every accepted change (save, import, rename, delete, …), so
 // folders further down the stack refresh their size/date when they reappear.
 static NSUInteger g_fb_fs_generation = 0;
-void filebrowser_note_filesystem_changed(void) { g_fb_fs_generation++; }
+// Main-thread state: workers hop over.
+void filebrowser_note_filesystem_changed(void)
+{
+    if (NSThread.isMainThread) g_fb_fs_generation++;
+    else dispatch_async(dispatch_get_main_queue(), ^{ g_fb_fs_generation++; });
+}
 
 // Plists open in the structured editor: by extension, or by the binary
 // plist magic for extensionless files.
@@ -153,6 +159,12 @@ FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expec
 {
     NSString *msg = nil;
     FBSaveResult result = FBSaveFailed;
+    // Checked again here, at execution time: a save can wait in the file
+    // queue behind other work while Changes get locked.
+    if (!g_fb_write_enabled) {
+        if (message) *message = @"Changes are locked. Unlock them in the File Browser first.";
+        return FBSaveFailed;
+    }
     int fd = open(path.fileSystemRepresentation, O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
         if (message) *message = [NSString stringWithFormat:@"The file can't be opened for writing: %s.", strerror(errno)];
@@ -216,6 +228,40 @@ static dispatch_queue_t fb_file_queue(void)
         q = dispatch_queue_create("cyanide.filebrowser.ops", DISPATCH_QUEUE_SERIAL);
     });
     return q;
+}
+
+// Saves run on the same queue, one at a time, after any pending operation.
+dispatch_queue_t filebrowser_file_queue(void) { return fb_file_queue(); }
+
+// Decodes an image for display, downsampled to a pixel budget: a small
+// compressed file can otherwise decode to hundreds of MB.
+static UIImage *fb_display_image(NSData *data)
+{
+    if (!data.length) return nil;
+    CGImageSourceRef src = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+    if (!src) return nil;
+    UIImage *image = nil;
+    if (CGImageSourceGetCount(src) > 0) {
+        NSDictionary *opts = @{ (id)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
+                                (id)kCGImageSourceCreateThumbnailWithTransform: @YES,
+                                (id)kCGImageSourceShouldCacheImmediately: @YES,
+                                (id)kCGImageSourceThumbnailMaxPixelSize: @2048 };
+        CGImageRef cg = CGImageSourceCreateThumbnailAtIndex(src, 0, (__bridge CFDictionaryRef)opts);
+        if (cg) { image = [UIImage imageWithCGImage:cg]; CGImageRelease(cg); }
+    }
+    CFRelease(src);
+    return image;
+}
+
+// Whether `data` is an image ImageIO can read, without decoding pixels.
+static BOOL fb_is_image(NSData *data)
+{
+    if (!data.length) return NO;
+    CGImageSourceRef src = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+    if (!src) return NO;
+    BOOL ok = CGImageSourceGetType(src) != NULL && CGImageSourceGetCount(src) > 0;
+    CFRelease(src);
+    return ok;
 }
 
 static NSError *fb_locked_error(void)
@@ -375,6 +421,10 @@ typedef NS_ENUM(NSInteger, FBViewMode) { FBViewText, FBViewImage, FBViewHex, FBV
 @property (nonatomic, strong) NSData *data;            // head of the file
 @property (nonatomic, assign) BOOL truncated;
 @property (nonatomic, assign) NSInteger plistFormat;   // NSPropertyListFormat, or -1
+// plistText for `plistTextFor` (parsed once per loaded data, not per call).
+@property (nonatomic, strong) NSData *plistTextFor;
+@property (nonatomic, copy) NSString *plistTextCached;
+@property (nonatomic, assign) NSInteger plistFormatCached;
 @property (nonatomic, assign) BOOL editingText;
 @property (nonatomic, assign) FBFileIdentity identity;   // file as it was when loaded
 @property (nonatomic, assign) BOOL notRegular;           // FIFO/device/socket: Info only
@@ -585,7 +635,7 @@ static const NSUInteger kFBMaxHexBytes = 64 * 1024;
     NSString *path = self.entry.path;
     FBFileIdentity expected = self.identity;
     NSData *loaded = self.data;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    dispatch_async(fb_file_queue(), ^{
         FBFileIdentity newIdent = {0};
         NSString *message = nil;
         FBSaveResult r = filebrowser_save(path, out, expected, loaded, force, &newIdent, &message);
@@ -623,7 +673,7 @@ static const NSUInteger kFBMaxHexBytes = 64 * 1024;
 {
     if (!self.data) return FBViewInfo;
     if ([self plistText] || [self utf8Text]) return FBViewText;
-    if (!self.truncated && [UIImage imageWithData:self.data]) return FBViewImage;
+    if (!self.truncated && fb_is_image(self.data)) return FBViewImage;
     return FBViewHex;
 }
 
@@ -646,6 +696,19 @@ static const NSUInteger kFBMaxHexBytes = 64 * 1024;
 - (NSString *)plistText
 {
     if (self.truncated || self.data.length < 8) return nil;
+    if (self.plistTextFor == self.data) {
+        if (self.plistTextCached) self.plistFormat = self.plistFormatCached;
+        return self.plistTextCached;
+    }
+    NSString *text = [self parsePlistText];
+    self.plistTextFor = self.data;
+    self.plistTextCached = text;
+    self.plistFormatCached = self.plistFormat;
+    return text;
+}
+
+- (NSString *)parsePlistText
+{
     NSPropertyListFormat format = 0;
     id plist = [NSPropertyListSerialization propertyListWithData:self.data options:0 format:&format error:nil];
     if (!plist) return nil;
@@ -766,7 +829,7 @@ static NSUInteger fb_hex_line_chars(NSUInteger digits, NSUInteger per)
 - (void)modeChanged
 {
     FBViewMode mode = (FBViewMode)self.modeControl.selectedSegmentIndex;
-    UIImage *image = (mode == FBViewImage && self.data && !self.truncated) ? [UIImage imageWithData:self.data] : nil;
+    UIImage *image = (mode == FBViewImage && self.data && !self.truncated) ? fb_display_image(self.data) : nil;
     self.imageView.hidden = (image == nil);
     self.textView.hidden = (image != nil);
     if (image) { self.imageView.image = image; return; }
@@ -1080,8 +1143,10 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
 
 - (void)duplicate:(FBEntry *)e
 {
-    NSString *target = fb_unique_path(self.path, [e.name stringByAppendingString:@""]);
+    NSString *dir = self.path;
     [self perform:^BOOL(NSError **err) {
+        // Picked on the file queue, so two quick duplicates get two names.
+        NSString *target = fb_unique_path(dir, e.name);
         return [NSFileManager.defaultManager copyItemAtPath:e.path toPath:target error:err];
     } failureTitle:@"Couldn't Duplicate"];
 }

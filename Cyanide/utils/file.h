@@ -20,7 +20,6 @@
 
 uint64_t hide_path(const char* path);
 uint64_t reveal_path_by_vnode(uint64_t vnode);
-uint64_t overwrite_system_file(char* to, char* from);
 int zero_system_file_page(const char* path, off_t offset);
 
 #endif /* file_h */
