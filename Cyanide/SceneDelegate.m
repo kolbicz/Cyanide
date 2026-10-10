@@ -691,7 +691,17 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     cyanide_launch_trace("sceneWillEnterForeground");
     // A quiet shortcut run that sent Cyanide home leaves its cover behind;
     // a normal reopen must show the app (a new shortcut run puts it back).
-    if (!self.actionInProgress) [self hideQuietCover];
+    // But keep it when a location request is already waiting for activation:
+    // coverEarlyForURL just put it up for that request (on a cold launch,
+    // from the very first frame), and tearing it down here only to rebuild it
+    // in sceneDidBecomeActive flashed the normal UI in between.
+    BOOL pendingQuiet = NO;
+    NSURL *pending = self.pendingActionURL;
+    if ([pending.host.lowercaseString isEqualToString:@"location-services"]) {
+        int desired; BOOL keep, showLog; NSString *err = nil;
+        pendingQuiet = scene_parse_location_url(pending, &desired, &keep, &showLog, &err) && !showLog;
+    }
+    if (!self.actionInProgress && !pendingQuiet) [self hideQuietCover];
     self.homeOnNextActivation = NO;   // a real reopen: the user wants the app
     settings_application_will_enter_foreground();
 }

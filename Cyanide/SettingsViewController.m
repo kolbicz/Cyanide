@@ -8170,6 +8170,9 @@ static void settings_run_actions_internal(BOOL pendingOnly)
     g_settings_actions_last_pending_only = pendingOnly;
     if (!settings_device_supported()) {
         NSString *message = settings_unsupported_message();
+        // This completion is the one that gets posted: consume any installer
+        // preflight note here too, or it would ride into an unrelated later run.
+        (void)settings_take_run_preflight_failure();
         printf("[SETTINGS] run blocked: %s\n", message.UTF8String);
         log_user("[RUN] %s\n", message.UTF8String);
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -15646,11 +15649,24 @@ static void cyanide_upload_log_with_kind_event(NSString *kind, NSString *event) 
     static const unsigned long long kUploadMaxBytes = 512 * 1024;
     NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:path];
     if (!fh) return;
-    unsigned long long size = [fh seekToEndOfFile];
-    BOOL clipped = size > kUploadMaxBytes;
-    [fh seekToFileOffset:clipped ? size - kUploadMaxBytes : 0];
-    NSData *tail = [fh readDataToEndOfFile];
-    [fh closeFile];
+    // The error-returning variants: the old seekToEndOfFile /
+    // readDataToEndOfFile throw an Objective-C exception on an I/O error,
+    // which nothing here catches -- a log upload must never crash the app.
+    unsigned long long size = 0;
+    NSError *ioError = nil;
+    BOOL clipped = NO;
+    NSData *tail = nil;
+    if ([fh seekToEndReturningOffset:&size error:&ioError]) {
+        clipped = size > kUploadMaxBytes;
+        if ([fh seekToOffset:clipped ? size - kUploadMaxBytes : 0 error:&ioError])
+            tail = [fh readDataToEndOfFileAndReturnError:&ioError];
+    }
+    [fh closeAndReturnError:nil];
+    if (!tail) {
+        printf("[UPLOAD] log read failed (%s); skipping this upload\n",
+               ioError.localizedDescription.UTF8String ?: "unknown");
+        return;
+    }
     // A cut through a multi-byte character: skip ahead to a valid start.
     NSString *rawLog = nil;
     for (NSUInteger skip = 0; skip < 4 && skip < tail.length && !rawLog; skip++)
@@ -15658,6 +15674,26 @@ static void cyanide_upload_log_with_kind_event(NSString *kind, NSString *event) 
                                        encoding:NSUTF8StringEncoding];
     if (!rawLog.length) return;
     if (clipped) rawLog = [@"[… earlier part of the log omitted …]\n" stringByAppendingString:rawLog];
+    // Privacy: [FILES] lines name what the user browsed (including as root).
+    // Only the fact of a file operation matters for diagnosis, so paths in
+    // those lines are replaced before the log leaves the device. The local
+    // log keeps them.
+    {
+        static NSRegularExpression *pathRe;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            pathRe = [NSRegularExpression regularExpressionWithPattern:@"/[^\\s]*" options:0 error:nil];
+        });
+        NSMutableArray<NSString *> *lines = [[rawLog componentsSeparatedByString:@"\n"] mutableCopy];
+        for (NSUInteger i = 0; i < lines.count; i++) {
+            NSString *line = lines[i];
+            if (![line containsString:@"[FILES]"]) continue;
+            lines[i] = [pathRe stringByReplacingMatchesInString:line options:0
+                                                          range:NSMakeRange(0, line.length)
+                                                   withTemplate:@"<path>"];
+        }
+        rawLog = [lines componentsJoinedByString:@"\n"];
+    }
 
     int seq = __sync_add_and_fetch(&g_cyanide_upload_seq, 1);
     NSString *sessionId = g_cyanide_upload_session_id ?: @"adhoc";
