@@ -683,11 +683,12 @@ static NSArray<NSString *> *fb_bounded_directory_names(NSString *path, BOOL *inc
     }
     NSMutableArray<NSString *> *names = [NSMutableArray arrayWithCapacity:kFBMaxOrdinaryEntries];
     BOOL failed = NO;
+    int enumerationError = 0;
     while (names.count < kFBMaxOrdinaryEntries) {
         errno = 0;
         struct dirent *ent = readdir(dir);
         if (!ent) {
-            if (errno != 0) failed = YES;
+            if (errno != 0) { enumerationError = errno; failed = YES; }
             break;
         }
         if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, "..")) continue;
@@ -696,19 +697,24 @@ static NSArray<NSString *> *fb_bounded_directory_names(NSString *path, BOOL *inc
         if (name) [names addObject:name];
     }
     if (!failed && names.count == kFBMaxOrdinaryEntries) {
-        errno = 0;
-        struct dirent *more = readdir(dir);
-        if (more) {
+        for (;;) {
+            errno = 0;
+            struct dirent *more = readdir(dir);
+            if (!more) {
+                if (errno != 0) { enumerationError = errno; failed = YES; }
+                break;
+            }
+            if (!strcmp(more->d_name, ".") || !strcmp(more->d_name, "..")) continue;
             if (incomplete) *incomplete = YES;
-        } else if (errno != 0) {
-            failed = YES;
+            break;
         }
     }
     int closeError = closedir(dir);
     if (failed || closeError != 0) {
-        if (error) *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno
+        int code = enumerationError ?: (closeError != 0 ? errno : EIO);
+        if (error) *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:code
                                             userInfo:@{ NSLocalizedDescriptionKey:
-                                                            [NSString stringWithUTF8String:strerror(errno)] ?: @"directory enumeration failed" }];
+                                                            [NSString stringWithUTF8String:strerror(code)] ?: @"directory enumeration failed" }];
         return nil;
     }
     return names;
