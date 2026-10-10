@@ -21,9 +21,8 @@
 // like "Cyanide was already open" and kept the card. Instead: the first
 // request since this process started, arriving within a few seconds of the
 // start, launched it. Cyanide that was already running is older than that,
-// or has handled a request before. (Opening Cyanide by hand and using the
-// toggle within those seconds would count as a launch -- rare, and the card
-// would be one the user just created.)
+// or has handled a request before, or was opened by the user (touched, or
+// kept in front a few seconds: g_scene_user_opened).
 static uint64_t g_scene_process_start_ns = 0;
 __attribute__((constructor)) static void scene_note_process_start(void)
 {
@@ -52,29 +51,68 @@ static void scene_note_session(UISceneSession *session)
                                       : "new: no earlier switcher card");
 }
 
-// When the scene first became active with no request waiting (0 = not yet).
-// The user opening Cyanide looks like that; so does a Control Center launch
-// on iOS 18, where the request can follow the activation by a moment. A
-// request arriving well after such an activation found the app opened by the
-// user -- e.g. opened, then left within seconds to use the toggle, which the
-// 8 s process-age window alone took for a cold launch and closed the app.
-static uint64_t g_scene_idle_activation_ns = 0;   // main thread only
-static const uint64_t kSceneRequestFollowsLaunchNs = 2ULL * NSEC_PER_SEC;
+// The user opened Cyanide in this process: touched its UI, or kept it in
+// front for kSceneUserStaySeconds, with no request waiting. Timing alone can't
+// tell: a Control Center launch sometimes shows Cyanide for 1-2 s, sends it to
+// the background and delivers the request 2-3 s later -- exactly what "open
+// Cyanide, go Home, use the toggle" looks like. A touch or a longer stay is
+// something only the user does.
+static BOOL g_scene_user_opened = NO;               // main thread only
+static uint64_t g_scene_idle_active_since_ns = 0;   // active with no request; 0 = not
+static const double kSceneUserStaySeconds = 4.0;
+
+static void scene_note_idle_active_end(void)
+{
+    if (!g_scene_idle_active_since_ns) return;
+    double stayed = (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - g_scene_idle_active_since_ns) / 1e9;
+    g_scene_idle_active_since_ns = 0;
+    if (stayed >= kSceneUserStaySeconds && !g_scene_user_opened) {
+        g_scene_user_opened = YES;
+        log_user("[URL] app was in front %.1fs: opened by the user\n", stayed);
+    }
+}
+
+static void scene_note_user_touch(void)
+{
+    if (g_scene_user_opened) return;
+    g_scene_user_opened = YES;
+    log_user("[URL] app touched: opened by the user\n");
+}
 
 static BOOL scene_request_launched_app(void)
 {
     BOOL first = !g_scene_any_request;
     g_scene_any_request = YES;
+    scene_note_idle_active_end();
     uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-    if (g_scene_idle_activation_ns &&
-        now - g_scene_idle_activation_ns > kSceneRequestFollowsLaunchNs) {
-        log_user("[URL] request %.1fs after the app was opened: not a cold launch, card kept\n",
-                 (double)(now - g_scene_idle_activation_ns) / 1e9);
-        return NO;
-    }
-    return first && !g_scene_session_restored &&
-           now - g_scene_process_start_ns < 8ULL * NSEC_PER_SEC;
+    double age = (double)(now - g_scene_process_start_ns) / 1e9;
+    BOOL launched = first && !g_scene_user_opened && !g_scene_session_restored && age < 8.0;
+    log_user("[URL] request judged %s (first=%d userOpened=%d restored=%d age=%.1fs)\n",
+             launched ? "a cold launch: card may be removed" : "not a cold launch: card kept",
+             first, g_scene_user_opened, g_scene_session_restored, age);
+    return launched;
 }
+
+// Sees every touch in the window without taking part in gesture handling.
+@interface CYTouchWatcher : UIGestureRecognizer
+@property (nonatomic, copy) void (^onTouch)(void);
+@end
+@implementation CYTouchWatcher
+- (instancetype)init {
+    if ((self = [super initWithTarget:nil action:nil])) {
+        self.cancelsTouchesInView = NO;
+        self.delaysTouchesBegan = NO;
+        self.delaysTouchesEnded = NO;
+    }
+    return self;
+}
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if (self.onTouch) self.onTouch();
+    self.state = UIGestureRecognizerStateFailed;
+}
+- (BOOL)canPreventGestureRecognizer:(UIGestureRecognizer *)other { return NO; }
+- (BOOL)canBePreventedByGestureRecognizer:(UIGestureRecognizer *)other { return NO; }
+@end
 
 @interface SceneDelegate ()
 @property (nonatomic, assign) BOOL didSelectInitialTab;
@@ -121,6 +159,28 @@ static CYLocationRequestCompletion g_scene_intent_completion = nil;
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
     scene_note_session(session);   // before any request is judged (scene_request_launched_app)
     cyanide_launch_trace("scene willConnect: entry");
+    {
+        // Diagnostics: what iOS says about why this scene connected.
+        NSMutableArray *acts = [NSMutableArray array];
+        for (NSUserActivity *a in connectionOptions.userActivities) [acts addObject:a.activityType ?: @"?"];
+        UIOpenURLContext *ctx = connectionOptions.URLContexts.anyObject;
+        log_user("[URL] connect: urls=%lu src=%s activities=[%s] handoff=%s shortcut=%s\n",
+                 (unsigned long)connectionOptions.URLContexts.count,
+                 ctx.options.sourceApplication.UTF8String ?: "-",
+                 [acts componentsJoinedByString:@","].UTF8String,
+                 connectionOptions.handoffUserActivityType.UTF8String ?: "-",
+                 connectionOptions.shortcutItem.type.UTF8String ?: "-");
+    }
+    if (self.window) {
+        __weak typeof(self) weakSelf = self;
+        CYTouchWatcher *watcher = [CYTouchWatcher new];
+        watcher.onTouch = ^{
+            typeof(self) me = weakSelf;
+            // Touches on the toggle's own progress screen don't count.
+            if (me && !me.actionInProgress && !me.pendingActionURL && !me.quietCover) scene_note_user_touch();
+        };
+        [self.window addGestureRecognizer:watcher];
+    }
     UITabBarController *tab = (UITabBarController *)self.window.rootViewController;
     if ([tab isKindOfClass:UITabBarController.class] && tab.viewControllers.count > 1) {
         // iOS 26+: collapse the floating tab bar into a pill while the user
@@ -742,8 +802,8 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     [self selectInitialTabIfNeeded];
     settings_application_did_become_active();
     [self showBlockedLinkNoticeIfNeeded];
-    if (!self.pendingActionURL && !self.actionInProgress && !g_scene_idle_activation_ns)
-        g_scene_idle_activation_ns = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    g_scene_idle_active_since_ns = (!self.pendingActionURL && !self.actionInProgress)
+        ? clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) : 0;
     if (self.pendingActionURL) {
         NSURL *url = self.pendingActionURL;
         CYLocationRequestCompletion completion = self.pendingActionCompletion;
@@ -765,6 +825,7 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
 
 - (void)sceneWillResignActive:(UIScene *)scene {
     cyanide_launch_trace("sceneWillResignActive");
+    scene_note_idle_active_end();
     // Called when the scene will move from an active state to an inactive state.
     // This may occur due to temporary interruptions (ex. an incoming phone call).
     //
