@@ -25,6 +25,13 @@
 @property (nonatomic, strong) UIImageView *quietIcon;
 @property (nonatomic, strong) UILabel *quietStatus;
 @property (nonatomic, strong) UIProgressView *quietProgress;
+// Steps are shown one after another, each for at least kQuietMinStep, so
+// sub-second steps can still be read. Main thread only.
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *quietSteps;
+@property (nonatomic, assign) uint64_t quietStepShownNs;   // when the current step appeared
+@property (nonatomic, assign) uint64_t quietDoneShownNs;   // when "Done" appeared
+@property (nonatomic, assign) NSUInteger quietStepToken;   // invalidates scheduled step changes
+@property (nonatomic, assign) BOOL quietPumpScheduled;
 
 @end
 
@@ -189,23 +196,69 @@ static void scene_suspend_to_home(void)
     self.quietProgress = bar;
 }
 
-// Progress from the running action: move the bar to `fraction` (animated
-// over `over` seconds, e.g. the remaining activation window) and show `step`.
+static const double kQuietMinStep = 0.35;   // seconds each step stays readable
+static const double kQuietMinDone = 0.3;    // "Done" visible before leaving
+
+// Progress from the running action, queued: steps appear in order, each for
+// at least kQuietMinStep.
 - (void)updateQuietProgress:(float)fraction step:(NSString *)step over:(NSTimeInterval)over {
     if (!self.quietCover) return;
+    if (!self.quietSteps) self.quietSteps = [NSMutableArray array];
+    [self.quietSteps addObject:@{ @"f": @(fraction), @"t": step ?: @"", @"o": @(over),
+                                  @"at": @(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) }];
+    [self pumpQuietSteps];
+}
+
+- (void)pumpQuietSteps {
+    if (!self.quietCover || !self.quietSteps.count || self.quietPumpScheduled) return;
+    double shownFor = self.quietStepShownNs
+        ? (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - self.quietStepShownNs) / 1e9 : kQuietMinStep;
+    if (shownFor < kQuietMinStep) {
+        self.quietPumpScheduled = YES;
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((kQuietMinStep - shownFor) * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            weakSelf.quietPumpScheduled = NO;
+            [weakSelf pumpQuietSteps];
+        });
+        return;
+    }
+    NSDictionary *next = self.quietSteps.firstObject;
+    [self.quietSteps removeObjectAtIndex:0];
+    // `over` was measured when the step was reported; it has been waiting in
+    // the queue since, so that much of it has already passed.
+    double queued = (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - [next[@"at"] unsignedLongLongValue]) / 1e9;
+    [self showQuietStep:[next[@"f"] floatValue] text:next[@"t"] over:MAX(0.0, [next[@"o"] doubleValue] - queued)];
+    if (self.quietSteps.count) [self pumpQuietSteps];
+}
+
+- (void)showQuietStep:(float)fraction text:(NSString *)text over:(NSTimeInterval)over {
     BOOL done = fraction >= 1.0f;
-    self.quietStatus.text = done ? step : [step stringByAppendingString:@"…"];
+    NSUInteger token = ++self.quietStepToken;
+    self.quietStepShownNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    self.quietStatus.text = done ? text : [text stringByAppendingString:@"…"];
     UIProgressView *bar = self.quietProgress;
     if (fraction > bar.progress) {
         [bar layoutIfNeeded];
-        [UIView animateWithDuration:MAX(over, 0.15) delay:0
+        [UIView animateWithDuration:MAX(over, 0.2) delay:0
                             options:UIViewAnimationOptionCurveLinear | UIViewAnimationOptionBeginFromCurrentState
                          animations:^{
             [bar setProgress:fraction animated:NO];
             [bar layoutIfNeeded];
         } completion:nil];
     }
+    // The wait ends with opening the SpringBoard connection (~0.5 s, the
+    // tail of `over`): switch the text when that part begins.
+    if ([text isEqualToString:@"Waiting for the system"] && over > 0.8) {
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((over - 0.5) * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            typeof(self) me = weakSelf;
+            if (me && me.quietStepToken == token) me.quietStatus.text = @"Connecting…";
+        });
+    }
     if (done) {
+        self.quietDoneShownNs = self.quietStepShownNs;
         if (@available(iOS 17.0, *)) [self.quietIcon removeAllSymbolEffects];
         UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:56 weight:UIImageSymbolWeightRegular];
         self.quietIcon.image = [UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:cfg];
@@ -213,9 +266,38 @@ static void scene_suspend_to_home(void)
     }
 }
 
+// Runs `then` once every queued step has been shown and "Done" has been
+// visible for kQuietMinDone (capped, so leaving is never held up long).
+- (void)afterQuietStepsShown:(dispatch_block_t)then {
+    __block int polls = 0;
+    __weak typeof(self) weakSelf = self;
+    __block void (^check)(void);
+    void (^checkImpl)(void) = ^{
+        typeof(self) me = weakSelf;
+        if (!me) { check = nil; return; }
+        BOOL drained = me.quietSteps.count == 0 && !me.quietPumpScheduled;
+        double doneFor = me.quietDoneShownNs
+            ? (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - me.quietDoneShownNs) / 1e9 : 0;
+        if ((drained && doneFor >= kQuietMinDone) || ++polls > 40 /* 2 s cap */) {
+            check = nil;
+            then();
+            return;
+        }
+        void (^again)(void) = check;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), again);
+    };
+    check = checkImpl;
+    check();
+}
+
 - (void)hideQuietCover {
     [self.quietCover removeFromSuperview];
     self.quietCover = nil;
+    self.quietSteps = nil;
+    self.quietStepShownNs = 0;
+    self.quietDoneShownNs = 0;
+    self.quietStepToken++;
     self.quietIcon = nil;
     self.quietStatus = nil;
     self.quietProgress = nil;
@@ -285,14 +367,19 @@ static void scene_suspend_to_home(void)
                     ? (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - resultShownNs) / 1e9 : 0;
                 wait = MAX(0.0, 0.75 - shownFor);
             }
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{
+            void (^leave)(void) = ^{
                 typeof(self) me2 = weakSelf;
                 // Only for this run, and only while still in front.
                 if (!me2 || generation != me2.actionGeneration) return;
                 if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
                 scene_suspend_to_home();
-            });
+            };
+            if (showLog) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), leave);
+            } else {
+                [me afterQuietStepsShown:leave];   // let "Done" be seen
+            }
         });
     };
     if (showLog) {
