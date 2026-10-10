@@ -2335,21 +2335,42 @@ bool procmgr_pid_alive(int pid) {
     return alive;
 }
 
-int procmgr_kill(int pid) {
+int procmgr_kill(int pid, const char *expectedComm, uint64_t expectedKproc) {
     if (procmgr_pid_is_protected(pid)) return -1;
     if (!kexploit_krw_ready()) return -2;
+    // The direct signal is destructive and must never be a PID-only viewer
+    // operation. Require both pieces of identity captured by the row. The
+    // struct proc address is a generation token; Darwin has no atomic
+    // pid+generation signal primitive here, so a check-to-signal TOCTOU remains
+    // possible and is deliberately documented rather than overstated away.
+    // (No ksafe requirement: the identity lookup below is the same proc_find
+    // walk the other kill paths use without it, and refusing here returned
+    // -1 -- not -6 -- so Force Quit skipped its launchd fallback and did
+    // nothing at all whenever ksafe was unavailable.)
+    if (!expectedComm || !expectedComm[0] || !expectedKproc) {
+        printf("[PROCMGR] kill: REFUSING pid %d — row identity unavailable\n", pid);
+        return -1;
+    }
+    char rowComm[64];
+    uint64_t rowKproc = 0;
+    if (procmgr_identity_for_pid(pid, rowComm, sizeof(rowComm), &rowKproc) != 0 ||
+        rowKproc != expectedKproc ||
+        // Row names are cut to 31 bytes (procmgr_entry_t.name): compare that
+        // much, as pm_comm_matches_row does, or a 32+ character name could
+        // never be force-quit.
+        strncmp(rowComm, expectedComm, sizeof(((procmgr_entry_t *)0)->name) - 1) != 0) {
+        printf("[PROCMGR] kill: REFUSING pid %d — current '%s' proc=0x%llx "
+               "does not match row '%s' proc=0x%llx\n", pid, rowComm,
+               (unsigned long long)rowKproc, expectedComm,
+               (unsigned long long)expectedKproc);
+        return -1;
+    }
     // Hard-stop by comm too (round 5): UI state is not the enforcement point.
     // FAIL CLOSED: a failed comm lookup must REFUSE, not skip the check —
     // SpringBoard/backboardd have ordinary pids, so a transient KRW read
     // failure would otherwise re-open the proven "initproc exited" panic vector.
-    char killComm[64];
-    if (procmgr_comm_for_pid(pid, killComm, sizeof(killComm)) != 0) {
-        printf("[PROCMGR] kill: REFUSING pid %d — comm lookup failed, cannot "
-               "verify it is not a protected process\n", pid);
-        return -1;
-    }
-    if (procmgr_comm_is_protected(killComm)) {
-        printf("[PROCMGR] kill: REFUSING protected process pid %d (%s)\n", pid, killComm);
+    if (procmgr_comm_is_protected(rowComm)) {
+        printf("[PROCMGR] kill: REFUSING protected process pid %d (%s)\n", pid, rowComm);
         return -1;
     }
 

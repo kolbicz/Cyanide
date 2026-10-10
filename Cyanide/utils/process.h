@@ -110,11 +110,13 @@ bool procmgr_role_is_app(int role);         // either of the above (a GUI app)
 #define PM_KIND_SERVICE 0
 int procmgr_exe_kind(int pid);
 
-// Force-quit a process by pid via thread saved-state corruption (KRW). Returns
-// 0 on success; negative on refusal/error:
+// Force-quit the captured Process Viewer row via SIGKILL (KRW is only used for
+// the protected-process and identity checks). The expected comm and struct proc
+// address must come from the same list snapshot; a PID-only call is refused.
+// Returns 0 on success; negative on refusal/error:
 //   -1 protected pid (0/1)  -2 KRW not ready  -3 proc not found
 //   -4 task/thread unavailable
-int procmgr_kill(int pid);
+int procmgr_kill(int pid, const char *expectedComm, uint64_t expectedKproc);
 
 // A pid that must never be force-quit (kernel_task, launchd) — the UI greys
 // these out. Returns true if pid is in the protected set.

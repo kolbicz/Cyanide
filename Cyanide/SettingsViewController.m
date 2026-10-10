@@ -10685,7 +10685,7 @@ static NSString *pm_chip_name(NSString *machine) {
         BOOL showBanner = !pm_fastkill_warm_session_hint();
         if (showBanner) [self pmShowKillShield];   // tap → verdict (cold kill only)
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            int rc = procmgr_kill(pid);
+            int rc = procmgr_kill(pid, name.UTF8String, rowKproc);
             // -6 == our own SIGKILL was denied (the app sandbox blocks signalling
             // other apps). Kill it from launchd instead: launchd is root and
             // unsandboxed, so kill(pid, SIGKILL) run inside it lands on any
