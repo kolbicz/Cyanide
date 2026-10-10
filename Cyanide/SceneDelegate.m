@@ -21,6 +21,7 @@
 // earlier run must not act on a later one.
 @property (nonatomic, assign) NSUInteger actionGeneration;
 @property (nonatomic, assign) BOOL actionInProgress;
+@property (nonatomic, strong) UIView *quietCover;   // shown during a quiet shortcut run
 
 @end
 
@@ -47,6 +48,7 @@
     }
     // Cold launch from a shortcut URL; handled once the scene is active.
     self.pendingActionURL = connectionOptions.URLContexts.anyObject.URL;
+    [self coverEarlyForURL:self.pendingActionURL];
     cyanide_launch_trace("scene willConnect: exit");
 }
 
@@ -57,14 +59,25 @@
         [self handleActionURL:url];
     } else {
         self.pendingActionURL = url;   // sceneDidBecomeActive runs it
+        [self coverEarlyForURL:url];
     }
 }
 
-// Strictly parses cyanide://location-services/<toggle|on|off>[?keepInSwitcher=<1|0>]
-// (also under the com.zeroxjf.ios-cyanide1 scheme). Anything else — another
-// scheme, extra path parts, an unknown action or an unclear keepInSwitcher
-// value — is rejected, never treated as a toggle. Returns NO with *error set.
-static BOOL scene_parse_location_url(NSURL *url, int *desiredOut, BOOL *keepCardOut, NSString **error)
+// Strictly parses cyanide://location-services/<toggle|on|off>
+// [?keepInSwitcher=<1|0>][&log=<1|0>] (also under the com.zeroxjf.ios-cyanide1
+// scheme). Anything else — another scheme, extra path parts, an unknown
+// action or option, or an unclear value — is rejected, never treated as a
+// toggle. Returns NO with *error set.
+static BOOL scene_parse_bool(NSString *value, BOOL *out)
+{
+    NSString *v = value.lowercaseString ?: @"";
+    if ([v isEqualToString:@"1"] || [v isEqualToString:@"true"] || [v isEqualToString:@"yes"]) { *out = YES; return YES; }
+    if ([v isEqualToString:@"0"] || [v isEqualToString:@"false"] || [v isEqualToString:@"no"]) { *out = NO; return YES; }
+    return NO;
+}
+
+static BOOL scene_parse_location_url(NSURL *url, int *desiredOut, BOOL *keepCardOut, BOOL *showLogOut,
+                                     NSString **error)
 {
     NSURLComponents *c = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
     NSString *scheme = c.scheme.lowercaseString;
@@ -76,90 +89,145 @@ static BOOL scene_parse_location_url(NSURL *url, int *desiredOut, BOOL *keepCard
     if ([path hasSuffix:@"/"] && path.length > 1) path = [path substringToIndex:path.length - 1];
     NSDictionary<NSString *, NSNumber *> *actions = @{ @"/toggle": @-1, @"/on": @1, @"/off": @0 };
     NSNumber *action = actions[path.lowercaseString];
-    if (!action) {
+    if (action == nil) {
         *error = [NSString stringWithFormat:@"Unknown action \"%@\". Use /toggle, /on or /off.", path];
         return NO;
     }
-    BOOL keep = NO;
+    BOOL keep = NO, showLog = NO;
     for (NSURLQueryItem *item in c.queryItems) {
-        if (![item.name isEqualToString:@"keepInSwitcher"]) {
-            *error = [NSString stringWithFormat:@"Unknown option \"%@\".", item.name];
+        BOOL value;
+        if (!scene_parse_bool(item.value, &value)) {
+            *error = [NSString stringWithFormat:@"%@ must be 1 or 0, not \"%@\".", item.name, item.value ?: @""];
             return NO;
         }
-        NSString *v = item.value.lowercaseString ?: @"";
-        if ([v isEqualToString:@"1"] || [v isEqualToString:@"true"] || [v isEqualToString:@"yes"]) keep = YES;
-        else if ([v isEqualToString:@"0"] || [v isEqualToString:@"false"] || [v isEqualToString:@"no"]) keep = NO;
+        if ([item.name isEqualToString:@"keepInSwitcher"]) keep = value;
+        else if ([item.name isEqualToString:@"log"]) showLog = value;
         else {
-            *error = [NSString stringWithFormat:@"keepInSwitcher must be 1 or 0, not \"%@\".", item.value ?: @""];
+            *error = [NSString stringWithFormat:@"Unknown option \"%@\".", item.name];
             return NO;
         }
     }
     *desiredOut = action.intValue;
     *keepCardOut = keep;
+    *showLogOut = showLog;
     return YES;
 }
 
-// cyanide://location-services/toggle | /on | /off. Opens the activity log
-// and runs only that action; the log shows progress and ends in
-// Complete/Failed with the reason. On success the app returns to the Home
-// Screen shortly after (and SpringBoard removes its switcher card unless
-// ?keepInSwitcher=1); on failure it stays on the log.
+// Private but long-stable: what the Home gesture does.
+static void scene_suspend_to_home(void)
+{
+    SEL suspend = NSSelectorFromString(@"suspend");
+    if ([UIApplication.sharedApplication respondsToSelector:suspend]) {
+        ((void (*)(id, SEL))[UIApplication.sharedApplication methodForSelector:suspend])(
+            UIApplication.sharedApplication, suspend);
+    }
+}
+
+- (UIViewController *)topViewController {
+    UIViewController *top = self.window.rootViewController;
+    while (top.presentedViewController) top = top.presentedViewController;
+    return top;
+}
+
+- (void)showAlertTitle:(NSString *)title message:(NSString *)message {
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:title message:message
+                                                         preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [[self topViewController] presentViewController:ac animated:YES completion:nil];
+}
+
+// A plain full-window cover for quiet shortcut runs: nothing of Cyanide's UI
+// shows while it works.
+- (void)showQuietCover {
+    if (self.quietCover) return;
+    UIView *cover = [[UIView alloc] initWithFrame:self.window.bounds];
+    cover.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    cover.backgroundColor = UIColor.systemBackgroundColor;
+    [self.window addSubview:cover];
+    self.quietCover = cover;
+}
+
+- (void)hideQuietCover {
+    [self.quietCover removeFromSuperview];
+    self.quietCover = nil;
+}
+
+// A quiet shortcut link arriving before the scene is active: cover the
+// window right away, so Cyanide's normal UI doesn't flash first.
+- (void)coverEarlyForURL:(NSURL *)url {
+    if (!url || ![url.host.lowercaseString isEqualToString:@"location-services"]) return;
+    int desired; BOOL keep, showLog; NSString *err = nil;
+    if (scene_parse_location_url(url, &desired, &keep, &showLog, &err) && !showLog) [self showQuietCover];
+}
+
+// cyanide://location-services/toggle | /on | /off. Runs only that action.
+//  - Default (quiet): a plain cover instead of any UI; on success Cyanide
+//    returns to the Home Screen as soon as its SpringBoard work is finished
+//    (and SpringBoard then removes the switcher card unless keepInSwitcher=1).
+//    On failure the cover goes away and an alert explains why.
+//  - log=1: the activity log is shown, with a short pause on the result.
 - (void)handleActionURL:(NSURL *)url {
     if (![url.host.lowercaseString isEqualToString:@"location-services"]) {
         NSLog(@"[URL] unhandled %@", url);
         return;
     }
     int desired = -1;
-    BOOL keepCard = NO;
+    BOOL keepCard = NO, showLog = NO;
     NSString *parseError = nil;
-    if (!scene_parse_location_url(url, &desired, &keepCard, &parseError)) {
-        UIViewController *top = self.window.rootViewController;
-        while (top.presentedViewController) top = top.presentedViewController;
-        UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Location Services Link"
-                                                                    message:parseError
-                                                             preferredStyle:UIAlertControllerStyleAlert];
-        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-        [top presentViewController:ac animated:YES completion:nil];
+    if (!scene_parse_location_url(url, &desired, &keepCard, &showLog, &parseError)) {
+        [self showAlertTitle:@"Location Services Link" message:parseError];
         return;
     }
     NSUInteger generation = ++self.actionGeneration;
     self.actionInProgress = YES;
-    // When the result actually appears on screen (main thread): the
-    // readability pause is measured from here, not from when the worker
-    // queued it.
+    // When the result actually appears on screen (main thread), for the
+    // log=1 readability pause.
     __block uint64_t resultShownNs = 0;
-    __block id observer = [NSNotificationCenter.defaultCenter
-        addObserverForName:kSettingsActionsDidCompleteNotification object:nil queue:NSOperationQueue.mainQueue
-                usingBlock:^(NSNotification *note) {
-        if (!resultShownNs) resultShownNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-    }];
+    __block id observer = nil;
+    if (showLog) {
+        observer = [NSNotificationCenter.defaultCenter
+            addObserverForName:kSettingsActionsDidCompleteNotification object:nil queue:NSOperationQueue.mainQueue
+                    usingBlock:^(NSNotification *note) {
+            if (!resultShownNs) resultShownNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        }];
+    }
     __weak typeof(self) weakSelf = self;
-    [self presentActivityLogThen:^{
+    dispatch_block_t run = ^{
         settings_location_services_set_async(desired, !keepCard, ^(BOOL ok, NSString *message,
                                                                     NSTimeInterval resultAge) {
-            [NSNotificationCenter.defaultCenter removeObserver:observer];
+            if (observer) [NSNotificationCenter.defaultCenter removeObserver:observer];
             typeof(self) me = weakSelf;
             if (!me || generation != me.actionGeneration) return;   // a newer run owns the screen
             me.actionInProgress = NO;
-            if (!ok) return;
-            double shownFor = resultShownNs
-                ? (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - resultShownNs) / 1e9 : 0;
-            NSTimeInterval wait = MAX(0.0, 0.75 - shownFor);
+            if (!ok) {
+                if (!showLog) {
+                    [me hideQuietCover];
+                    [me showAlertTitle:@"Location Services" message:message];
+                }
+                return;   // the log (log=1) already shows the failure
+            }
+            double wait = 0;
+            if (showLog) {
+                double shownFor = resultShownNs
+                    ? (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - resultShownNs) / 1e9 : 0;
+                wait = MAX(0.0, 0.75 - shownFor);
+            }
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 typeof(self) me2 = weakSelf;
                 // Only for this run, and only while still in front.
                 if (!me2 || generation != me2.actionGeneration) return;
                 if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
-                // Private but long-stable: what the Home gesture does.
-                SEL suspend = NSSelectorFromString(@"suspend");
-                if ([UIApplication.sharedApplication respondsToSelector:suspend]) {
-                    ((void (*)(id, SEL))[UIApplication.sharedApplication methodForSelector:suspend])(
-                        UIApplication.sharedApplication, suspend);
-                }
+                scene_suspend_to_home();
             });
         });
-    }];
+    };
+    if (showLog) {
+        [self presentActivityLogThen:run];
+    } else {
+        [self showQuietCover];
+        run();
+    }
 }
 
 // Shows a fresh activity log on top of whatever is up (its completion state
@@ -248,6 +316,9 @@ static BOOL scene_parse_location_url(NSURL *url, int *desiredOut, BOOL *keepCard
 
 - (void)sceneWillEnterForeground:(UIScene *)scene {
     cyanide_launch_trace("sceneWillEnterForeground");
+    // A quiet shortcut run that sent Cyanide home leaves its cover behind;
+    // a normal reopen must show the app (a new shortcut run puts it back).
+    if (!self.actionInProgress) [self hideQuietCover];
     settings_application_will_enter_foreground();
 }
 

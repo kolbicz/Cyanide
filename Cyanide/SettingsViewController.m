@@ -6228,7 +6228,9 @@ static void settings_apply_axonlite_once_async(const char *reason)
 //    needing longer. Runs whose drain did not finish cleanly count the same.
 //  - Runs keep being measured while removal is skipped, so a skip isn't
 //    permanent.
-static NSString * const kLocSvcSwitcherSamplesKey = @"LocationShortcutArmToSafeSeconds";
+// v2: quiet runs return to Home without a result pause, so earlier samples
+// (with the pause) don't describe the current timing.
+static NSString * const kLocSvcSwitcherSamplesKey = @"LocationShortcutArmToSafeSecondsV2";
 static NSString * const kLocSvcSwitcherPendingKey = @"LocationShortcutRemovalPending";
 static const double kLocSvcSwitcherMargin = 0.5, kLocSvcSwitcherMin = 1.2;
 static const double kLocSvcSwitcherCap = 3.0;   // == kActivationSettleNs
