@@ -14411,87 +14411,145 @@ UIViewController *settings_make_file_browser(void)
 
     // A .zip is unpacked first — that is how an export from another device
     // arrives (one file through Files, Mail or a chat app).
-    NSMutableArray<NSURL *> *items = [NSMutableArray array];
-    NSMutableArray<NSString *> *tempDirs = [NSMutableArray array];
-    NSMutableArray<NSString *> *unzipFailures = [NSMutableArray array];
+    NSMutableArray<NSURL *> *directItems = [NSMutableArray array];
+    NSMutableArray<NSURL *> *archives = [NSMutableArray array];
     for (NSURL *url in urls) {
         if (![url.pathExtension.lowercaseString isEqualToString:@"zip"]) {
-            [items addObject:url];
+            [directItems addObject:url];
             continue;
         }
-        NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:
-                         [NSString stringWithFormat:@"PasscodeBackups-%@", NSUUID.UUID.UUIDString]];
-        NSError *unzipError = nil;
-        if (SBLExtractArchiveToDirectory(url, tmp, &unzipError)) {
-            [items addObject:[NSURL fileURLWithPath:tmp isDirectory:YES]];
+        [archives addObject:url];
+    }
+
+    NSProgress *progress = [NSProgress progressWithTotalUnitCount:MAX((NSInteger)archives.count, 1)];
+    progress.cancellable = YES;
+    UIAlertController *progressAlert = [UIAlertController
+        alertControllerWithTitle:@"Importing Originals"
+                         message:archives.count > 0 ? @"Reading the selected archive(s)…" : @"Reading the selected files…"
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [progressAlert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                                        style:UIAlertActionStyleCancel
+                                                      handler:^(UIAlertAction *action) {
+        (void)action;
+        [progress cancel];
+    }]];
+    [self presentViewController:progressAlert animated:YES completion:nil];
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSMutableArray<NSURL *> *items = [directItems mutableCopy];
+        NSMutableArray<NSString *> *tempDirs = [NSMutableArray array];
+        NSMutableArray<NSString *> *unzipFailures = [NSMutableArray array];
+
+        for (NSURL *url in archives) {
+            NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                             [NSString stringWithFormat:@"PasscodeBackups-%@", NSUUID.UUID.UUIDString]];
+            // Register before extraction so every failure/cancellation follows
+            // the same cleanup path, including a partially written first entry.
             [tempDirs addObject:tmp];
-        } else {
-            NSString *why = unzipError.localizedDescription ?: @"not a readable archive";
-            log_user("[PASSCODE] Could not open %s: %s\n",
-                     url.lastPathComponent.UTF8String, why.UTF8String);
-            [unzipFailures addObject:[NSString stringWithFormat:@"%@ — %@",
-                                                                url.lastPathComponent, why]];
+            NSError *unzipError = nil;
+            BOOL ok = !progress.isCancelled &&
+                SBLExtractArchiveToDirectoryWithProgress(url, tmp, progress, &unzipError);
+            if (ok) {
+                [items addObject:[NSURL fileURLWithPath:tmp isDirectory:YES]];
+            } else {
+                NSString *why = progress.isCancelled ? @"cancelled" :
+                    (unzipError.localizedDescription ?: @"not a readable archive");
+                log_user("[PASSCODE] Could not open selected archive: %s\n", why.UTF8String);
+                [unzipFailures addObject:[NSString stringWithFormat:@"Archive %lu — %@",
+                                          (unsigned long)unzipFailures.count + 1, why]];
+            }
+            progress.completedUnitCount += 1;
         }
-    }
 
-    NSUInteger skipped = 0;
-    NSUInteger failed = 0;
-    NSUInteger unusable = 0;
-    NSUInteger added = items.count > 0
-        ? settings_passcode_import_backup_items(items, &skipped, &failed, &unusable)
-        : 0;
+        BOOL cancelledBeforeImport = progress.isCancelled;
+        NSUInteger skipped = 0;
+        NSUInteger failed = 0;
+        NSUInteger unusable = 0;
+        NSUInteger added = (!cancelledBeforeImport && items.count > 0)
+            ? settings_passcode_import_backup_items(items, &skipped, &failed, &unusable)
+            : 0;
 
-    for (NSString *tmp in tempDirs) {
-        [[NSFileManager defaultManager] removeItemAtPath:tmp error:nil];
-    }
-    for (NSURL *url in scoped) [url stopAccessingSecurityScopedResource];
-
-    NSString *message;
-    if (added == 0 && skipped == 0 && failed == 0 && unzipFailures.count > 0) {
-        // The archive itself never opened — say that, instead of blaming what is
-        // (or is not) inside it.
-        message = [NSString stringWithFormat:@"Could not open the selected archive:\n\n%@",
-                                             [unzipFailures componentsJoinedByString:@"\n"]];
-    } else if (added == 0 && skipped == 0 && failed == 0) {
-        message = @"No saved originals were found in the selection. On the device that still has the originals, tap Export Originals, then import the .zip it saves here.";
-    } else if (added == 0 && failed == 0) {
-        message = [NSString stringWithFormat:
-            @"Nothing to import: all %lu original(s) are already present on this device.",
-            (unsigned long)skipped];
-    } else {
-        // Report every outcome separately: a failure count reported on its own
-        // reads as a clean success.
-        NSMutableArray<NSString *> *parts = [NSMutableArray array];
-        [parts addObject:[NSString stringWithFormat:@"Imported %lu original(s).", (unsigned long)added]];
-        if (skipped > 0) {
-            [parts addObject:[NSString stringWithFormat:@"%lu were already present and were kept.",
-                                                        (unsigned long)skipped]];
+        for (NSString *tmp in tempDirs) {
+            [[NSFileManager defaultManager] removeItemAtPath:tmp error:nil];
         }
-        if (failed > 0) {
-            [parts addObject:[NSString stringWithFormat:@"%lu could not be copied or verified.",
-                                                        (unsigned long)failed]];
-        }
-        if (unusable > 0) {
-            [parts addObject:[NSString stringWithFormat:
-                @"%lu cannot be matched to keypad files, so Restore Original Digits can't write them back.",
-                (unsigned long)unusable]];
-        }
-        if (unzipFailures.count > 0) {
-            [parts addObject:[NSString stringWithFormat:@"%lu archive(s) could not be opened.",
-                                                        (unsigned long)unzipFailures.count]];
-        }
-        [parts addObject:@"Tap Restore Original Digits to write the imported originals back."];
-        message = [parts componentsJoinedByString:@"\n\n"];
-    }
+        for (NSURL *url in scoped) [url stopAccessingSecurityScopedResource];
 
-    [self reloadSectionOrAll:SectionPasscodeTheme];
-    settings_notify_package_queue_changed_async();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            NSString *message;
+            if (progress.isCancelled && added == 0 && skipped == 0 && failed == 0) {
+                message = @"Import cancelled. Nothing was imported.";
+            } else if (progress.isCancelled) {
+                message = [NSString stringWithFormat:
+                    @"Import cancelled after it had started: %lu original(s) were already imported and were kept.",
+                    (unsigned long)added];
+            } else if (added == 0 && skipped == 0 && failed == 0 && unzipFailures.count > 0) {
+                message = [NSString stringWithFormat:@"Could not open the selected archive(s):\n\n%@",
+                                                     [unzipFailures componentsJoinedByString:@"\n"]];
+            } else if (added == 0 && skipped == 0 && failed == 0) {
+                message = @"No saved originals were found in the selection. On the device that still has the originals, tap Export Originals, then import the .zip it saves here.";
+            } else if (added == 0 && failed == 0) {
+                message = [NSString stringWithFormat:
+                    @"Nothing to import: all %lu original(s) are already present on this device.",
+                    (unsigned long)skipped];
+            } else {
+                NSMutableArray<NSString *> *parts = [NSMutableArray array];
+                [parts addObject:[NSString stringWithFormat:@"Imported %lu original(s).", (unsigned long)added]];
+                if (skipped > 0) {
+                    [parts addObject:[NSString stringWithFormat:@"%lu were already present and were kept.",
+                                                                (unsigned long)skipped]];
+                }
+                if (failed > 0) {
+                    [parts addObject:[NSString stringWithFormat:@"%lu could not be copied or verified.",
+                                                                (unsigned long)failed]];
+                }
+                if (unusable > 0) {
+                    [parts addObject:[NSString stringWithFormat:
+                        @"%lu cannot be matched to keypad files, so Restore Original Digits can't write them back.",
+                        (unsigned long)unusable]];
+                }
+                if (unzipFailures.count > 0) {
+                    [parts addObject:[NSString stringWithFormat:@"%lu archive(s) could not be opened.",
+                                                                (unsigned long)unzipFailures.count]];
+                }
+                [parts addObject:@"Tap Restore Original Digits to write the imported originals back."];
+                message = [parts componentsJoinedByString:@"\n\n"];
+            }
 
-    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Import Originals"
-                                                              message:message
-                                                       preferredStyle:UIAlertControllerStyleAlert];
-    [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-    [self presentViewController:ac animated:YES completion:nil];
+            [strongSelf reloadSectionOrAll:SectionPasscodeTheme];
+            settings_notify_package_queue_changed_async();
+            UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Import Originals"
+                                                                      message:message
+                                                               preferredStyle:UIAlertControllerStyleAlert];
+            [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+            // The result can only be presented once the progress alert is gone:
+            // presenting during its dismissal is dropped and the user never sees
+            // the outcome. Cancel dismisses it by itself, so it may already be
+            // on its way out (or gone) by now.
+            __block void (^showResult)(void);
+            __block int waits = 0;
+            showResult = ^{
+                __strong typeof(weakSelf) s2 = weakSelf;
+                if (!s2) { showResult = nil; return; }
+                if (progressAlert.isBeingDismissed && waits++ < 20) {
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
+                                   dispatch_get_main_queue(), showResult);
+                    return;
+                }
+                if (progressAlert.presentingViewController && !progressAlert.isBeingDismissed) {
+                    [progressAlert dismissViewControllerAnimated:YES completion:^{
+                        [s2 presentViewController:ac animated:YES completion:nil];
+                    }];
+                } else {
+                    [s2 presentViewController:ac animated:YES completion:nil];
+                }
+                showResult = nil;
+            };
+            showResult();
+        });
+    });
 }
 
 - (void)presentPasscodeThemeImporter
