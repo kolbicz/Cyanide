@@ -29,6 +29,20 @@ struct SetLocationServicesIntent: SetValueIntent {
         var localizedStringResource: LocalizedStringResource { "\(message)" }
     }
 
+    @MainActor
+    private final class Resolver {
+        var continuation: CheckedContinuation<(ok: Bool, message: String), Never>?
+        var timeout: Task<Void, Never>?
+
+        func finish(_ ok: Bool, _ message: String) {
+            guard let continuation else { return }
+            self.continuation = nil
+            timeout?.cancel()
+            timeout = nil
+            continuation.resume(returning: (ok, message))
+        }
+    }
+
     // A cold run without parked kernel access can take ~20 s; past this the
     // intent stops waiting (Cyanide still finishes and refreshes the control).
     private static let timeout: TimeInterval = 60
@@ -43,22 +57,27 @@ struct SetLocationServicesIntent: SetValueIntent {
               handler.responds(to: selector) else {
             throw Failure(message: "Cyanide couldn't take the request.")
         }
-        let outcome: (ok: Bool, message: String) = await withCheckedContinuation { continuation in
-            var resumed = false   // main actor only
-            let finish = { (ok: Bool, message: String) in
-                if resumed { return }
-                resumed = true
-                continuation.resume(returning: (ok, message))
-            }
-            let completion: @convention(block) (Bool, NSString) -> Void = { ok, message in
-                MainActor.assumeIsolated { finish(ok, message as String) }
-            }
-            handler.perform(selector, with: url, with: completion as AnyObject)
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.timeout) {
-                MainActor.assumeIsolated {
-                    finish(false, "Location Services is taking longer than expected.")
+        // One-shot: the first of completion, timeout or cancellation wins;
+        // the others are ignored. Cancellation only detaches the caller —
+        // Cyanide finishes the change safely and refreshes the control.
+        let resolver = Resolver()
+        let outcome: (ok: Bool, message: String) = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                resolver.continuation = continuation
+                let completion: @convention(block) (Bool, NSString) -> Void = { ok, message in
+                    MainActor.assumeIsolated { resolver.finish(ok, message as String) }
                 }
+                handler.perform(selector, with: url, with: completion as AnyObject)
+                guard resolver.continuation != nil else { return }   // already answered
+                resolver.timeout = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: UInt64(Self.timeout * 1_000_000_000))
+                    if Task.isCancelled { return }
+                    resolver.finish(false, "Location Services is taking longer than expected.")
+                }
+                if Task.isCancelled { resolver.finish(false, "Cancelled.") }
             }
+        } onCancel: {
+            Task { @MainActor in resolver.finish(false, "Cancelled.") }
         }
         guard outcome.ok else { throw Failure(message: outcome.message) }
         return .result()
