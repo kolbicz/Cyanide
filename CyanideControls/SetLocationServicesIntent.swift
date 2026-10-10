@@ -2,7 +2,8 @@
 //  SetLocationServicesIntent.swift
 //  CyanideControls + Cyanide
 //
-//  The Control Center toggle's action. Compiled into BOTH the extension and
+//  The Control Center toggle's action (iOS 18+) and the request logic it
+//  shares with the Shortcuts action (iOS 17+). Compiled into BOTH the extension and
 //  the app: with openAppWhenRun, iOS launches Cyanide and runs perform() in
 //  the app process, where it hands the request to the same handler as the
 //  cyanide://location-services URLs (quiet progress screen, return to Home)
@@ -13,22 +14,17 @@
 import AppIntents
 import Foundation
 
-@available(iOS 18.0, *)
-struct SetLocationServicesIntent: SetValueIntent {
-    static let title: LocalizedStringResource = "Set Location Services"
-    static let description = IntentDescription("Opens Cyanide to turn Location Services on or off.")
-    static let openAppWhenRun: Bool = true
+// The request itself, shared by the Control Center toggle (iOS 18+) and the
+// Shortcuts action in the app (LocationServicesShortcut.swift, iOS 17+). Runs
+// in the app process (both intents use openAppWhenRun) and hands the request
+// to the same handler as the cyanide://location-services URLs, then waits for
+// the real outcome.
+struct CyanideLocationRequestFailure: Error, CustomLocalizedStringResourceConvertible {
+    let message: String
+    var localizedStringResource: LocalizedStringResource { "\(message)" }
+}
 
-    @Parameter(title: "Location Services On")
-    var value: Bool
-
-    init() {}
-
-    struct Failure: Error, CustomLocalizedStringResourceConvertible {
-        let message: String
-        var localizedStringResource: LocalizedStringResource { "\(message)" }
-    }
-
+enum CyanideLocationRequest {
     @MainActor
     private final class Resolver {
         var continuation: CheckedContinuation<(ok: Bool, message: String), Never>?
@@ -47,15 +43,16 @@ struct SetLocationServicesIntent: SetValueIntent {
     // intent stops waiting (Cyanide still finishes and refreshes the control).
     private static let timeout: TimeInterval = 60
 
+    /// action: "on", "off" or "toggle".
     @MainActor
-    func perform() async throws -> some IntentResult {
+    static func run(_ action: String) async throws {
         // App-side handler (SceneDelegate +cy_runLocationURL:completion:).
         // Looked up at run time: the class only exists in the app.
-        let url = URL(string: "cyanide://location-services/\(value ? "on" : "off")")! as NSURL
+        let url = URL(string: "cyanide://location-services/\(action)")! as NSURL
         let selector = NSSelectorFromString("cy_runLocationURL:completion:")
         guard let handler = NSClassFromString("SceneDelegate") as? NSObject.Type,
               handler.responds(to: selector) else {
-            throw Failure(message: "Cyanide couldn't take the request.")
+            throw CyanideLocationRequestFailure(message: "Cyanide couldn't take the request.")
         }
         // One-shot: the first of completion, timeout or cancellation wins;
         // the others are ignored. Cancellation only detaches the caller —
@@ -79,7 +76,24 @@ struct SetLocationServicesIntent: SetValueIntent {
         } onCancel: {
             Task { @MainActor in resolver.finish(false, "Cancelled.") }
         }
-        guard outcome.ok else { throw Failure(message: outcome.message) }
+        guard outcome.ok else { throw CyanideLocationRequestFailure(message: outcome.message) }
+    }
+}
+
+@available(iOS 18.0, *)
+struct SetLocationServicesIntent: SetValueIntent {
+    static let title: LocalizedStringResource = "Set Location Services"
+    static let description = IntentDescription("Opens Cyanide to turn Location Services on or off.")
+    static let openAppWhenRun: Bool = true
+
+    @Parameter(title: "Location Services On")
+    var value: Bool
+
+    init() {}
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        try await CyanideLocationRequest.run(value ? "on" : "off")
         return .result()
     }
 }
