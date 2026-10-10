@@ -43,11 +43,14 @@ void filebrowser_note_filesystem_changed(void) { g_fb_fs_generation++; }
 // Plists open in the structured editor: by extension, or by the binary
 // plist magic for extensionless files.
 // Opens `path` for reading only if it is (or links to) a regular file.
-// O_NONBLOCK keeps a FIFO from blocking the open; fstat then checks the
-// object actually opened, not what the path pointed at a moment earlier.
-// Returns -1 for anything else (FIFO, device, socket, folder, error).
+// A path that isn't one is rejected by stat BEFORE opening (opening a device
+// node can itself have side effects); O_NONBLOCK keeps a FIFO swapped in
+// meanwhile from blocking the open, and fstat then checks the object
+// actually opened. Returns -1 for anything else.
 int filebrowser_open_regular(NSString *path)
 {
+    struct stat pre;
+    if (stat(path.fileSystemRepresentation, &pre) != 0 || !S_ISREG(pre.st_mode)) return -1;
     int fd = open(path.fileSystemRepresentation, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return -1;
     struct stat st;
@@ -55,6 +58,33 @@ int filebrowser_open_regular(NSString *path)
     // Regular file: back to blocking reads.
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
     return fd;
+}
+
+// Reads `fd` from the start to EOF, at most maxBytes. EINTR is retried; any
+// read error returns nil (errno in *errOut) — an errored read is never
+// passed off as complete contents. *truncated: more than maxBytes exist.
+NSData *filebrowser_read_fd(int fd, NSUInteger maxBytes, BOOL *truncated, int *errOut)
+{
+    if (truncated) *truncated = NO;
+    if (errOut) *errOut = 0;
+    NSMutableData *data = [NSMutableData dataWithLength:maxBytes + 1];
+    size_t got = 0;
+    while (got < data.length) {
+        ssize_t n = pread(fd, (uint8_t *)data.mutableBytes + got, data.length - got, (off_t)got);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errOut) *errOut = errno;
+            return nil;
+        }
+        if (n == 0) break;
+        got += (size_t)n;
+    }
+    if (got > maxBytes) {
+        if (truncated) *truncated = YES;
+        got = maxBytes;
+    }
+    data.length = got;
+    return data;
 }
 
 // Plists open in the structured editor: by extension, or by the binary
@@ -67,17 +97,17 @@ static BOOL fb_looks_like_plist(NSString *path)
     BOOL yes = [ext isEqualToString:@"plist"] || [ext isEqualToString:@"strings"];
     if (!yes) {
         char magic[8] = {0};
-        yes = read(fd, magic, sizeof(magic)) == (ssize_t)sizeof(magic) && memcmp(magic, "bplist00", 8) == 0;
+        yes = pread(fd, magic, sizeof(magic), 0) == (ssize_t)sizeof(magic) && memcmp(magic, "bplist00", 8) == 0;
     }
     close(fd);
     return yes;
 }
 
-FBFileIdentity filebrowser_identity(NSString *path)
+FBFileIdentity filebrowser_identity_fd(int fd)
 {
     FBFileIdentity ident = {0};
     struct stat st;
-    if (stat(path.fileSystemRepresentation, &st) == 0) {   // follows a symlink: the file actually written
+    if (fd >= 0 && fstat(fd, &st) == 0) {
         ident.valid = YES;
         ident.dev = st.st_dev;
         ident.ino = st.st_ino;
@@ -87,30 +117,111 @@ FBFileIdentity filebrowser_identity(NSString *path)
     return ident;
 }
 
-BOOL filebrowser_identity_equal(FBFileIdentity a, FBFileIdentity b)
+static BOOL fb_same_object(FBFileIdentity a, FBFileIdentity b)
 {
-    return a.valid && b.valid && a.dev == b.dev && a.ino == b.ino && a.size == b.size &&
-           a.mtime.tv_sec == b.mtime.tv_sec && a.mtime.tv_nsec == b.mtime.tv_nsec;
+    return a.valid && b.valid && a.dev == b.dev && a.ino == b.ino;
 }
 
-// Writes in place (keeps inode, owner and mode). In-place means a failure can
-// leave the file truncated, so on failure the original bytes are written back.
-// Returns nil on success, otherwise a message saying whether the original was
-// restored.
-NSString *filebrowser_write_in_place(NSString *path, NSData *data, NSData *original)
+static BOOL fb_pwrite_all(int fd, NSData *data)
 {
-    NSError *err = nil;
-    if ([data writeToFile:path options:0 error:&err]) {
-        filebrowser_note_filesystem_changed();
-        return nil;
+    const uint8_t *p = data.bytes;
+    size_t done = 0;
+    while (done < data.length) {
+        ssize_t n = pwrite(fd, p + done, data.length - done, (off_t)done);
+        if (n < 0) { if (errno == EINTR) continue; return NO; }
+        if (n == 0) return NO;
+        done += (size_t)n;
     }
-    NSString *why = err.localizedDescription ?: @"The file could not be written.";
-    if (!original) return why;
-    NSError *rerr = nil;
-    if ([original writeToFile:path options:0 error:&rerr])
-        return [why stringByAppendingString:@"\n\nThe original contents were written back."];
-    return [why stringByAppendingFormat:@"\n\nWARNING: restoring the original also failed (%@). "
-                                        @"The file may be damaged.", rerr.localizedDescription ?: @"unknown error"];
+    return ftruncate(fd, (off_t)data.length) == 0 && fsync(fd) == 0;
+}
+
+// Saves `data` over the file that was opened as `expected` with contents
+// `loaded`. The whole transaction runs on ONE descriptor, so the object that
+// was checked is the object written (no path re-resolution between check and
+// write; inode, owner and mode are kept).
+//  - Without `force`: a different object at the path, or contents that differ
+//    from `loaded` (even with size and mtime unchanged), is a conflict.
+//  - With `force`: the CURRENT contents — not the stale loaded version — are
+//    what gets backed up and restored.
+//  - Before writing, the current contents are copied to Cyanide's temp
+//    folder. A failed write is undone from them; if that fails too, the
+//    message names the surviving backup.
+static const NSUInteger kFBMaxBackupBytes = 64 * 1024 * 1024;
+
+FBSaveResult filebrowser_save(NSString *path, NSData *data, FBFileIdentity expected, NSData *loaded,
+                              BOOL force, FBFileIdentity *newIdentity, NSString **message)
+{
+    NSString *msg = nil;
+    FBSaveResult result = FBSaveFailed;
+    int fd = open(path.fileSystemRepresentation, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        if (message) *message = [NSString stringWithFormat:@"The file can't be opened for writing: %s.", strerror(errno)];
+        return FBSaveFailed;
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        close(fd);
+        if (message) *message = @"Not a regular file.";
+        return FBSaveFailed;
+    }
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
+    FBFileIdentity current = filebrowser_identity_fd(fd);
+    BOOL tooBig = NO;
+    int rerr = 0;
+    NSData *currentData = filebrowser_read_fd(fd, kFBMaxBackupBytes, &tooBig, &rerr);
+    if (!currentData) {
+        msg = [NSString stringWithFormat:@"The current file couldn't be read for a backup (%s). Nothing was written.", strerror(rerr)];
+    } else if (tooBig) {
+        msg = @"The current file is too large to back up first. Nothing was written.";
+    } else if (!force && (!fb_same_object(expected, current) || !loaded || ![currentData isEqualToData:loaded])) {
+        result = FBSaveConflict;
+    } else {
+        NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"FileBrowserBackups"];
+        [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *backup = [dir stringByAppendingPathComponent:
+                            [NSString stringWithFormat:@"%@.%@.bak", path.lastPathComponent, NSUUID.UUID.UUIDString]];
+        if (![currentData writeToFile:backup atomically:YES]) {
+            msg = @"A backup of the current file couldn't be written. Nothing was changed.";
+        } else if (fb_pwrite_all(fd, data)) {
+            [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
+            if (newIdentity) *newIdentity = filebrowser_identity_fd(fd);
+            filebrowser_note_filesystem_changed();
+            result = FBSaveOK;
+        } else {
+            int werr = errno;
+            filebrowser_note_filesystem_changed();   // the file may have changed
+            if (fb_pwrite_all(fd, currentData)) {
+                [NSFileManager.defaultManager removeItemAtPath:backup error:nil];
+                if (newIdentity) *newIdentity = filebrowser_identity_fd(fd);
+                msg = [NSString stringWithFormat:@"Writing failed (%s). The file's previous contents were written back.", strerror(werr)];
+            } else {
+                msg = [NSString stringWithFormat:@"Writing failed (%s), and restoring the previous contents failed too. "
+                                                 @"The file may be damaged. A backup of its previous contents is at:\n%@",
+                                                 strerror(werr), backup];
+            }
+        }
+    }
+    close(fd);
+    if (message) *message = msg;
+    return result;
+}
+
+// File operations (delete/rename/duplicate/create/import) run one at a
+// time: two duplicates/imports can't pick the same free name concurrently.
+static dispatch_queue_t fb_file_queue(void)
+{
+    static dispatch_queue_t q;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        q = dispatch_queue_create("cyanide.filebrowser.ops", DISPATCH_QUEUE_SERIAL);
+    });
+    return q;
+}
+
+static NSError *fb_locked_error(void)
+{
+    return [NSError errorWithDomain:NSPOSIXErrorDomain code:EPERM
+                           userInfo:@{ NSLocalizedDescriptionKey: @"Changes were locked before this could run." }];
 }
 
 static void fb_alert(UIViewController *vc, NSString *title, NSString *message)
@@ -268,6 +379,8 @@ typedef NS_ENUM(NSInteger, FBViewMode) { FBViewText, FBViewImage, FBViewHex, FBV
 @property (nonatomic, assign) FBFileIdentity identity;   // file as it was when loaded
 @property (nonatomic, assign) BOOL notRegular;           // FIFO/device/socket: Info only
 @property (nonatomic, assign) BOOL sharing;
+@property (nonatomic, assign) BOOL saving;
+@property (nonatomic, assign) int readError;              // errno of a failed read
 @property (nonatomic, assign) NSUInteger hexBytesPerLine;   // layout of the current hex dump
 @end
 
@@ -322,31 +435,30 @@ static const NSUInteger kFBMaxHexBytes = 64 * 1024;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSData *data = nil;
         BOOL truncated = NO, notRegular = NO;
+        int readError = 0;
         FBFileIdentity ident = {0};
         if (viaRoot) {
             data = settings_root_read_file(path, kFBMaxTextBytes, &truncated, NULL);
         } else {
-            // Regular files only: a FIFO/device would block or have side effects.
-            ident = filebrowser_identity(path);
+            // Regular files only: a FIFO/device would block or have side
+            // effects. Identity comes from the descriptor actually read, and a
+            // read error leaves no data (never an "empty, editable" file).
             int fd = filebrowser_open_regular(path);
             if (fd < 0) {
                 struct stat st;
                 notRegular = stat(path.fileSystemRepresentation, &st) == 0 && !S_ISREG(st.st_mode);
             } else {
-                NSMutableData *acc = [NSMutableData dataWithLength:kFBMaxTextBytes + 1];
-                size_t got = 0;
-                ssize_t n;
-                while (got < acc.length && (n = read(fd, (uint8_t *)acc.mutableBytes + got, acc.length - got)) > 0)
-                    got += (size_t)n;
+                ident = filebrowser_identity_fd(fd);
+                int rerr = 0;
+                data = filebrowser_read_fd(fd, kFBMaxTextBytes, &truncated, &rerr);
+                if (!data) readError = rerr;
                 close(fd);
-                acc.length = got;
-                truncated = got > kFBMaxTextBytes;
-                data = truncated ? [acc subdataWithRange:NSMakeRange(0, kFBMaxTextBytes)] : acc;
             }
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             self.truncated = truncated;
             self.notRegular = notRegular;
+            self.readError = readError;
             self.identity = ident;
             self.data = data;
             self.modeControl.selectedSegmentIndex = [self bestMode];
@@ -374,7 +486,7 @@ static const NSUInteger kFBMaxHexBytes = 64 * 1024;
 {
     // Root access is read-only (edits would need a root write path we don't have).
     return g_fb_write_enabled && !self.entry.viaRoot && self.data && !self.truncated &&
-           ([self plistText] || [self utf8Text]);
+           self.identity.valid && ([self plistText] || [self utf8Text]);
 }
 
 - (void)updateBarButtons
@@ -398,7 +510,8 @@ static const NSUInteger kFBMaxHexBytes = 64 * 1024;
     } else {
         self.navigationItem.rightBarButtonItems = @[ share ];
     }
-    self.navigationItem.hidesBackButton = self.editingText;
+    self.navigationItem.hidesBackButton = self.editingText || self.saving;
+    for (UIBarButtonItem *item in self.navigationItem.rightBarButtonItems) item.enabled = !self.saving;
 }
 
 - (void)beginEdit
@@ -438,21 +551,9 @@ static const NSUInteger kFBMaxHexBytes = 64 * 1024;
 
 - (void)saveEditOverwriting:(BOOL)force
 {
+    if (self.saving) return;
     if (!filebrowser_write_enabled() || self.entry.viaRoot) {
         fb_alert(self, @"Not Saved", @"Changes are locked. Unlock them in the File Browser first.");
-        return;
-    }
-    // Changed or replaced since it was opened (another app, a retargeted
-    // symlink)? Don't silently overwrite.
-    if (!force && !filebrowser_identity_equal(self.identity, filebrowser_identity(self.entry.path))) {
-        UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"File Changed"
-                                                                    message:@"The file was changed or replaced since you opened it. Overwrite it with your version?"
-                                                             preferredStyle:UIAlertControllerStyleAlert];
-        [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-        [ac addAction:[UIAlertAction actionWithTitle:@"Overwrite" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
-            [self saveEditOverwriting:YES];
-        }]];
-        [self presentViewController:ac animated:YES completion:nil];
         return;
     }
     NSString *text = self.textView.text ?: @"";
@@ -476,17 +577,46 @@ static const NSUInteger kFBMaxHexBytes = 64 * 1024;
     } else {
         out = [text dataUsingEncoding:NSUTF8StringEncoding];
     }
-    NSString *failure = filebrowser_write_in_place(self.entry.path, out, self.data);
-    if (failure) {
-        fb_alert(self, @"Not Saved", failure);
-        return;
-    }
-    self.identity = filebrowser_identity(self.entry.path);
-    self.data = out;
-    self.entry.size = (off_t)out.length;
-    self.entry.modified = [NSDate date];
-    [self endEdit];
-    [self modeChanged];
+    // The file I/O (backup, conflict check, write, restore) runs off-main;
+    // the editor stays frozen until it's done.
+    self.saving = YES;
+    self.textView.editable = NO;
+    [self updateBarButtons];
+    NSString *path = self.entry.path;
+    FBFileIdentity expected = self.identity;
+    NSData *loaded = self.data;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        FBFileIdentity newIdent = {0};
+        NSString *message = nil;
+        FBSaveResult r = filebrowser_save(path, out, expected, loaded, force, &newIdent, &message);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.saving = NO;
+            self.textView.editable = self.editingText;
+            [self updateBarButtons];
+            if (r == FBSaveConflict) {
+                UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"File Changed"
+                                                                            message:@"The file was changed or replaced since you opened it. Overwrite it with your version?"
+                                                                     preferredStyle:UIAlertControllerStyleAlert];
+                [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+                [ac addAction:[UIAlertAction actionWithTitle:@"Overwrite" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
+                    [self saveEditOverwriting:YES];
+                }]];
+                [self presentViewController:ac animated:YES completion:nil];
+                return;
+            }
+            if (r == FBSaveFailed) {
+                if (newIdent.valid) self.identity = newIdent;   // restored: matches disk again
+                fb_alert(self, @"Not Saved", message ?: @"The file could not be written.");
+                return;
+            }
+            self.identity = newIdent;
+            self.data = out;
+            self.entry.size = (off_t)out.length;
+            self.entry.modified = [NSDate date];
+            [self endEdit];
+            [self modeChanged];
+        });
+    });
 }
 
 - (FBViewMode)bestMode
@@ -626,6 +756,8 @@ static NSUInteger fb_hex_line_chars(NSUInteger digits, NSUInteger per)
     if (self.notRegular)
         [s appendString:@"This is a special file (FIFO, device or socket). Its contents are not read, "
                         @"because opening it could block or have side effects.\n"];
+    else if (!self.data && self.readError)
+        [s appendFormat:@"Reading the contents failed: %s.\n", strerror(self.readError)];
     else if (!self.data)
         [s appendString:@"The contents could not be read (permission denied or data protection).\n"];
     return s;
@@ -704,6 +836,10 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
         dispatch_async(dispatch_get_main_queue(), ^{
             self.sharing = NO;
             sender.enabled = YES;
+            if (!self.view.window) {   // left the screen meanwhile
+                [NSFileManager.defaultManager removeItemAtPath:dir error:nil];
+                return;
+            }
             if (failure) {
                 [NSFileManager.defaultManager removeItemAtPath:dir error:nil];
                 fb_alert(self, @"Couldn't Share", failure);
@@ -873,9 +1009,13 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
         fb_alert(self, title, @"Changes are locked.");
         return;
     }
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    dispatch_async(fb_file_queue(), ^{
         NSError *err = nil;
-        BOOL ok = op(&err);
+        // Re-check when the job actually starts: locking while it was queued
+        // cancels it. (A job that has started is left to finish.)
+        BOOL ok = NO;
+        if (g_fb_write_enabled) ok = op(&err);
+        else err = fb_locked_error();
         NSString *message = err.localizedDescription;
         dispatch_async(dispatch_get_main_queue(), ^{
             if (ok) filebrowser_note_filesystem_changed();
@@ -981,9 +1121,13 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
         return;
     }
     NSString *dir = self.path;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    dispatch_async(fb_file_queue(), ^{
         NSMutableArray<NSString *> *failed = [NSMutableArray array];
         for (NSURL *url in urls) {
+            if (!g_fb_write_enabled) {   // locked mid-import: stop before the next item
+                [failed addObject:[NSString stringWithFormat:@"%@: changes were locked", url.lastPathComponent]];
+                continue;
+            }
             NSString *target = fb_unique_path(dir, url.lastPathComponent);
             NSError *err = nil;
             if (![NSFileManager.defaultManager copyItemAtURL:url toURL:[NSURL fileURLWithPath:target] error:&err])
@@ -1003,8 +1147,10 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
 // listing) is dropped instead of overwriting the current state.
 - (void)reload
 {
-    self.loadedOptionsGeneration = g_fb_options_generation;
-    self.loadedFsGeneration = g_fb_fs_generation;
+    // The generations are marked loaded only when this request's result is
+    // accepted (below), not when it starts.
+    NSUInteger optionsGen = g_fb_options_generation;
+    NSUInteger fsGen = g_fb_fs_generation;
     NSUInteger request = ++self.reloadRequest;
     if (!settings_filesystem_access_available()) {
         [self unlockThenReload];
@@ -1021,6 +1167,15 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) me = weakSelf;
             if (!me || request != me.reloadRequest) return;   // superseded
+            // Options (e.g. Root Access) changed while this ran — possibly on
+            // another screen, without a new request here: drop the result;
+            // reload now if visible, otherwise on the next appearance.
+            if (optionsGen != g_fb_options_generation) {
+                if (me.view.window) [me reload];
+                return;
+            }
+            me.loadedOptionsGeneration = optionsGen;
+            me.loadedFsGeneration = fsGen;
             me.loadedViaRoot = viaRoot;
             me.navigationItem.prompt = viaRoot ? [me.path stringByAppendingString:@" · read as root"] : me.path;
             me.entries = entries;
@@ -1259,7 +1414,14 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
         id doc = nil;
         if (viaRoot) {
             // Root-only plist: read it through launchd, view it read-only.
-            if (plistExt) {
+            // Without a plist extension, a binary plist is recognized by
+            // its first 8 bytes.
+            BOOL maybePlist = plistExt;
+            if (!maybePlist) {
+                NSData *head = settings_root_read_file(path, 8, NULL, NULL);
+                maybePlist = head.length == 8 && memcmp(head.bytes, "bplist00", 8) == 0;
+            }
+            if (maybePlist) {
                 BOOL truncated = NO;
                 NSData *data = settings_root_read_file(path, 10 * 1024 * 1024 + 1, &truncated, NULL);
                 if (data && !truncated) doc = [PlistEditorViewController readOnlyDocumentForData:data path:path];
@@ -1269,6 +1431,8 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             tableView.userInteractionEnabled = YES;
+            // The user may have navigated away (Back/tab) meanwhile.
+            if (!self.view.window || self.navigationController.topViewController != self) return;
             UIViewController *vc = doc ? [PlistEditorViewController editorWithDocument:doc] : nil;
             if (!vc) vc = [[FBFileViewController alloc] initWithEntry:e];
             [self.navigationController pushViewController:vc animated:YES];

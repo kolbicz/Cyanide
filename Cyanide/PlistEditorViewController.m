@@ -148,6 +148,7 @@ static id pl_convert(id v, PLType to)
 // Larger files are left to the text/hex viewer: parsing and showing an
 // arbitrarily large plist on the device isn't bounded.
 static const NSUInteger kPLMaxBytes = 10 * 1024 * 1024;
+static const NSUInteger kPLMaxDataEditBytes = 64 * 1024;
 
 @interface PLDocument : NSObject
 @property (nonatomic, copy) NSString *path;
@@ -177,52 +178,39 @@ static const NSUInteger kPLMaxBytes = 10 * 1024 * 1024;
     return YES;
 }
 
-// Regular files up to kPLMaxBytes only.
+// Regular files up to kPLMaxBytes only. Identity comes from the descriptor
+// actually read, and a read error fails the load: an errored partial read
+// must never become an editable document (or the restore source of a save).
+// Any thread.
 - (BOOL)loadWithError:(NSString **)message
 {
     if (self.readOnly && !self.original) { if (message) *message = @"Nothing to reload."; return NO; }
     if (self.readOnly) return [self parseData:self.original error:message];
-    FBFileIdentity ident = filebrowser_identity(self.path);
     int fd = filebrowser_open_regular(self.path);
     if (fd < 0) { if (message) *message = @"The file could not be read."; return NO; }
-    NSMutableData *data = [NSMutableData dataWithLength:kPLMaxBytes + 1];
-    size_t got = 0;
-    ssize_t n;
-    while (got < data.length && (n = read(fd, (uint8_t *)data.mutableBytes + got, data.length - got)) > 0)
-        got += (size_t)n;
+    FBFileIdentity ident = filebrowser_identity_fd(fd);
+    BOOL tooBig = NO;
+    int rerr = 0;
+    NSData *data = filebrowser_read_fd(fd, kPLMaxBytes, &tooBig, &rerr);
     close(fd);
-    if (got > kPLMaxBytes) { if (message) *message = @"The plist is larger than 10 MB."; return NO; }
-    data.length = got;
+    if (!data) {
+        if (message) *message = [NSString stringWithFormat:@"Reading the file failed: %s.", strerror(rerr)];
+        return NO;
+    }
+    if (tooBig) { if (message) *message = @"The plist is larger than 10 MB."; return NO; }
     if (![self parseData:data error:message]) return NO;
     self.identity = ident;
     return YES;
 }
 
-// In place (not atomic), so the file keeps its inode, owner and mode; on a
-// failed write the original bytes are written back. *conflict is set (and
-// nothing written) when the file changed or was replaced since loading,
-// unless `force`.
-- (BOOL)saveForcing:(BOOL)force conflict:(BOOL *)conflict error:(NSString **)message
+// The bytes a save would write (main thread: reads the live model).
+- (NSData *)serializedDataWithError:(NSString **)message
 {
-    if (conflict) *conflict = NO;
-    if (self.readOnly || !filebrowser_write_enabled()) {
-        if (message) *message = @"Changes are locked.";
-        return NO;
-    }
-    if (!force && !filebrowser_identity_equal(self.identity, filebrowser_identity(self.path))) {
-        if (conflict) *conflict = YES;
-        return NO;
-    }
     NSError *err = nil;
     NSPropertyListFormat fmt = self.format == NSPropertyListOpenStepFormat ? NSPropertyListXMLFormat_v1_0 : self.format;
     NSData *data = [NSPropertyListSerialization dataWithPropertyList:self.root format:fmt options:0 error:&err];
-    if (!data) { if (message) *message = err.localizedDescription ?: @"The plist could not be serialized."; return NO; }
-    NSString *failure = filebrowser_write_in_place(self.path, data, self.original);
-    if (failure) { if (message) *message = failure; return NO; }
-    self.original = data;
-    self.identity = filebrowser_identity(self.path);
-    self.dirty = NO;
-    return YES;
+    if (!data && message) *message = err.localizedDescription ?: @"The plist could not be serialized.";
+    return data;
 }
 
 @end
@@ -249,6 +237,10 @@ static const NSUInteger kPLMaxBytes = 10 * 1024 * 1024;
     self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
     PLType t = pl_type_of(self.value);
     UILayoutGuide *g = self.view.safeAreaLayoutGuide;
+    // Large Data: show (and allow editing of) at most 64 KB as hex. Building
+    // and editing a multi-MB hex string on the main thread isn't usable.
+    BOOL bigData = t == PLTypeData && [(NSData *)self.value length] > kPLMaxDataEditBytes;
+    if (bigData) self.editable = NO;
 
     if (t == PLTypeDate) {
         self.datePicker = [UIDatePicker new];
@@ -273,7 +265,11 @@ static const NSUInteger kPLMaxBytes = 10 * 1024 * 1024;
         self.textView.smartQuotesType = UITextSmartQuotesTypeNo;
         self.textView.smartDashesType = UITextSmartDashesTypeNo;
         if (t == PLTypeInteger || t == PLTypeReal) self.textView.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
-        self.textView.text = t == PLTypeData ? pl_hex(self.value, NSUIntegerMax)
+        self.textView.text = t == PLTypeData
+                           ? (bigData ? [NSString stringWithFormat:@"%@\n\n… first %lu of %lu bytes shown; too large to edit here.",
+                                         pl_hex(self.value, kPLMaxDataEditBytes),
+                                         (unsigned long)kPLMaxDataEditBytes, (unsigned long)[(NSData *)self.value length]]
+                                      : pl_hex(self.value, NSUIntegerMax))
                            : t == PLTypeString ? self.value : pl_summary(self.value);
         self.textView.translatesAutoresizingMaskIntoConstraints = NO;
         [self.view addSubview:self.textView];
@@ -344,6 +340,7 @@ static const NSUInteger kPLMaxBytes = 10 * 1024 * 1024;
 @property (nonatomic, assign) BOOL isRoot;
 @property (nonatomic, strong) NSArray *rows;           // dict keys (sorted) or array indexes
 @property (nonatomic, copy) NSString *filter;
+@property (nonatomic, assign) BOOL saving;   // save/revert running off-main
 @end
 
 @implementation PlistEditorViewController
@@ -459,8 +456,20 @@ static const NSUInteger kPLMaxBytes = 10 * 1024 * 1024;
     return self.isDict ? [row description] : [NSString stringWithFormat:@"Item %@", row];
 }
 
+// Every model mutation goes through here (or checks it first): a value
+// editor, menu or switch from before locking must not change the model.
+- (BOOL)ensureWritable
+{
+    if (self.writable && !self.saving) return YES;
+    [self showMessage:@"Changes are locked. Unlock them in the File Browser to edit."
+                title:@"Not Changed"];
+    [self reloadRows];   // e.g. flip a switch back
+    return NO;
+}
+
 - (void)setValue:(id)value forRow:(id)row
 {
+    if (![self ensureWritable]) return;
     if (self.isDict) self.container[row] = value;
     else self.container[[row unsignedIntegerValue]] = value;
     [self markDirty];
@@ -521,30 +530,70 @@ static const NSUInteger kPLMaxBytes = 10 * 1024 * 1024;
 
 - (void)save { [self saveForcing:NO]; }
 
+// Conflict-checked, backed-up save (filebrowser_save) with the file I/O
+// off-main; the editor is frozen meanwhile so the model can't change under it.
 - (void)saveForcing:(BOOL)force
 {
-    NSString *message = nil;
-    BOOL conflict = NO;
-    if (![self.doc saveForcing:force conflict:&conflict error:&message]) {
-        UIAlertController *ac;
-        if (conflict) {
-            ac = [UIAlertController alertControllerWithTitle:@"File Changed"
-                                                     message:@"The file was changed or replaced since you opened it. "
-                                                             @"Overwrite it with your version, or Revert to load the current one?"
-                                              preferredStyle:UIAlertControllerStyleAlert];
-            [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-            [ac addAction:[UIAlertAction actionWithTitle:@"Overwrite" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
-                [self saveForcing:YES];
-            }]];
-        } else {
-            ac = [UIAlertController alertControllerWithTitle:@"Not Saved" message:message
-                                              preferredStyle:UIAlertControllerStyleAlert];
-            [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-        }
-        [self presentViewController:ac animated:YES completion:nil];
+    if (self.saving) return;
+    if (self.doc.readOnly || !filebrowser_write_enabled()) {
+        [self showMessage:@"Changes are locked." title:@"Not Saved"];
         return;
     }
+    NSString *message = nil;
+    NSData *data = [self.doc serializedDataWithError:&message];
+    if (!data) { [self showMessage:message title:@"Not Saved"]; return; }
+    PLDocument *doc = self.doc;
+    NSString *path = doc.path;
+    FBFileIdentity expected = doc.identity;
+    NSData *loaded = doc.original;
+    [self setBusy:YES];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        FBFileIdentity newIdent = {0};
+        NSString *msg = nil;
+        FBSaveResult r = filebrowser_save(path, data, expected, loaded, force, &newIdent, &msg);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self setBusy:NO];
+            if (r == FBSaveOK) {
+                doc.original = data;
+                doc.identity = newIdent;
+                doc.dirty = NO;
+                [self updateBarButtons];
+                return;
+            }
+            if (r == FBSaveConflict) {
+                UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"File Changed"
+                                                                            message:@"The file was changed or replaced since you opened it. "
+                                                                                    @"Overwrite it with your version, or Revert to load the current one?"
+                                                                     preferredStyle:UIAlertControllerStyleAlert];
+                [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+                [ac addAction:[UIAlertAction actionWithTitle:@"Overwrite" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
+                    [self saveForcing:YES];
+                }]];
+                [self presentViewController:ac animated:YES completion:nil];
+                return;
+            }
+            [self showMessage:msg ?: @"The file could not be written." title:@"Not Saved"];
+        });
+    });
+}
+
+- (void)showMessage:(NSString *)message title:(NSString *)title
+{
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:title message:message
+                                                         preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:ac animated:YES completion:nil];
+}
+
+// Freezes the editor while a save/revert runs off-main.
+- (void)setBusy:(BOOL)busy
+{
+    self.saving = busy;
+    self.tableView.userInteractionEnabled = !busy;
     [self updateBarButtons];
+    for (UIBarButtonItem *item in self.navigationItem.rightBarButtonItems) item.enabled = !busy;
+    self.navigationItem.leftBarButtonItem.enabled = !busy;
+    if (busy) self.navigationItem.hidesBackButton = YES;
 }
 
 - (void)confirmRevert
@@ -554,20 +603,35 @@ static const NSUInteger kPLMaxBytes = 10 * 1024 * 1024;
                                                          preferredStyle:UIAlertControllerStyleAlert];
     [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [ac addAction:[UIAlertAction actionWithTitle:@"Discard" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
-        NSString *message = nil;
-        if (![self.doc loadWithError:&message]) {
-            // Keep the edits rather than pretend they were discarded.
-            UIAlertController *err = [UIAlertController alertControllerWithTitle:@"Couldn't Revert"
-                                                                         message:[NSString stringWithFormat:@"%@ Your changes are kept.", message ?: @""]
-                                                                  preferredStyle:UIAlertControllerStyleAlert];
-            [err addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-            [self presentViewController:err animated:YES completion:nil];
-            return;
-        }
-        self.container = self.doc.root;
-        [self.tableView setEditing:NO animated:NO];
-        [self reloadRows];
-        [self updateBarButtons];
+        // Reload into a fresh document off-main; swap it in only if it worked.
+        PLDocument *doc = self.doc;
+        PLDocument *fresh = [PLDocument new];
+        fresh.path = doc.path;
+        fresh.readOnly = doc.readOnly;
+        fresh.original = doc.readOnly ? doc.original : nil;
+        [self setBusy:YES];
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSString *message = nil;
+            BOOL ok = [fresh loadWithError:&message];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self setBusy:NO];
+                if (!ok) {
+                    // Keep the edits rather than pretend they were discarded.
+                    [self showMessage:[NSString stringWithFormat:@"%@ Your changes are kept.", message ?: @""]
+                                title:@"Couldn't Revert"];
+                    return;
+                }
+                doc.root = fresh.root;
+                doc.format = fresh.format;
+                doc.original = fresh.original;
+                doc.identity = fresh.identity;
+                doc.dirty = NO;
+                self.container = doc.root;
+                [self.tableView setEditing:NO animated:NO];
+                [self reloadRows];
+                [self updateBarButtons];
+            });
+        });
     }]];
     [self presentViewController:ac animated:YES completion:nil];
 }
@@ -603,9 +667,11 @@ static const NSUInteger kPLMaxBytes = 10 * 1024 * 1024;
 
 - (void)addItemOfType:(PLType)t
 {
+    if (![self ensureWritable]) return;
     id value = pl_default_value(t);
     if (self.isDict) {
         [self promptForKey:@"New Key" initial:@"" then:^(NSString *key) {
+            if (![self ensureWritable]) return;
             self.container[key] = value;
             [self markDirty];
         }];
@@ -617,6 +683,7 @@ static const NSUInteger kPLMaxBytes = 10 * 1024 * 1024;
 
 - (void)deleteRow:(id)row
 {
+    if (![self ensureWritable]) return;
     if (self.isDict) [(NSMutableDictionary *)self.container removeObjectForKey:row];
     else [(NSMutableArray *)self.container removeObjectAtIndex:[row unsignedIntegerValue]];
     [self markDirty];
@@ -624,9 +691,9 @@ static const NSUInteger kPLMaxBytes = 10 * 1024 * 1024;
 
 - (void)renameRow:(id)row
 {
-    if (!self.isDict) return;
+    if (!self.isDict || ![self ensureWritable]) return;
     [self promptForKey:@"Rename Key" initial:[row description] then:^(NSString *key) {
-        if ([key isEqualToString:[row description]]) return;
+        if ([key isEqualToString:[row description]] || ![self ensureWritable]) return;
         id v = self.container[row];
         [(NSMutableDictionary *)self.container removeObjectForKey:row];
         self.container[key] = v;
@@ -800,6 +867,10 @@ static const NSUInteger kPLMaxBytes = 10 * 1024 * 1024;
 
 - (void)tableView:(UITableView *)tableView moveRowAtIndexPath:(NSIndexPath *)from toIndexPath:(NSIndexPath *)to
 {
+    if (!self.writable) {   // the table already moved the row: put it back
+        dispatch_async(dispatch_get_main_queue(), ^{ [self reloadRows]; });
+        return;
+    }
     NSMutableArray *arr = self.container;
     id item = arr[from.row];
     [arr removeObjectAtIndex:from.row];

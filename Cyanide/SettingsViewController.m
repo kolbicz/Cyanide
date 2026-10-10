@@ -10689,7 +10689,9 @@ static NSString *pm_root_errno_text(RemoteCallSession *session, const char *what
 {
     uint64_t errPtr = [session doRemoteCallStableWithTimeout:100 functionName:"__error"
                                                           x0:0 x1:0 x2:0 x3:0 x4:0 x5:0 x6:0 x7:0];
-    int err = errPtr ? (int)[session remoteRead64:errPtr] : 0;
+    // errno is a 4-byte int: copy exactly that, never 8 bytes.
+    int err = 0;
+    if (errPtr && ![session remoteRead:errPtr to:&err size:sizeof(err)]) err = 0;
     return err > 0 ? [NSString stringWithFormat:@"%s: %s", what, strerror(err)]
                    : [NSString stringWithFormat:@"%s failed", what];
 }
@@ -10701,6 +10703,13 @@ static BOOL pm_root_should_stop(void)
 {
     return g_app_in_background || excport_gate_blocked() || remote_call_stop_requested();
 }
+
+// Set when any call of the current root operation (cleanup included) did not
+// complete. pm_with_launchd_session then tears the session down rather than
+// keeping it warm: a lost return doesn't tell whether close/free happened,
+// so the session's state is uncertain and must not be reused or retried
+// blindly. Only touched under pm_kill_lock.
+static BOOL g_pm_root_session_suspect = NO;
 
 // Runs `block` with the warm launchd session held, reusing the kill path's
 // lock, guard, settle-window wait and idle-disarm scheduling. Off-main only.
@@ -10731,12 +10740,15 @@ static BOOL pm_with_launchd_session(const char *what, NSString **errorOut,
     } else {
         int rc = pm_launchd_session_ensure_locked(what);
         if (rc == 0 && gPMKillSession) {
+            g_pm_root_session_suspect = NO;
             block(gPMKillSession);
             ran = YES;
             if (kexploit_krw_session_active() && !kexploit_krw_sockets_detached())
                 kexploit_krw_park_filter_safe();
-            if ([gPMKillSession isAnomalous]) {
-                printf("[FILES] root: launchd session ANOMALOUS — tearing it down\n");
+            if ([gPMKillSession isAnomalous] || g_pm_root_session_suspect) {
+                printf("[FILES] root: launchd session %s — tearing it down\n",
+                       g_pm_root_session_suspect ? "had a call that did not complete" : "ANOMALOUS");
+                g_pm_root_session_suspect = NO;
                 if (kexploit_krw_ready()) [gPMKillSession destroyRemoteCall];
                 else                      [gPMKillSession abandonRemoteCall];
                 gPMKillSession = nil;
@@ -10788,7 +10800,10 @@ static uint64_t pm_root_call(RemoteCallSession *s, int timeoutMS, const char *fn
     uint64_t r = [s doRemoteCallStableWithTimeout:timeoutMS functionName:fn
                                                x0:a0 x1:a1 x2:a2 x3:0 x4:0 x5:0 x6:0 x7:0];
     *ok = remote_call_last_call_ok();
-    if (!*ok) printf("[FILES] root: launchd call %s did not complete (transport)\n", fn);
+    if (!*ok) {
+        g_pm_root_session_suspect = YES;
+        printf("[FILES] root: launchd call %s did not complete (transport)\n", fn);
+    }
     return r;
 }
 
@@ -10811,13 +10826,18 @@ static int pm_root_stat(RemoteCallSession *s, uint64_t buf, NSString *path,
     if (S_ISLNK(lst->st_mode)) {
         rc = (int)pm_root_call(s, 1000, "stat", buf, statBuf, 0, &ok);
         if (!ok) return -1;
-        if (rc == 0) *haveSt = [s remoteRead:statBuf to:st size:sizeof(*st)];
+        if (rc == 0) {
+            if (![s remoteRead:statBuf to:st size:sizeof(*st)]) return -1;
+            *haveSt = YES;
+        }
         uint64_t linkBuf = buf + PM_ROOT_LINK_OFF;
         int64_t n = (int64_t)pm_root_call(s, 1000, "readlink", buf, linkBuf, PM_ROOT_LINK_CAP - 1, &ok);
         if (!ok) return -1;
         if (n > 0 && n < PM_ROOT_LINK_CAP && link) {
             char tmp[PM_ROOT_LINK_CAP];
-            if ([s remoteRead:linkBuf to:tmp size:(uint64_t)n]) { tmp[n] = 0; *link = @(tmp); }
+            if (![s remoteRead:linkBuf to:tmp size:(uint64_t)n]) return -1;
+            tmp[n] = 0;
+            *link = @(tmp);
         }
     }
     return 1;
@@ -10870,17 +10890,33 @@ NSArray<NSDictionary *> *settings_root_list_directory(NSString *path, BOOL *inco
                 NSMutableArray<NSString *> *names = [NSMutableArray array];
                 BOOL stopped = NO, failed = NO;
                 // Clear errno so a readdir error is distinguishable from EOF.
+                // errno is a 4-byte int in launchd's thread storage: copy
+                // exactly sizeof(int), never 8 bytes (that would overwrite
+                // the neighbouring thread-local data).
                 uint64_t errPtr = pm_root_call(s, 100, "__error", 0, 0, 0, &ok);
-                if (!ok) failed = YES;
+                if (!ok || !errPtr) failed = YES;
+                const int zeroErrno = 0;
                 while (!failed) {
                     if (pm_root_should_stop()) { stopped = YES; break; }
-                    if (names.count >= kPMRootMaxEntries) { incomplete = YES; break; }
-                    if (errPtr) [s remoteWrite64:errPtr value:0];
+                    if (names.count >= kPMRootMaxEntries) {
+                        // At the cap: one more readdir tells "more left" from
+                        // "exactly the cap" (NULL with errno 0 = complete).
+                        if (![s remoteWrite:errPtr from:&zeroErrno size:sizeof(zeroErrno)]) { failed = YES; break; }
+                        uint64_t more = pm_root_call(s, 1000, "readdir", dir, 0, 0, &ok);
+                        if (!ok) { failed = YES; break; }
+                        int moreErrno = 0;
+                        if (!more && ![s remoteRead:errPtr to:&moreErrno size:sizeof(moreErrno)]) { failed = YES; break; }
+                        incomplete = (more != 0) || moreErrno != 0;
+                        break;
+                    }
+                    if (![s remoteWrite:errPtr from:&zeroErrno size:sizeof(zeroErrno)]) { failed = YES; break; }
                     uint64_t ent = pm_root_call(s, 1000, "readdir", dir, 0, 0, &ok);
                     if (!ok) { failed = YES; break; }
                     if (!ent) {
-                        // NULL is EOF only if errno stayed 0.
-                        if (errPtr && (int)[s remoteRead64:errPtr] != 0) incomplete = YES;
+                        // NULL is EOF only if errno stayed 0 (and we could read it).
+                        int remoteErrno = 0;
+                        if (![s remoteRead:errPtr to:&remoteErrno size:sizeof(remoteErrno)]) failed = YES;
+                        else if (remoteErrno != 0) incomplete = YES;
                         break;
                     }
                     uint8_t head[PM_DIRENT_NAME_OFF];
@@ -11147,7 +11183,8 @@ NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *trunc
                                                            functionName:"__error"
                                                                      x0:0 x1:0 x2:0 x3:0
                                                                      x4:0 x5:0 x6:0 x7:0];
-        int remoteErr = errPtr ? (int)[gPMKillSession remoteRead64:errPtr] : -1;
+        int remoteErr = -1;   // errno is 4 bytes: exact-width read
+        if (errPtr && ![gPMKillSession remoteRead:errPtr to:&remoteErr size:sizeof(remoteErr)]) remoteErr = -1;
         printf("[PROCMGR] fastkill: kill rc=-1, remote errno=%d (%s)\n",
                remoteErr, remoteErr == ESRCH ? "ESRCH — already gone" : "other");
         if (remoteErr == ESRCH) {
