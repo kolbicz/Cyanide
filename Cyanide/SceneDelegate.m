@@ -17,6 +17,10 @@
 // A shortcut URL waiting for the scene to become active: kernel access is
 // gated off until then (excport gate), so actions can't run any earlier.
 @property (nonatomic, strong) NSURL *pendingActionURL;
+// Identifies the current shortcut run: a delayed return-to-Home from an
+// earlier run must not act on a later one.
+@property (nonatomic, assign) NSUInteger actionGeneration;
+@property (nonatomic, assign) BOOL actionInProgress;
 
 @end
 
@@ -56,30 +60,97 @@
     }
 }
 
-// cyanide://location-services/toggle | /on | /off  (also under the
-// com.zeroxjf.ios-cyanide1 scheme). Opens the activity log and runs only that
-// action; the log shows progress and ends in Complete/Failed with the reason.
-// On success the app returns to the Home Screen shortly after, on failure it
-// stays on the log.
+// Strictly parses cyanide://location-services/<toggle|on|off>[?keepInSwitcher=<1|0>]
+// (also under the com.zeroxjf.ios-cyanide1 scheme). Anything else — another
+// scheme, extra path parts, an unknown action or an unclear keepInSwitcher
+// value — is rejected, never treated as a toggle. Returns NO with *error set.
+static BOOL scene_parse_location_url(NSURL *url, int *desiredOut, BOOL *keepCardOut, NSString **error)
+{
+    NSURLComponents *c = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    NSString *scheme = c.scheme.lowercaseString;
+    if (!c || !([scheme isEqualToString:@"cyanide"] || [scheme isEqualToString:@"com.zeroxjf.ios-cyanide1"])) {
+        *error = @"Unsupported link.";
+        return NO;
+    }
+    NSString *path = c.path ?: @"";
+    if ([path hasSuffix:@"/"] && path.length > 1) path = [path substringToIndex:path.length - 1];
+    NSDictionary<NSString *, NSNumber *> *actions = @{ @"/toggle": @-1, @"/on": @1, @"/off": @0 };
+    NSNumber *action = actions[path.lowercaseString];
+    if (!action) {
+        *error = [NSString stringWithFormat:@"Unknown action \"%@\". Use /toggle, /on or /off.", path];
+        return NO;
+    }
+    BOOL keep = NO;
+    for (NSURLQueryItem *item in c.queryItems) {
+        if (![item.name isEqualToString:@"keepInSwitcher"]) {
+            *error = [NSString stringWithFormat:@"Unknown option \"%@\".", item.name];
+            return NO;
+        }
+        NSString *v = item.value.lowercaseString ?: @"";
+        if ([v isEqualToString:@"1"] || [v isEqualToString:@"true"] || [v isEqualToString:@"yes"]) keep = YES;
+        else if ([v isEqualToString:@"0"] || [v isEqualToString:@"false"] || [v isEqualToString:@"no"]) keep = NO;
+        else {
+            *error = [NSString stringWithFormat:@"keepInSwitcher must be 1 or 0, not \"%@\".", item.value ?: @""];
+            return NO;
+        }
+    }
+    *desiredOut = action.intValue;
+    *keepCardOut = keep;
+    return YES;
+}
+
+// cyanide://location-services/toggle | /on | /off. Opens the activity log
+// and runs only that action; the log shows progress and ends in
+// Complete/Failed with the reason. On success the app returns to the Home
+// Screen shortly after (and SpringBoard removes its switcher card unless
+// ?keepInSwitcher=1); on failure it stays on the log.
 - (void)handleActionURL:(NSURL *)url {
-    if (![url.host isEqualToString:@"location-services"]) {
+    if (![url.host.lowercaseString isEqualToString:@"location-services"]) {
         NSLog(@"[URL] unhandled %@", url);
         return;
     }
-    NSString *verb = url.path.lastPathComponent.lowercaseString;
-    int desired = [verb isEqualToString:@"on"] ? 1 : [verb isEqualToString:@"off"] ? 0 : -1;
+    int desired = -1;
+    BOOL keepCard = NO;
+    NSString *parseError = nil;
+    if (!scene_parse_location_url(url, &desired, &keepCard, &parseError)) {
+        UIViewController *top = self.window.rootViewController;
+        while (top.presentedViewController) top = top.presentedViewController;
+        UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Location Services Link"
+                                                                    message:parseError
+                                                             preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [top presentViewController:ac animated:YES completion:nil];
+        return;
+    }
+    NSUInteger generation = ++self.actionGeneration;
+    self.actionInProgress = YES;
+    // When the result actually appears on screen (main thread): the
+    // readability pause is measured from here, not from when the worker
+    // queued it.
+    __block uint64_t resultShownNs = 0;
+    __block id observer = [NSNotificationCenter.defaultCenter
+        addObserverForName:kSettingsActionsDidCompleteNotification object:nil queue:NSOperationQueue.mainQueue
+                usingBlock:^(NSNotification *note) {
+        if (!resultShownNs) resultShownNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    }];
+    __weak typeof(self) weakSelf = self;
     [self presentActivityLogThen:^{
-        // Leave no switcher card behind unless ?keepInSwitcher=1 is given.
-        BOOL keepCard = [url.query containsString:@"keepInSwitcher=1"];
         settings_location_services_set_async(desired, !keepCard, ^(BOOL ok, NSString *message,
-                                                       NSTimeInterval resultAge) {
+                                                                    NSTimeInterval resultAge) {
+            [NSNotificationCenter.defaultCenter removeObserver:observer];
+            typeof(self) me = weakSelf;
+            if (!me || generation != me.actionGeneration) return;   // a newer run owns the screen
+            me.actionInProgress = NO;
             if (!ok) return;
-            // The result has been on screen for resultAge already (the
-            // SpringBoard teardown ran meanwhile); leave it up for at least
-            // 0.75 s in total, long enough to read the result line.
-            NSTimeInterval wait = MAX(0.0, 0.75 - resultAge);
+            double shownFor = resultShownNs
+                ? (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - resultShownNs) / 1e9 : 0;
+            NSTimeInterval wait = MAX(0.0, 0.75 - shownFor);
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
+                typeof(self) me2 = weakSelf;
+                // Only for this run, and only while still in front.
+                if (!me2 || generation != me2.actionGeneration) return;
+                if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
                 // Private but long-stable: what the Home gesture does.
                 SEL suspend = NSSelectorFromString(@"suspend");
                 if ([UIApplication.sharedApplication respondsToSelector:suspend]) {
@@ -150,7 +221,8 @@
     }
     // Runs every foreground; UpdateChecker enforces a per-process + 24-hour
     // persisted throttle so the API isn't hammered.
-    [self runUpdateCheck];
+    // A shortcut run owns the screen: no update prompt over its log.
+    if (!self.actionInProgress && !self.pendingActionURL) [self runUpdateCheck];
 }
 
 

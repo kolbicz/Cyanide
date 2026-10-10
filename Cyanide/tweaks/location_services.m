@@ -6,6 +6,7 @@
 #import "location_services.h"
 #import "remote_objc.h"
 #import "../TaskRop/RemoteCall.h"
+#import "../TaskRop/Exception.h"   // excport_gate_blocked: leaving the foreground
 #import "../LogTextView.h"   // mirror printf into the chain log
 
 #import <CoreLocation/CoreLocation.h>
@@ -21,10 +22,14 @@ int locationservices_enabled_local(void)
 
 bool locationservices_wait_for_state(bool enabled, int timeoutMS)
 {
-    for (int waited = 0; ; waited += 100) {
+    uint64_t deadline = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) + (uint64_t)timeoutMS * 1000000ULL;
+    for (;;) {
         if (locationservices_enabled_local() == (enabled ? 1 : 0)) return true;
-        if (waited >= timeoutMS) return false;
-        usleep(100000);
+        if (excport_gate_blocked()) return false;   // leaving the foreground
+        uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        if (now >= deadline) return false;
+        uint64_t left = deadline - now;
+        usleep((useconds_t)MIN(left / 1000ULL, 100000ULL));
     }
 }
 
@@ -32,7 +37,7 @@ bool locationservices_wait_for_state(bool enabled, int timeoutMS)
 // current RemoteCall session targets. locationd checks the caller's
 // entitlements; SpringBoard and Preferences both hold the locationd ones the
 // Settings switch needs.
-static bool locationservices_call_in_current(bool enabled, const char *host)
+static LSCallResult locationservices_call_in_current(bool enabled, const char *host)
 {
     uint64_t cls = r_class("CLLocationManager");
     if (!r_is_objc_ptr(cls)) {
@@ -45,20 +50,21 @@ static bool locationservices_call_in_current(bool enabled, const char *host)
     }
     if (!r_is_objc_ptr(cls)) {
         printf("[LOCSVC] CLLocationManager unavailable in %s\n", host);
-        return false;
+        return LSCallNotSent;
     }
     // Class object: respondsToSelector: answers for class methods.
     if (!r_responds(cls, "setLocationServicesEnabled:")) {
         printf("[LOCSVC] +setLocationServicesEnabled: missing in %s\n", host);
-        return false;
+        return LSCallNotSent;
     }
     r_msg2(cls, "setLocationServicesEnabled:", enabled ? 1 : 0, 0, 0, 0);
-    bool ok = r_last_call_ok();
-    printf("[LOCSVC] %s: setLocationServicesEnabled:%d sent=%d\n", host, enabled, ok);
-    return ok;
+    LSCallResult r = r_last_call_ok() ? LSCallSent : LSCallUncertain;
+    printf("[LOCSVC] %s: setLocationServicesEnabled:%d %s\n", host, enabled,
+           r == LSCallSent ? "sent" : "UNCERTAIN (result lost)");
+    return r;
 }
 
-bool locationservices_set_enabled_in_session(bool enabled)
+LSCallResult locationservices_set_enabled_in_session(bool enabled)
 {
     return locationservices_call_in_current(enabled, "SpringBoard");
 }
@@ -69,43 +75,21 @@ static bool locationservices_ios_below_18(void)
     return major > 0 && major < 18;
 }
 
-// Same launch path as the Location Simulator uses for Maps: a short-lived
-// SpringBoard session calls SBSLaunchApplicationWithIdentifier.
-static bool locationservices_launch_preferences(void)
+LSCallResult locationservices_set_enabled_via_running_preferences(bool enabled)
 {
-    if (init_remote_call("SpringBoard", false) != 0) {
-        printf("[LOCSVC] init_remote_call(SpringBoard) failed while launching Preferences\n");
-        return false;
-    }
-    bool ok = false;
-    uint64_t bid = r_nsstr_retained("com.apple.Preferences");
-    if (r_is_objc_ptr(bid)) {
-        r_dlsym_call(R_TIMEOUT, "SBSLaunchApplicationWithIdentifier", bid, 0, 0, 0, 0, 0, 0, 0);
-        ok = r_last_call_ok();
-        r_release(bid);
-    }
-    destroy_remote_call();
-    usleep(locationservices_ios_below_18() ? 3000000 : 1500000);
-    return ok;
-}
-
-bool locationservices_set_enabled_via_preferences(bool enabled)
-{
-    if (!locationservices_launch_preferences())
-        printf("[LOCSVC] Preferences launch did not report success; trying it anyway\n");
-
-    // iOS 17 apps need the original-thread path (as Maps does for the
-    // Location Simulator).
+    // Short first-exception budget: a running Preferences traps quickly; a
+    // missing one fails at once, a suspended one would never trap.
+    const int kFirstTrapMS = 3000;
     int rc = locationservices_ios_below_18()
-        ? init_remote_call_original_thread_only_with_first_exception_timeout("Preferences", false, 120000)
-        : init_remote_call("Preferences", false);
+        ? init_remote_call_original_thread_only_with_first_exception_timeout("Preferences", false, kFirstTrapMS)
+        : init_remote_call_with_first_exception_timeout("Preferences", false, kFirstTrapMS);
     if (rc != 0) {
-        printf("[LOCSVC] init_remote_call(Preferences) failed (%s pid=%u)\n",
+        printf("[LOCSVC] Preferences not usable (%s pid=%u) — not launching it\n",
                remote_call_init_failure_description(remote_call_last_init_failure()),
                remote_call_last_init_failure_pid());
-        return false;
+        return LSCallNotSent;
     }
-    bool ok = locationservices_call_in_current(enabled, "Preferences");
+    LSCallResult r = locationservices_call_in_current(enabled, "Preferences");
     destroy_remote_call();
-    return ok;
+    return r;
 }

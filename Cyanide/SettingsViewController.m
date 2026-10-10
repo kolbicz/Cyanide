@@ -6342,20 +6342,27 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                                           void (^completion)(BOOL ok, NSString *message,
                                                              NSTimeInterval resultAge))
 {
-    if (!settings_device_supported()) {
-        NSString *message = settings_unsupported_message();
+    // Every exit — including the early ones — posts the actions-complete
+    // result, so an activity log opened for this request always finishes.
+    void (^finishEarly)(NSString *) = ^(NSString *message) {
+        log_user("[WARN] %s\n", message.UTF8String);
+        settings_post_actions_complete_async(NO, message);
         if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, message, 0); });
+    };
+    if (!settings_device_supported()) {
+        finishEarly(settings_unsupported_message());
         return;
     }
-    BOOL enable = desired < 0 ? (locationservices_enabled_local() != 1) : (desired != 0);
     dispatch_async(dispatch_get_global_queue(0, 0), ^{
         if (!settings_try_claim_actions_lock("Location Services",
                                              "[LOCSVC] Another action is already running.")) {
-            if (completion) dispatch_async(dispatch_get_main_queue(), ^{
-                completion(NO, @"Another action is already running.", 0);
-            });
+            finishEarly(@"Another action is already running. Try again when it has finished.");
             return;
         }
+        // The target is decided now, under the action lock, from one fresh
+        // reading — not when the request was made (the state may have
+        // changed since, and a toggle must flip what is actually there).
+        BOOL enable = desired < 0 ? (locationservices_enabled_local() != 1) : (desired != 0);
         __block BOOL ok = NO;
         __block NSString *message = nil;
         __block uint64_t resultPostedNs = 0;
@@ -6364,6 +6371,9 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
             resultPostedNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
             if (message) log_user("%s %s\n", ok ? "[OK]" : "[WARN]", message.UTF8String);
             settings_post_actions_complete_async(ok, message ?: @"");
+        };
+        NSString *(^doneText)(void) = ^NSString *{
+            return [NSString stringWithFormat:@"Location Services %@.", enable ? @"on" : @"off"];
         };
         @try {
             if (locationservices_enabled_local() == (enable ? 1 : 0)) {
@@ -6378,42 +6388,68 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
             }
             @synchronized (settings_rc_lock()) {
                 if (settings_ensure_springboard_remote_call_locked()) {
-                    locationservices_set_enabled_in_session(enable);
-                    ok = locationservices_wait_for_state(enable, 3000);
+                    LSCallResult sent = locationservices_set_enabled_in_session(enable);
+                    // Not sent: nothing can change, don't wait for it.
+                    // Sent/uncertain: the readback decides.
+                    ok = sent != LSCallNotSent && locationservices_wait_for_state(enable, 3000);
+                    uint64_t removalScheduledNs = 0;
+                    const double kRemovalDelay = 3.0;
                     if (ok) {
                         // Report now; the teardown below runs while the
                         // result is already on screen.
-                        message = [NSString stringWithFormat:@"Location Services %@.", enable ? @"on" : @"off"];
+                        message = doneText();
                         postResult();
-                        // Fires inside SpringBoard ~2 s from now: after the
-                        // teardown below and the caller's return to Home.
-                        if (removeFromSwitcher)
-                            appswitcher_schedule_remove_in_session(NSBundle.mainBundle.bundleIdentifier.UTF8String, 2.0);
+                        // SpringBoard deletes Cyanide's card kRemovalDelay
+                        // from now, on its own main run loop. The teardown
+                        // below normally takes ~0.5 s and the return to
+                        // Home follows right after it.
+                        if (removeFromSwitcher &&
+                            appswitcher_schedule_remove_in_session(NSBundle.mainBundle.bundleIdentifier.UTF8String,
+                                                                   kRemovalDelay))
+                            removalScheduledNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
                     }
                     if (!settings_has_persistent_springboard_remote_call_user() && g_springboard_rc_ready) {
                         settings_destroy_springboard_remote_call_locked_internal_ex("location services toggle",
                                                                                    YES, YES);
+                    }
+                    if (removalScheduledNs) {
+                        double elapsed = (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - removalScheduledNs) / 1e9;
+                        if (elapsed > kRemovalDelay - 1.0)
+                            log_user("[SWITCHER] WARNING: SpringBoard teardown took %.1fs — close to the "
+                                     "%.0fs card removal.\n", elapsed, kRemovalDelay);
                     }
                 } else {
                     log_user("[LOCSVC] SpringBoard not reachable.\n");
                 }
             }
             if (!ok) {
-                if (settings_any_registered_live_loop_running()) {
-                    message = @"SpringBoard didn't change it, and the Preferences fallback needs the "
-                              @"SpringBoard channel closed while live tweaks are running. Stop them and try again.";
+                // The request may have taken effect during the teardown.
+                if (locationservices_enabled_local() == (enable ? 1 : 0)) {
+                    ok = YES;
+                    message = doneText();
                     return;
                 }
-                log_user("[LOCSVC] No change from SpringBoard; retrying from Preferences…\n");
+                if (settings_any_registered_live_loop_running() || settings_has_persistent_springboard_remote_call_user()) {
+                    message = @"SpringBoard didn't change it, and the Preferences fallback would need the "
+                              @"SpringBoard channel closed while live tweaks use it. Stop them and try again.";
+                    return;
+                }
+                // Fallback: Preferences, only if it's already running (see
+                // locationservices_set_enabled_via_running_preferences).
+                log_user("[LOCSVC] No change from SpringBoard; trying a running Preferences…\n");
+                LSCallResult sent;
                 @synchronized (settings_rc_lock()) {
                     settings_destroy_springboard_remote_call_locked_internal("switching to Preferences", NO);
-                    locationservices_set_enabled_via_preferences(enable);
+                    sent = locationservices_set_enabled_via_running_preferences(enable);
                 }
-                ok = locationservices_wait_for_state(enable, 3000);
+                ok = sent != LSCallNotSent && locationservices_wait_for_state(enable, 3000);
+                if (!ok && sent == LSCallNotSent) {
+                    message = @"Location Services did not change. Opening the Settings app once and trying "
+                              @"again lets Cyanide use it as a fallback.";
+                    return;
+                }
             }
-            message = ok
-                ? [NSString stringWithFormat:@"Location Services %@.", enable ? @"on" : @"off"]
-                : @"Location Services did not change. Check the log.";
+            message = ok ? doneText() : @"Location Services did not change. Check the log.";
         } @finally {
             settings_release_actions_lock();
             postResult();   // no-op if already reported
