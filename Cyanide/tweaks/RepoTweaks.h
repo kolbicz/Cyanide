@@ -42,7 +42,14 @@ void repotweaks_cancel_tweak(NSString *repoURL, NSString *tweakId);
 
 bool repotweaks_stop_in_session(void);
 
-void repotweaks_refresh_all_sources(void (^completion)(void));
+typedef NS_ENUM(NSInteger, RepoTweaksRefreshStatus) {
+    RepoTweaksRefreshStatusFailure = 0,
+    RepoTweaksRefreshStatusSuccess = 1,
+    RepoTweaksRefreshStatusPartial = 2,
+};
+
+void repotweaks_refresh_all_sources(void (^completion)(RepoTweaksRefreshStatus status,
+                                                       NSArray<NSString *> *messages));
 NSUInteger repotweaks_available_update_count(void);
 NSString *repotweaks_installed_version_key(NSString *repoURL, NSString *tweakId);
 NSTimeInterval repotweaks_seen_timestamp(NSString *repoURL, NSString *tweakId);

@@ -405,7 +405,7 @@ static UIColor *category_color(NSString *cat)
     [self.refreshControl endRefreshing];
     MainTabBarController *tab = (MainTabBarController *)self.tabBarController;
     if ([tab respondsToSelector:@selector(showRefreshBanner)]) [tab showRefreshBanner];
-    repotweaks_refresh_all_sources(nil);
+    [self refreshAllSourcesReportingErrors];
 }
 
 - (void)sourcesDidRefresh:(NSNotification *)note
@@ -539,7 +539,11 @@ static UIColor *category_color(NSString *cat)
         NSString *url = alert.textFields.firstObject.text ?: @"";
         repotweaks_add_repo(url, ^(BOOL success, NSString *message) {
             [self reloadSources];
-            [[NSNotificationCenter defaultCenter] postNotificationName:RepoTweaksDidRefreshNotification object:nil];
+            [[NSNotificationCenter defaultCenter]
+                postNotificationName:RepoTweaksDidRefreshNotification
+                              object:nil
+                            userInfo:@{ @"status": @(success ? RepoTweaksRefreshStatusSuccess
+                                                             : RepoTweaksRefreshStatusFailure) }];
             if (!success) [self presentError:message ?: @"Could not refresh that source."];
         });
     }]];
@@ -554,21 +558,18 @@ static UIColor *category_color(NSString *cat)
 
     MainTabBarController *tab = (MainTabBarController *)self.tabBarController;
     if ([tab respondsToSelector:@selector(showRefreshBanner)]) [tab showRefreshBanner];
+    [self refreshAllSourcesReportingErrors];
+}
 
-    dispatch_group_t group = dispatch_group_create();
-    __block NSString *firstError = nil;
-    for (NSString *url in urls) {
-        dispatch_group_enter(group);
-        repotweaks_refresh_repo(url, ^(BOOL success, NSString *message) {
-            if (!success && firstError.length == 0) firstError = message;
-            dispatch_group_leave(group);
-        });
-    }
-
-    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-        [self reloadSources];
-        [[NSNotificationCenter defaultCenter] postNotificationName:RepoTweaksDidRefreshNotification object:nil];
-        if (firstError.length > 0) [self presentError:firstError];
+// Only a refresh the user asked for reports per-source errors; the
+// background refresh at launch shows the banner and nothing else.
+- (void)refreshAllSourcesReportingErrors
+{
+    __weak typeof(self) weakSelf = self;
+    repotweaks_refresh_all_sources(^(RepoTweaksRefreshStatus status, NSArray<NSString *> *messages) {
+        if (status != RepoTweaksRefreshStatusSuccess && messages.count > 0) {
+            [weakSelf presentError:[messages componentsJoinedByString:@"\n"]];
+        }
     });
 }
 

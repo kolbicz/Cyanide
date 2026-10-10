@@ -230,7 +230,15 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
 - (void)sourcesDidRefresh:(NSNotification *)note
 {
     [self updateSourcesBadge];
-    [self showRefreshSuccessThenHide];
+    // A post without a status (none should remain) is not a failure.
+    NSNumber *statusValue = note.userInfo[@"status"];
+    RepoTweaksRefreshStatus status = statusValue ? (RepoTweaksRefreshStatus)statusValue.integerValue
+                                                 : RepoTweaksRefreshStatusSuccess;
+    if (status == RepoTweaksRefreshStatusSuccess) {
+        [self showRefreshSuccessThenHide];
+    } else {
+        [self showRefreshFailure:status == RepoTweaksRefreshStatusPartial];
+    }
 }
 
 - (void)repoSourcesEnabledDidChange:(NSNotification *)note
@@ -285,10 +293,15 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
     if (last > 0 && (now - last) < kSourcesRefreshInterval) return;
 
     [self showRefreshBanner];
-    repotweaks_refresh_all_sources(^{
-        NSUserDefaults *dd = [NSUserDefaults standardUserDefaults];
-        [dd setDouble:[[NSDate date] timeIntervalSince1970] forKey:kSourcesLastRefreshKey];
-        [dd synchronize];
+    repotweaks_refresh_all_sources(^(RepoTweaksRefreshStatus status, NSArray<NSString *> *messages) {
+        (void)messages;
+        // A partial refresh still counts: retrying at every launch would only
+        // repeat the failure banner for a source that is down for good.
+        if (status != RepoTweaksRefreshStatusFailure) {
+            NSUserDefaults *dd = [NSUserDefaults standardUserDefaults];
+            [dd setDouble:[[NSDate date] timeIntervalSince1970] forKey:kSourcesLastRefreshKey];
+            [dd synchronize];
+        }
     });
 }
 
@@ -374,6 +387,32 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
     }];
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (self.refreshBanner != banner) return;
+        self.refreshBanner = nil;
+        [UIView animateWithDuration:0.3 animations:^{
+            banner.alpha = 0.0;
+        } completion:^(BOOL finished) {
+            [banner removeFromSuperview];
+        }];
+    });
+}
+
+- (void)showRefreshFailure:(BOOL)partial
+{
+    UIView *banner = self.refreshBanner;
+    if (!banner) return;
+    UIActivityIndicatorView *spinner = [banner viewWithTag:100];
+    UIImageView *checkmark = (UIImageView *)[banner viewWithTag:101];
+    UILabel *label = (UILabel *)[banner viewWithTag:102];
+    [spinner stopAnimating];
+    spinner.hidden = YES;
+    checkmark.hidden = YES;
+    banner.backgroundColor = [UIColor colorWithRed:partial ? 0.85 : 0.75
+                                               green:partial ? 0.58 : 0.20
+                                                blue:0.10
+                                               alpha:0.95];
+    label.text = partial ? @"Some sources could not be refreshed" : @"Source refresh failed";
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (self.refreshBanner != banner) return;
         self.refreshBanner = nil;
         [UIView animateWithDuration:0.3 animations:^{

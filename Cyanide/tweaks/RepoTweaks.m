@@ -1333,28 +1333,58 @@ NSUInteger repotweaks_available_update_count(void) {
     return count;
 }
 
-void repotweaks_refresh_all_sources(void (^completion)(void)) {
+void repotweaks_refresh_all_sources(void (^completion)(RepoTweaksRefreshStatus status,
+                                                       NSArray<NSString *> *messages)) {
+    void (^finish)(RepoTweaksRefreshStatus, NSArray<NSString *> *) = ^(RepoTweaksRefreshStatus status,
+                                                                        NSArray<NSString *> *messages) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSDictionary *userInfo = @{
+                @"status": @(status),
+                @"messages": messages ?: @[],
+            };
+            [[NSNotificationCenter defaultCenter] postNotificationName:RepoTweaksDidRefreshNotification
+                                                                  object:nil
+                                                                userInfo:userInfo];
+            if (completion) completion(status, messages ?: @[]);
+        });
+    };
     if (!repotweaks_sources_enabled()) {
-        if (completion) completion();
+        finish(RepoTweaksRefreshStatusFailure, @[@"Repo sources are turned off."]);
         return;
     }
     repotweaks_seed_default_repos();
     NSArray<NSString *> *urls = repotweaks_saved_urls([NSUserDefaults standardUserDefaults]);
     if (urls.count == 0) {
-        if (completion) completion();
+        finish(RepoTweaksRefreshStatusFailure, @[@"No repository sources are configured."]);
         return;
     }
 
     dispatch_group_t group = dispatch_group_create();
+    __block NSUInteger successes = 0;
+    __block NSUInteger failures = 0;
+    __block NSMutableArray<NSString *> *messages = [NSMutableArray array];
     for (NSString *url in urls) {
         dispatch_group_enter(group);
         repotweaks_refresh_repo(url, ^(BOOL success, NSString *message) {
+            if (success) {
+                successes++;
+            } else {
+                failures++;
+                if (message.length > 0) {
+                    [messages addObject:[NSString stringWithFormat:@"%@ — %@", url, message]];
+                }
+            }
             dispatch_group_leave(group);
         });
     }
 
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-        [[NSNotificationCenter defaultCenter] postNotificationName:RepoTweaksDidRefreshNotification object:nil];
-        if (completion) completion();
+        RepoTweaksRefreshStatus status = failures == 0
+            ? RepoTweaksRefreshStatusSuccess
+            : (successes > 0 ? RepoTweaksRefreshStatusPartial : RepoTweaksRefreshStatusFailure);
+        if (failures > 0 && messages.count == 0) {
+            [messages addObject:@"All configured sources failed to refresh."];
+        }
+        finish(status, [messages copy]);
     });
 }
