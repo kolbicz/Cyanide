@@ -79,6 +79,16 @@ static void scene_note_user_touch(void)
     log_user("[URL] app touched: opened by the user\n");
 }
 
+void scene_forget_switcher_card(NSString *sessionID, const char *why)
+{
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    NSString *last = [d stringForKey:kSceneLastSessionIDKey];
+    if (!last || (sessionID && ![sessionID isEqualToString:last])) return;
+    [d removeObjectForKey:kSceneLastSessionIDKey];
+    [d synchronize];   // the process is about to end
+    log_user("[URL] switcher card gone (%s): the next launch starts without one\n", why ?: "?");
+}
+
 static BOOL scene_request_launched_app(void)
 {
     BOOL first = !g_scene_any_request;

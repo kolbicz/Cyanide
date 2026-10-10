@@ -6,6 +6,7 @@
 //
 
 #import "AppDelegate.h"
+#import "SceneDelegate.h"
 #import "SettingsViewController.h"
 #import "TaskRop/Exception.h"   // round 21: excport lifecycle gate
 #import "DSKeepAlive.h"
@@ -165,10 +166,16 @@ static dispatch_source_t g_sigterm_source;
     // Called when the user discards a scene session.
     // If any sessions were discarded while the application was not running, this will be called shortly after application:didFinishLaunchingWithOptions.
     // Use this method to release any resources that were specific to the discarded scenes, as they will not return.
+    for (UISceneSession *session in sceneSessions)
+        scene_forget_switcher_card(session.persistentIdentifier ?: @"", "scene session discarded");
 }
 
 - (void)applicationWillTerminate:(UIApplication *)application {
     cyanide_launch_trace("applicationWillTerminate: entry");
+    // Called when the user swipes away a running Cyanide, or Cyanide removes
+    // its own card -- the card is gone either way. First, so it lands even if
+    // the cleanup below hangs.
+    scene_forget_switcher_card(nil, "app terminated");
     settings_best_effort_termination_cleanup("applicationWillTerminate");
     // Round 31: if this line is missing from the log while the entry line is
     // present, the cleanup hung AFTER its own last log line — the wedge that
