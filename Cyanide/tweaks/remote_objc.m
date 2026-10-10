@@ -674,7 +674,7 @@ uint64_t r_msg_main_raw(uint64_t obj, uint64_t sel,
     t_r_main_ok = false;
 
     uint64_t sig = r_method_signature(obj, sel);
-    if (!r_is_objc_ptr(sig)) return 0;
+    if (!r_is_objc_ptr(sig) || !r_last_call_ok()) return 0;
 
     uint64_t NSInvocation = r_class("NSInvocation");
     if (!r_is_objc_ptr(NSInvocation)) return 0;
@@ -682,11 +682,14 @@ uint64_t r_msg_main_raw(uint64_t obj, uint64_t sel,
     uint64_t inv = r_msg_retained_return(NSInvocation,
                                          r_sel("invocationWithMethodSignature:"),
                                          sig, 0, 0, 0);
-    if (!r_is_objc_ptr(inv)) return 0;
+    if (!r_is_objc_ptr(inv) || !r_last_call_ok()) return 0;
 
     uint64_t numArgs = r_msg2(sig, "numberOfArguments", 0, 0, 0, 0);
+    if (!r_last_call_ok() || numArgs < 2 || numArgs > 6) {
+        r_msg2(inv, "release", 0, 0, 0, 0);
+        return 0;
+    }
     uint64_t maxUserArgs = (numArgs > 2) ? (numArgs - 2) : 0;
-    if (maxUserArgs > 4) maxUserArgs = 4;
 
     r_msg2(inv, "setTarget:", obj, 0, 0, 0);
     bool argsOK = t_r_last_ok;
@@ -718,6 +721,10 @@ uint64_t r_msg_main_raw(uint64_t obj, uint64_t sel,
     }
 
     r_msg2(inv, "retainArguments", 0, 0, 0, 0);
+    if (!r_last_call_ok()) {
+        r_msg2(inv, "release", 0, 0, 0, 0);
+        return 0;
+    }
 
     uint64_t performSel = r_sel("performSelectorOnMainThread:withObject:waitUntilDone:");
     uint64_t invokeSel = r_sel("invoke");
