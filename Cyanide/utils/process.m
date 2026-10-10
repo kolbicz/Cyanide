@@ -1893,11 +1893,16 @@ static int pm_kernel_stats(uint64_t task, uint64_t *memOut, uint64_t *cpuOut) {
     if (g_pm_cpu_cal && g_pm_thr_cal) {
         // The task totals only move when a thread terminates (its time is
         // folded in at exit), so any change across the bracket means a thread
-        // may be counted both in u2/s2 and in the live walk. Retry the bracket
-        // once; if it still moved, no CPU sample this pass.
+        // may be counted both in u2/s2 and in the live walk. Retry the bracket;
+        // if it still moved, no CPU sample this pass. 4 attempts, not 2: a
+        // process that keeps starting and ending threads moved its totals
+        // during both of 2 brackets often enough to show "—" (and lose its
+        // %CPU baseline) on many refreshes. The check itself stays exact --
+        // any tolerance would let one exiting thread's lifetime be counted
+        // twice or not at all.
         uint64_t u1 = 0, s1 = 0, u2 = 0, s2 = 0, lu = 0, ls = 0;
         bool walkOk = false;
-        for (int attempt = 0; attempt < 2; attempt++) {
+        for (int attempt = 0; attempt < 4; attempt++) {
             u1 = kread64(task + g_pm_off_task_cpu_u);
             s1 = kread64(task + g_pm_off_task_cpu_s);
             lu = 0; ls = 0;
