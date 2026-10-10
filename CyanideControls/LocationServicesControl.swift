@@ -3,9 +3,9 @@
 //  CyanideControls
 //
 //  A Control Center toggle for Location Services. It shows the real state
-//  (read with CLLocationManager, which needs no entitlement) and, when
-//  tapped, opens Cyanide's location shortcut URL — Cyanide does the actual
-//  switch and asks Control Center to refresh this control afterwards.
+//  (read with CLLocationManager, which needs no entitlement); tapping it runs
+//  SetLocationServicesIntent, which opens Cyanide to do the actual switch.
+//  Cyanide asks Control Center to refresh this control afterwards.
 //
 
 import AppIntents
@@ -44,23 +44,5 @@ struct LocationServicesControl: ControlWidget {
         func currentValue() async throws -> Bool {
             CLLocationManager.locationServicesEnabled()
         }
-    }
-}
-
-// Flipping the toggle opens Cyanide with the matching URL; the quiet
-// progress screen does the work and returns to the Home Screen.
-@available(iOS 18.0, *)
-struct SetLocationServicesIntent: SetValueIntent {
-    static let title: LocalizedStringResource = "Set Location Services"
-    static let description = IntentDescription("Opens Cyanide to turn Location Services on or off.")
-
-    @Parameter(title: "Location Services On")
-    var value: Bool
-
-    init() {}
-
-    func perform() async throws -> some IntentResult & OpensIntent {
-        let url = URL(string: "cyanide://location-services/\(value ? "on" : "off")")!
-        return .result(opensIntent: OpenURLIntent(url))
     }
 }

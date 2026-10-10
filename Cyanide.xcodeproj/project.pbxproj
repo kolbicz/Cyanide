@@ -146,6 +146,14 @@
 			);
 			target = CC0C0A010000000000000007 /* CyanideControls */;
 		};
+		CC0C0A010000000000000010 /* Exceptions for "CyanideControls" folder in "Cyanide" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				LocationServicesControl.swift,
+			);
+			target = AAA297762F72D439000B5902 /* Cyanide */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
@@ -175,6 +183,7 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				CC0C0A010000000000000003 /* Exceptions for "CyanideControls" folder in "CyanideControls" target */,
+				CC0C0A010000000000000010 /* Exceptions for "CyanideControls" folder in "Cyanide" target */,
 			);
 			path = CyanideControls;
 			sourceTree = "<group>";
@@ -464,6 +473,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				AAA297792F72D439000B5902 /* Cyanide */,
+				CC0C0A010000000000000002 /* CyanideControls */,
 			);
 			name = Cyanide;
 			packageProductDependencies = (

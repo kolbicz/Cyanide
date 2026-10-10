@@ -36,6 +36,9 @@
 @property (nonatomic, strong) NSDictionary *quietPendingPhase; // newest phase waiting to be shown
 @end
 
+// Control Center request that arrived before any scene connected.
+static NSURL *g_scene_intent_url = nil;
+
 @implementation SceneDelegate
 
 
@@ -57,21 +60,41 @@
             [inv invoke];
         }
     }
-    // Cold launch from a shortcut URL; handled once the scene is active.
-    self.pendingActionURL = connectionOptions.URLContexts.anyObject.URL;
+    // Cold launch from a shortcut URL (or a Control Center toggle that ran
+    // before this scene existed); handled once the scene is active.
+    self.pendingActionURL = connectionOptions.URLContexts.anyObject.URL ?: g_scene_intent_url;
+    g_scene_intent_url = nil;
     [self coverEarlyForURL:self.pendingActionURL];
     cyanide_launch_trace("scene willConnect: exit");
 }
 
 - (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts {
     NSURL *url = URLContexts.anyObject.URL;
-    if (!url) return;
+    if (url) [self receiveActionURL:url scene:scene];
+}
+
+- (void)receiveActionURL:(NSURL *)url scene:(UIScene *)scene {
     if (scene.activationState == UISceneActivationStateForegroundActive) {
         [self handleActionURL:url];
     } else {
         self.pendingActionURL = url;   // sceneDidBecomeActive runs it
         [self coverEarlyForURL:url];
     }
+}
+
+// A request from the Control Center toggle (SetLocationServicesIntent, run
+// in this process via openAppWhenRun). Handled exactly like the matching
+// cyanide://location-services URL. Before any scene exists (cold launch)
+// it waits for the first one to connect (g_scene_intent_url).
++ (void)cy_runLocationURL:(NSURL *)url {
+    if (![url isKindOfClass:NSURL.class]) return;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if ([scene.delegate isKindOfClass:SceneDelegate.class]) {
+            [(SceneDelegate *)scene.delegate receiveActionURL:url scene:scene];
+            return;
+        }
+    }
+    g_scene_intent_url = url;
 }
 
 // Strictly parses cyanide://location-services/<toggle|on|off>
