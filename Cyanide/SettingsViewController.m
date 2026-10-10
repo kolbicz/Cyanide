@@ -15565,8 +15565,23 @@ static void cyanide_upload_log_with_kind_event(NSString *kind, NSString *event) 
     if (![[NSUserDefaults standardUserDefaults] boolForKey:kSettingsLogUploadEnabled]) return;
     NSString *path = log_most_recent_session_path();
     if (!path) return;
-    NSString *rawLog = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    // Only the last 512 KiB: the end of a session is what matters, and this
+    // runs at every milestone.
+    static const unsigned long long kUploadMaxBytes = 512 * 1024;
+    NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:path];
+    if (!fh) return;
+    unsigned long long size = [fh seekToEndOfFile];
+    BOOL clipped = size > kUploadMaxBytes;
+    [fh seekToFileOffset:clipped ? size - kUploadMaxBytes : 0];
+    NSData *tail = [fh readDataToEndOfFile];
+    [fh closeFile];
+    // A cut through a multi-byte character: skip ahead to a valid start.
+    NSString *rawLog = nil;
+    for (NSUInteger skip = 0; skip < 4 && skip < tail.length && !rawLog; skip++)
+        rawLog = [[NSString alloc] initWithData:[tail subdataWithRange:NSMakeRange(skip, tail.length - skip)]
+                                       encoding:NSUTF8StringEncoding];
     if (!rawLog.length) return;
+    if (clipped) rawLog = [@"[… earlier part of the log omitted …]\n" stringByAppendingString:rawLog];
 
     int seq = __sync_add_and_fetch(&g_cyanide_upload_seq, 1);
     NSString *sessionId = g_cyanide_upload_session_id ?: @"adhoc";
@@ -15615,6 +15630,7 @@ static void cyanide_upload_log_with_kind_event(NSString *kind, NSString *event) 
     NSURL *url = [NSURL URLWithString:@"https://brokenblade-weblogs.hackerboii.workers.dev/log"];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
     req.HTTPMethod = @"POST";
+    req.timeoutInterval = 30;
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
     req.HTTPBody = data;
     printf("[LOG] uploading diagnostic (%s%s%s seq=%d, %zu bytes)...\n",
@@ -15632,10 +15648,12 @@ static void cyanide_upload_log_with_kind_event(NSString *kind, NSString *event) 
                    e.localizedDescription.UTF8String);
         } else {
             NSHTTPURLResponse *http = (NSHTTPURLResponse *)r;
-            printf("[LOG] upload %s%s%s ok: HTTP %ld\n",
+            BOOL httpOK = [http isKindOfClass:NSHTTPURLResponse.class] && http.statusCode / 100 == 2;
+            printf("[LOG] upload %s%s%s %s: HTTP %ld\n",
                    kind.UTF8String,
                    event.length ? ":" : "",
                    event.length ? event.UTF8String : "",
+                   httpOK ? "ok" : "rejected",
                    (long)http.statusCode);
         }
     }] resume];
