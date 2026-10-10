@@ -22,20 +22,18 @@
 // earlier run must not act on a later one.
 @property (nonatomic, assign) NSUInteger actionGeneration;
 @property (nonatomic, assign) BOOL actionInProgress;
-@property (nonatomic, strong) UIView *quietCover;   // shown during a quiet shortcut run
+// Quiet shortcut progress screen. Owned by one accepted run at a time
+// (quietRun); every delayed UI callback checks it. Main thread only.
+@property (nonatomic, strong) UIView *quietCover;
 @property (nonatomic, strong) UIImageView *quietIcon;
 @property (nonatomic, strong) UILabel *quietTitle;
-@property (nonatomic, assign) int quietTarget;   // 1 on, 0 off, -1 unknown
 @property (nonatomic, strong) UILabel *quietStatus;
 @property (nonatomic, strong) UIProgressView *quietProgress;
-// Steps are shown one after another, each for at least kQuietMinStep, so
-// sub-second steps can still be read. Main thread only.
-@property (nonatomic, strong) NSMutableArray<NSDictionary *> *quietSteps;
-@property (nonatomic, assign) uint64_t quietStepShownNs;   // when the current step appeared
-@property (nonatomic, assign) uint64_t quietDoneShownNs;   // when "Done" appeared
-@property (nonatomic, assign) NSUInteger quietStepToken;   // invalidates scheduled step changes
-@property (nonatomic, assign) BOOL quietPumpScheduled;
-
+@property (nonatomic, assign) int quietTarget;                // 1 on, 0 off, -1 unknown
+@property (nonatomic, assign) NSUInteger quietRun;            // UI generation
+@property (nonatomic, assign) BOOL quietFinished;             // result shown; later phases ignored
+@property (nonatomic, assign) uint64_t quietPhaseShownNs;     // when the current phase appeared
+@property (nonatomic, strong) NSDictionary *quietPendingPhase; // newest phase waiting to be shown
 @end
 
 @implementation SceneDelegate
@@ -159,52 +157,68 @@ static void scene_suspend_to_home(void)
 
 // A small progress screen for quiet shortcut runs instead of Cyanide's UI:
 // icon, title, a short status line and a progress bar.
+static UIImageSymbolConfiguration *scene_quiet_symbol_config(void)
+{
+    return [UIImageSymbolConfiguration configurationWithPointSize:56 weight:UIImageSymbolWeightRegular];
+}
+
+static void scene_announce(NSString *text)
+{
+    if (text.length) UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, text);
+}
+
 // Title/icon for what the run is doing: "Turning Off Location Services"
-// with a crossed-out location while working, "Location Services Off" when done.
+// with a crossed-out location while working, "Location Services Off" (green
+// checkmark) once the state is confirmed.
 - (void)applyQuietTarget:(int)target done:(BOOL)done {
     self.quietTarget = target;
     if (target < 0) { self.quietTitle.text = @"Location Services"; return; }
     NSString *state = target ? @"On" : @"Off";
     self.quietTitle.text = done ? [NSString stringWithFormat:@"Location Services %@", state]
                                 : [NSString stringWithFormat:@"Turning %@ Location Services", state];
-    if (!done) {
-        UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:56 weight:UIImageSymbolWeightRegular];
+    if (done) {
+        if (@available(iOS 17.0, *)) [self.quietIcon removeAllSymbolEffects];
+        self.quietIcon.image = [UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:scene_quiet_symbol_config()];
+        self.quietIcon.tintColor = UIColor.systemGreenColor;
+    } else {
         self.quietIcon.image = [UIImage systemImageNamed:target ? @"location.fill" : @"location.slash.fill"
-                                       withConfiguration:cfg];
+                                       withConfiguration:scene_quiet_symbol_config()];
+        self.quietIcon.tintColor = UIColor.systemBlueColor;
     }
 }
 
-- (void)showQuietCover {
-    [self showQuietCoverForTarget:-1];
-}
-
-- (void)showQuietCoverForTarget:(int)target {
-    if (self.quietCover) { if (target >= 0) [self applyQuietTarget:target done:NO]; return; }
+- (void)buildQuietCover {
     UIView *cover = [[UIView alloc] initWithFrame:self.window.bounds];
     cover.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     cover.backgroundColor = UIColor.systemBackgroundColor;
+    cover.accessibilityViewIsModal = YES;   // VoiceOver stays on this screen
 
-    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:56 weight:UIImageSymbolWeightRegular];
-    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"location.fill" withConfiguration:cfg]];
-    icon.tintColor = UIColor.systemBlueColor;
+    UIImageView *icon = [UIImageView new];
     icon.contentMode = UIViewContentModeCenter;
+    icon.isAccessibilityElement = NO;       // decorative; the title says it
 
     UILabel *title = [UILabel new];
-    title.text = @"Location Services";
+    title.font = [UIFont preferredFontForTextStyle:UIFontTextStyleTitle2];
+    title.font = [UIFontMetrics.defaultMetrics scaledFontForFont:
+                  [UIFont systemFontOfSize:title.font.pointSize weight:UIFontWeightSemibold]];
+    title.adjustsFontForContentSizeCategory = YES;
+    title.textColor = UIColor.labelColor;
     title.textAlignment = NSTextAlignmentCenter;
     title.numberOfLines = 0;
-    title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
-    title.textColor = UIColor.labelColor;
 
     UILabel *status = [UILabel new];
-    status.text = @"Starting…";
-    status.font = [UIFont systemFontOfSize:15];
+    status.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+    status.adjustsFontForContentSizeCategory = YES;
     status.textColor = UIColor.secondaryLabelColor;
+    status.textAlignment = NSTextAlignmentCenter;
+    status.numberOfLines = 0;
 
     UIProgressView *bar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
-    bar.progress = 0.05f;
+    bar.isAccessibilityElement = NO;        // estimates; the status line carries the meaning
     bar.translatesAutoresizingMaskIntoConstraints = NO;
-    [bar.widthAnchor constraintEqualToConstant:220].active = YES;
+    NSLayoutConstraint *barWidth = [bar.widthAnchor constraintEqualToConstant:220];
+    barWidth.priority = UILayoutPriorityDefaultHigh;
+    barWidth.active = YES;
 
     UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[ icon, title, status, bar ]];
     stack.axis = UILayoutConstraintAxisVertical;
@@ -214,156 +228,160 @@ static void scene_suspend_to_home(void)
     [stack setCustomSpacing:18 afterView:status];
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     [cover addSubview:stack];
+    UILayoutGuide *safe = cover.safeAreaLayoutGuide;
+    NSLayoutConstraint *centerY = [stack.centerYAnchor constraintEqualToAnchor:safe.centerYAnchor constant:-30];
+    centerY.priority = UILayoutPriorityDefaultHigh;
     [NSLayoutConstraint activateConstraints:@[
-        [stack.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],
-        [stack.centerYAnchor constraintEqualToAnchor:cover.centerYAnchor constant:-30],
+        [stack.centerXAnchor constraintEqualToAnchor:safe.centerXAnchor],
+        centerY,
+        [stack.leadingAnchor constraintGreaterThanOrEqualToAnchor:safe.leadingAnchor constant:24],
+        [stack.trailingAnchor constraintLessThanOrEqualToAnchor:safe.trailingAnchor constant:-24],
+        [stack.topAnchor constraintGreaterThanOrEqualToAnchor:safe.topAnchor constant:16],
+        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:safe.bottomAnchor constant:-16],
+        [title.widthAnchor constraintLessThanOrEqualToAnchor:stack.widthAnchor],
+        [status.widthAnchor constraintLessThanOrEqualToAnchor:stack.widthAnchor],
+        [bar.widthAnchor constraintLessThanOrEqualToAnchor:stack.widthAnchor],
     ]];
     [self.window addSubview:cover];
-    // A gentle pulse while it works.
-    if (@available(iOS 17.0, *)) [icon addSymbolEffect:[NSSymbolPulseEffect effect]];
-
     self.quietCover = cover;
     self.quietIcon = icon;
     self.quietTitle = title;
-    [self applyQuietTarget:target done:NO];
     self.quietStatus = status;
     self.quietProgress = bar;
 }
 
-static const double kQuietMinStep = 0.35;   // seconds each step stays readable
-static const double kQuietMinDone = 0.3;    // "Done" visible before leaving
-
-// Progress from the running action, queued: steps appear in order, each for
-// at least kQuietMinStep.
-- (void)updateQuietProgress:(float)fraction step:(NSString *)step over:(NSTimeInterval)over target:(int)target {
-    if (!self.quietCover) return;
-    // The worker's decision is final (a toggle's guess may have been wrong).
-    if (target >= 0 && target != self.quietTarget) [self applyQuietTarget:target done:NO];
-    if (!self.quietSteps) self.quietSteps = [NSMutableArray array];
-    [self.quietSteps addObject:@{ @"f": @(fraction), @"t": step ?: @"", @"o": @(over),
-                                  @"at": @(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) }];
-    [self pumpQuietSteps];
-}
-
-- (void)pumpQuietSteps {
-    if (!self.quietCover || !self.quietSteps.count || self.quietPumpScheduled) return;
-    double shownFor = self.quietStepShownNs
-        ? (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - self.quietStepShownNs) / 1e9 : kQuietMinStep;
-    if (shownFor < kQuietMinStep) {
-        self.quietPumpScheduled = YES;
-        __weak typeof(self) weakSelf = self;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((kQuietMinStep - shownFor) * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            weakSelf.quietPumpScheduled = NO;
-            [weakSelf pumpQuietSteps];
-        });
-        return;
+// Starts (or restarts) the progress screen for a new run: everything from a
+// previous run is reset, and all its delayed callbacks become stale.
+- (void)beginQuietRunForTarget:(int)target {
+    if (!self.quietCover) [self buildQuietCover];
+    self.quietRun++;
+    self.quietFinished = NO;
+    self.quietPendingPhase = nil;
+    self.quietPhaseShownNs = 0;
+    [self.quietProgress.layer removeAllAnimations];
+    [self.quietProgress setProgress:0.05f animated:NO];
+    self.quietStatus.text = @"Starting…";
+    if (@available(iOS 17.0, *)) [self.quietIcon removeAllSymbolEffects];
+    [self applyQuietTarget:target done:NO];
+    // A gentle pulse while it works (not with Reduce Motion).
+    if (!UIAccessibilityIsReduceMotionEnabled()) {
+        if (@available(iOS 17.0, *)) [self.quietIcon addSymbolEffect:[NSSymbolPulseEffect effect]];
     }
-    NSDictionary *next = self.quietSteps.firstObject;
-    [self.quietSteps removeObjectAtIndex:0];
-    // `over` was measured when the step was reported; it has been waiting in
-    // the queue since, so that much of it has already passed.
-    double queued = (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - [next[@"at"] unsignedLongLongValue]) / 1e9;
-    [self showQuietStep:[next[@"f"] floatValue] text:next[@"t"] over:MAX(0.0, [next[@"o"] doubleValue] - queued)];
-    if (self.quietSteps.count) [self pumpQuietSteps];
-}
-
-- (void)showQuietStep:(float)fraction text:(NSString *)text over:(NSTimeInterval)over {
-    BOOL done = fraction >= 1.0f;
-    NSUInteger token = ++self.quietStepToken;
-    self.quietStepShownNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-    self.quietStatus.text = done ? text : [text stringByAppendingString:@"…"];
-    UIProgressView *bar = self.quietProgress;
-    if (fraction > bar.progress) {
-        [bar layoutIfNeeded];
-        [UIView animateWithDuration:MAX(over, 0.2) delay:0
-                            options:UIViewAnimationOptionCurveLinear | UIViewAnimationOptionBeginFromCurrentState
-                         animations:^{
-            [bar setProgress:fraction animated:NO];
-            [bar layoutIfNeeded];
-        } completion:nil];
-    }
-    // The wait ends with opening the SpringBoard connection (~0.5 s, the
-    // tail of `over`): switch the text when that part begins.
-    if ([text isEqualToString:@"Getting kernel ready"] && over > 0.8) {
-        __weak typeof(self) weakSelf = self;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((over - 0.5) * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            typeof(self) me = weakSelf;
-            if (me && me.quietStepToken == token) me.quietStatus.text = @"Connecting…";
-        });
-    }
-    if (done) {
-        self.quietDoneShownNs = self.quietStepShownNs;
-        if (@available(iOS 17.0, *)) [self.quietIcon removeAllSymbolEffects];
-        UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:56 weight:UIImageSymbolWeightRegular];
-        self.quietIcon.image = [UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:cfg];
-        self.quietIcon.tintColor = UIColor.systemGreenColor;
-        if (self.quietTarget >= 0) [self applyQuietTarget:self.quietTarget done:YES];
-    }
-}
-
-// Runs `then` once every queued step has been shown and "Done" has been
-// visible for kQuietMinDone (capped, so leaving is never held up long).
-- (void)afterQuietStepsShown:(dispatch_block_t)then {
-    __block int polls = 0;
-    __weak typeof(self) weakSelf = self;
-    __block void (^check)(void);
-    void (^checkImpl)(void) = ^{
-        typeof(self) me = weakSelf;
-        if (!me) { check = nil; return; }
-        BOOL drained = me.quietSteps.count == 0 && !me.quietPumpScheduled;
-        double doneFor = me.quietDoneShownNs
-            ? (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - me.quietDoneShownNs) / 1e9 : 0;
-        if ((drained && doneFor >= kQuietMinDone) || ++polls > 40 /* 2 s cap */) {
-            check = nil;
-            then();
-            return;
-        }
-        void (^again)(void) = check;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), again);
-    };
-    check = checkImpl;
-    check();
+    scene_announce(self.quietTitle.text);
 }
 
 - (void)hideQuietCover {
     [self.quietCover removeFromSuperview];
     self.quietCover = nil;
-    self.quietSteps = nil;
-    self.quietStepShownNs = 0;
-    self.quietDoneShownNs = 0;
-    self.quietStepToken++;
     self.quietIcon = nil;
+    self.quietTitle = nil;
     self.quietStatus = nil;
     self.quietProgress = nil;
+    self.quietPendingPhase = nil;
+    self.quietFinished = NO;
+    self.quietRun++;   // stale callbacks of the old run do nothing
 }
 
-// A quiet shortcut link arriving before the scene is active: cover the
-// window right away, so Cyanide's normal UI doesn't flash first.
+static const double kQuietMinPhase = 0.35;   // a phase stays readable at least this long
+
+// A phase reported by the action. Only the newest one is ever shown: a phase
+// that arrives while the current one is still within kQuietMinPhase replaces
+// any phase already waiting (no replay of history). The result (fraction 1)
+// is shown immediately and ends the progress; nothing after it is shown.
+- (void)quietPhase:(float)fraction step:(NSString *)step over:(NSTimeInterval)over target:(int)target {
+    if (!self.quietCover || self.quietFinished) return;
+    if (target >= 0 && target != self.quietTarget) [self applyQuietTarget:target done:NO];
+    NSDictionary *phase = @{ @"f": @(fraction), @"t": step ?: @"", @"o": @(over),
+                             @"at": @(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) };
+    double shownFor = self.quietPhaseShownNs
+        ? (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - self.quietPhaseShownNs) / 1e9 : kQuietMinPhase;
+    if (fraction >= 1.0f || shownFor >= kQuietMinPhase) {
+        self.quietPendingPhase = nil;
+        [self showQuietPhase:phase];
+        return;
+    }
+    BOOL timerRunning = self.quietPendingPhase != nil;
+    self.quietPendingPhase = phase;   // newest wins
+    if (timerRunning) return;
+    NSUInteger run = self.quietRun;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((kQuietMinPhase - shownFor) * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        typeof(self) me = weakSelf;
+        if (!me || me.quietRun != run || !me.quietPendingPhase || me.quietFinished) return;
+        NSDictionary *next = me.quietPendingPhase;
+        me.quietPendingPhase = nil;
+        [me showQuietPhase:next];
+    });
+}
+
+- (void)showQuietPhase:(NSDictionary *)phase {
+    float fraction = [phase[@"f"] floatValue];
+    NSString *text = phase[@"t"];
+    // `over` was measured when the phase was reported; subtract any wait.
+    double waited = (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - [phase[@"at"] unsignedLongLongValue]) / 1e9;
+    double over = MAX(0.0, [phase[@"o"] doubleValue] - waited);
+    BOOL done = fraction >= 1.0f;
+    self.quietPhaseShownNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    UIProgressView *bar = self.quietProgress;
+    if (fraction > bar.progress) {
+        if (UIAccessibilityIsReduceMotionEnabled()) {
+            [bar setProgress:fraction animated:NO];
+        } else {
+            [bar layoutIfNeeded];
+            [UIView animateWithDuration:MAX(over, 0.2) delay:0
+                                options:UIViewAnimationOptionCurveLinear | UIViewAnimationOptionBeginFromCurrentState
+                             animations:^{
+                [bar setProgress:fraction animated:NO];
+                [bar layoutIfNeeded];
+            } completion:nil];
+        }
+    }
+    if (done) {
+        self.quietFinished = YES;
+        // The state is confirmed; Cyanide still finishes its SpringBoard
+        // cleanup before it leaves.
+        [self applyQuietTarget:self.quietTarget done:YES];
+        BOOL noChange = [text hasPrefix:@"Already"];
+        self.quietStatus.text = noChange ? @"No change needed" : @"Finishing up…";
+        scene_announce(self.quietTitle.text);
+    } else {
+        self.quietStatus.text = [text stringByAppendingString:@"…"];
+        scene_announce(self.quietStatus.text);
+    }
+}
+
+// A quiet shortcut link arriving before the scene is active: put up the
+// progress screen right away, so Cyanide's normal UI doesn't flash first.
 - (void)coverEarlyForURL:(NSURL *)url {
+    if (self.actionInProgress) return;   // the running request owns the screen
     if (!url || ![url.host.lowercaseString isEqualToString:@"location-services"]) return;
     int desired; BOOL keep, showLog; NSString *err = nil;
     if (scene_parse_location_url(url, &desired, &keep, &showLog, &err) && !showLog)
-        [self showQuietCoverForTarget:scene_expected_target(desired)];
+        [self beginQuietRunForTarget:scene_expected_target(desired)];
 }
 
 // cyanide://location-services/toggle | /on | /off. Runs only that action.
-//  - Default (quiet): a plain cover instead of any UI; on success Cyanide
-//    returns to the Home Screen as soon as its SpringBoard work is finished
-//    (and SpringBoard then removes the switcher card unless keepInSwitcher=1).
-//    On failure the cover goes away and an alert explains why.
+//  - Default (quiet): a progress screen instead of Cyanide's UI; on success
+//    Cyanide returns to the Home Screen as soon as its SpringBoard work is
+//    finished (and SpringBoard then removes the switcher card unless
+//    keepInSwitcher=1). On failure an alert explains why.
 //  - log=1: the activity log is shown, with a short pause on the result.
+// While one request runs, another is rejected without touching its screen.
 - (void)handleActionURL:(NSURL *)url {
     if (![url.host.lowercaseString isEqualToString:@"location-services"]) {
         NSLog(@"[URL] unhandled %@", url);
+        return;
+    }
+    if (self.actionInProgress) {
+        [self showAlertTitle:@"Location Services" message:@"A change is already in progress."];
         return;
     }
     int desired = -1;
     BOOL keepCard = NO, showLog = NO;
     NSString *parseError = nil;
     if (!scene_parse_location_url(url, &desired, &keepCard, &showLog, &parseError)) {
+        [self hideQuietCover];   // an early cover for this link must not stay
         [self showAlertTitle:@"Location Services Link" message:parseError];
         return;
     }
@@ -374,24 +392,27 @@ static const double kQuietMinDone = 0.3;    // "Done" visible before leaving
     __block uint64_t resultShownNs = 0;
     __block id observer = nil;
     if (showLog) {
+        [self hideQuietCover];
         observer = [NSNotificationCenter.defaultCenter
             addObserverForName:kSettingsActionsDidCompleteNotification object:nil queue:NSOperationQueue.mainQueue
                     usingBlock:^(NSNotification *note) {
             if (!resultShownNs) resultShownNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
         }];
+    } else if (!self.quietCover || self.quietFinished) {
+        [self beginQuietRunForTarget:scene_expected_target(desired)];
     }
     __weak typeof(self) weakSelf = self;
     dispatch_block_t run = ^{
         SettingsProgressBlock progress = showLog ? nil : ^(float fraction, NSString *step, NSTimeInterval over, int target) {
             typeof(self) me = weakSelf;
             if (me && generation == me.actionGeneration)
-                [me updateQuietProgress:fraction step:step over:over target:target];
+                [me quietPhase:fraction step:step over:over target:target];
         };
         settings_location_services_set_async(desired, !keepCard, progress, ^(BOOL ok, NSString *message,
-                                                                    NSTimeInterval resultAge) {
+                                                                              NSTimeInterval resultAge) {
             if (observer) [NSNotificationCenter.defaultCenter removeObserver:observer];
             typeof(self) me = weakSelf;
-            if (!me || generation != me.actionGeneration) return;   // a newer run owns the screen
+            if (!me || generation != me.actionGeneration) return;
             me.actionInProgress = NO;
             if (!ok) {
                 if (!showLog) {
@@ -406,27 +427,21 @@ static const double kQuietMinDone = 0.3;    // "Done" visible before leaving
                     ? (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - resultShownNs) / 1e9 : 0;
                 wait = MAX(0.0, 0.75 - shownFor);
             }
-            void (^leave)(void) = ^{
+            // Quiet: leave at once — the result has been on screen during the
+            // cleanup, and no presentation delay may outlast the card-removal
+            // timer.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
                 typeof(self) me2 = weakSelf;
                 // Only for this run, and only while still in front.
                 if (!me2 || generation != me2.actionGeneration) return;
                 if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
                 scene_suspend_to_home();
-            };
-            if (showLog) {
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC)),
-                               dispatch_get_main_queue(), leave);
-            } else {
-                [me afterQuietStepsShown:leave];   // let "Done" be seen
-            }
+            });
         });
     };
-    if (showLog) {
-        [self presentActivityLogThen:run];
-    } else {
-        [self showQuietCoverForTarget:scene_expected_target(desired)];
-        run();
-    }
+    if (showLog) [self presentActivityLogThen:run];
+    else run();
 }
 
 // Shows a fresh activity log on top of whatever is up (its completion state

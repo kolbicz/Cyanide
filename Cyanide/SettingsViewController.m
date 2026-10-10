@@ -1513,6 +1513,19 @@ static volatile int g_app_in_background = 0;
 // hijack pays it — a reused session and any user action after the window do not.
 static volatile uint64_t g_activation_settle_until_ns = 0;
 static const uint64_t kActivationSettleNs = 3ULL * 1000000000ULL; // 3 s
+// Latest moment a switcher-card removal scheduled by the location shortcut
+// can fire (it ends Cyanide). Folded into the settle window, so no fresh
+// SpringBoard/launchd injection — from any feature — starts before it.
+static volatile uint64_t g_removal_fire_bound_ns = 0;
+static uint64_t settings_settle_until_after_activation(void)
+{
+    uint64_t until = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) + kActivationSettleNs;
+    return MAX(until, g_removal_fire_bound_ns);
+}
+// Progress hook for the location shortcut: called when a fresh SpringBoard
+// connection actually starts (after the settle wait). Set only while that
+// action runs.
+static void (^g_springboard_connect_progress)(void) = nil;
 static volatile int g_screen_awake = 1;
 static volatile int g_screen_locked = 0;
 static volatile int g_screen_lock_state_logged = 0;
@@ -3350,6 +3363,7 @@ static BOOL settings_ensure_springboard_remote_call_locked(void)
                "SpringBoard hijack\n");
     }
 
+    if (g_springboard_connect_progress) g_springboard_connect_progress();
     for (int attempt = 1; attempt <= kSettingsSpringBoardRCMaxAttempts; attempt++) {
         int timeoutMS = (attempt == 1) ? kSettingsSpringBoardRCFirstExceptionTimeoutMS
                                        : kSettingsSpringBoardRCRetryTimeoutMS;
@@ -6228,9 +6242,9 @@ static void settings_apply_axonlite_once_async(const char *reason)
 //    needing longer. Runs whose drain did not finish cleanly count the same.
 //  - Runs keep being measured while removal is skipped, so a skip isn't
 //    permanent.
-// v2: quiet runs return to Home without a result pause, so earlier samples
-// (with the pause) don't describe the current timing.
-static NSString * const kLocSvcSwitcherSamplesKey = @"LocationShortcutArmToSafeSecondsV2";
+// v3: quiet runs leave for Home as soon as the work is done (no result pause,
+// no step replay), so earlier samples don't describe the current timing.
+static NSString * const kLocSvcSwitcherSamplesKey = @"LocationShortcutArmToSafeSecondsV3";
 static NSString * const kLocSvcSwitcherPendingKey = @"LocationShortcutRemovalPending";
 static const double kLocSvcSwitcherMargin = 0.5, kLocSvcSwitcherMin = 1.2;
 static const double kLocSvcSwitcherCap = 3.0;   // == kActivationSettleNs
@@ -6247,7 +6261,6 @@ static NSObject *locsvc_switcher_lock(void)
 }
 static uint64_t g_locsvc_run_start_ns = 0;      // 0 = no run being measured
 static BOOL g_locsvc_run_armed = NO;            // a removal timer may exist
-static uint64_t g_locsvc_removal_deadline_ns = 0;   // when an armed timer fires (this process)
 
 static void locsvc_switcher_record_locked(double seconds)
 {
@@ -6297,7 +6310,6 @@ static void locsvc_switcher_begin_run(BOOL armed, double delay)
         }
         uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
         g_locsvc_run_armed = armed;
-        g_locsvc_removal_deadline_ns = armed ? now + (uint64_t)(delay * 1e9) : 0;
         g_locsvc_run_start_ns = now;
     }
 }
@@ -6307,7 +6319,6 @@ static void locsvc_switcher_disarm(void)
 {
     @synchronized (locsvc_switcher_lock()) {
         g_locsvc_run_armed = NO;
-        g_locsvc_removal_deadline_ns = 0;
         [NSUserDefaults.standardUserDefaults removeObjectForKey:kLocSvcSwitcherPendingKey];
     }
 }
@@ -6337,21 +6348,6 @@ static void locsvc_switcher_note_safe(BOOL clean)
     }
 }
 
-// A removal armed by an earlier run in this process may still be pending.
-// Waits (up to its deadline + margin) so no new privileged work starts
-// before SpringBoard's timer has fired. Returns once it is past.
-static void locsvc_switcher_wait_for_pending_removal(void)
-{
-    uint64_t deadline;
-    @synchronized (locsvc_switcher_lock()) { deadline = g_locsvc_removal_deadline_ns; }
-    if (!deadline) return;
-    deadline += 300000000ULL;   // 0.3 s margin
-    uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-    if (now >= deadline) return;
-    log_user("[SWITCHER] waiting %.1fs for the previous run's card removal before starting\n",
-             (double)(deadline - now) / 1e9);
-    while (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) < deadline) usleep(100000);
-}
 
 void settings_application_did_enter_background(void)
 {
@@ -6466,8 +6462,7 @@ void settings_application_will_enter_foreground(void)
     g_app_in_background = 0;
     // Round 35: open the activation settle window — a fresh SpringBoard hijack
     // defers until it elapses (runningboardd task_policy_set ABBA avoidance).
-    g_activation_settle_until_ns =
-        clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) + kActivationSettleNs;
+    g_activation_settle_until_ns = settings_settle_until_after_activation();
     // Round 21: own-process exception-port traps are allowed again (pair of
     // the backgrounded gate set in settings_application_did_enter_background).
     excport_gate_set_backgrounded(false);
@@ -6529,12 +6524,8 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
         BOOL enable = desired < 0 ? (locationservices_enabled_local() != 1) : (desired != 0);
         target = enable ? 1 : 0;
         NSString *verb = enable ? @"Turning on" : @"Turning off";
-        // No live or parked kernel access (e.g. after a restart): the full
-        // exploit chain runs first (~10 s on A18) — say so.
-        BOOL needsChain = !settings_krw_available_without_exploit();
-        if (needsChain) step(0.45f, @"Exploiting kernel", 12.0);
-        else            step(0.1f, @"Getting kernel ready", 0);
         __block BOOL ok = NO;
+        __block BOOL doneSent = NO;   // the result phase is reported once
         __block NSString *message = nil;
         __block uint64_t resultPostedNs = 0;
         void (^postResult)(void) = ^{
@@ -6551,12 +6542,15 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                 ok = YES;
                 message = [NSString stringWithFormat:@"Location Services already %@.", enable ? @"on" : @"off"];
                 step(1.0f, enable ? @"Already on" : @"Already off", 0);
+                doneSent = YES;
                 return;
             }
             log_user("[LOCSVC] Turning Location Services %s…\n", enable ? "on" : "off");
-            // A card removal armed by an earlier run in this process ends
-            // Cyanide when it fires: start no privileged work before then.
-            locsvc_switcher_wait_for_pending_removal();
+            // Only now that work is needed: no live or parked kernel access
+            // (e.g. after a restart) means the full exploit chain runs first
+            // (~10 s on A18) — say so.
+            if (!settings_krw_available_without_exploit()) step(0.45f, @"Exploiting kernel", 12.0);
+            else                                            step(0.1f, @"Getting kernel ready", 0);
             if (!settings_ensure_kexploit()) {
                 message = @"Failed: kernel primitives were not acquired. Run the chain, then try again.";
                 return;
@@ -6568,11 +6562,12 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                 uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
                 uint64_t until = g_activation_settle_until_ns;
                 double settle = until > now ? (double)(until - now) / 1e9 : 0;
-                double wait = settle + (g_springboard_rc_ready ? 0 : 0.5);
-                // The settle window shows as "Getting kernel ready"; after a
-                // chain run it has usually passed, so straight to Connecting.
-                step(0.75f, settle > 0.3 ? @"Getting kernel ready" : @"Connecting", wait);
+                // The settle window shows as "Getting kernel ready". The
+                // "Connecting" phase is reported when the SpringBoard
+                // connection actually starts (g_springboard_connect_progress).
+                if (settle > 0.3) step(0.7f, @"Getting kernel ready", settle);
             }
+            g_springboard_connect_progress = ^{ step(0.82f, @"Connecting", 0.5); };
             @synchronized (settings_rc_lock()) {
                 if (settings_ensure_springboard_remote_call_locked()) {
                     step(0.85f, verb, 0.3);
@@ -6587,6 +6582,7 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                         // result is already on screen.
                         message = doneText();
                         step(1.0f, @"Done", 0.2);
+                        doneSent = YES;
                         postResult();
                         // Switcher card: SpringBoard deletes it removalDelay
                         // from now (measured; see locsvc_switcher_delay).
@@ -6603,6 +6599,15 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                                 if (rr == ASRemovalNotScheduled) {
                                     locsvc_switcher_disarm();
                                     removalScheduledNs = 0;
+                                } else {
+                                    // The timer can't fire before the call returned + delay
+                                    // (later if SpringBoard's main thread is busy): bound it
+                                    // from here with a margin, and hold off any new
+                                    // injection until then.
+                                    uint64_t bound = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)
+                                                   + (uint64_t)((removalDelay + 0.5) * 1e9);
+                                    g_removal_fire_bound_ns = bound;
+                                    g_activation_settle_until_ns = MAX(g_activation_settle_until_ns, bound);
                                 }
                             } else {
                                 log_user("[SWITCHER] card kept this run: recent runs needed %.2fs, over the %.0fs limit\n",
@@ -6630,7 +6635,7 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                 if (locationservices_enabled_local() == (enable ? 1 : 0)) {
                     ok = YES;
                     message = doneText();
-                    step(1.0f, @"Done", 0.2);
+                    if (!doneSent) { step(1.0f, @"Done", 0.2); doneSent = YES; }
                     return;
                 }
                 if (settings_any_registered_live_loop_running() || settings_has_persistent_springboard_remote_call_user()) {
@@ -6654,9 +6659,10 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                     return;
                 }
             }
-            if (ok) step(1.0f, @"Done", 0.2);
+            if (ok && !doneSent) { step(1.0f, @"Done", 0.2); doneSent = YES; }
             message = ok ? doneText() : @"Location Services did not change. Check the log.";
         } @finally {
+            g_springboard_connect_progress = nil;
             settings_release_actions_lock();
             postResult();   // no-op if already reported
             NSString *finalMessage = message ?: @"";
@@ -6734,8 +6740,7 @@ void settings_application_did_become_active(void)
     g_app_in_background = 0;
     // Round 35: refresh the activation settle window (covers launch, where
     // didBecomeActive fires without a prior willEnterForeground).
-    g_activation_settle_until_ns =
-        clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) + kActivationSettleNs;
+    g_activation_settle_until_ns = settings_settle_until_after_activation();
     // Round 21: belt-and-braces pair of the backgrounded gate — covers the
     // become-active-without-will-enter-foreground edge (e.g. control-center
     // overlay dismiss after an inactive spell).
