@@ -9392,6 +9392,9 @@ typedef NS_ENUM(NSInteger, PMSortKey) { PMSortPID = 0, PMSortCPU, PMSortMem, PMS
 // restart it, and the (target-retaining) timer kept the hidden viewer alive
 // and scanning KRW until the app next backgrounded. Main-queue confined.
 @property (nonatomic, assign) BOOL pmVisible;
+// Incremented on visibility/background transitions; an in-flight worker from a
+// previous generation must not publish CPU baselines after the viewer is hidden.
+@property (nonatomic, assign) NSUInteger pmVisibilityEpoch;
 // Rows dropped after a confirmed kill, keyed pid -> removal epoch. A refresh
 // pass that STARTED before a removal can still have read that pid; its
 // snapshot must not resurrect the row. A pass started after the removal is
@@ -9456,10 +9459,16 @@ static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeco
     // an in-flight pass started just before backgrounding was the 18:50:56
     // crash). Tie the timer to app-state notifications directly.
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
-    [nc addObserver:self selector:@selector(stopAutoRefreshTimer)
+    [nc addObserver:self selector:@selector(pm_backgrounded)
                name:UIApplicationDidEnterBackgroundNotification object:nil];
     [nc addObserver:self selector:@selector(pm_foregroundRefresh)
                name:UIApplicationWillEnterForegroundNotification object:nil];
+    // Will-enter-foreground can arrive before the app has cleared its
+    // background flag / refreshed the screen-awake state, and the timer and
+    // reloadProcs refuse while either says "hidden" -- with nothing to retry,
+    // polling stalled. Became-active comes after both.
+    [nc addObserver:self selector:@selector(pm_becameActive)
+               name:UIApplicationDidBecomeActiveNotification object:nil];
 }
 
 // Back in the foreground with the viewer on screen: restart the suspended
@@ -9468,11 +9477,54 @@ static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeco
 - (void)pm_foregroundRefresh
 {
     if (!self.isViewLoaded || !self.view.window) return;
+    [self pmResetCpuBaselines];
+    self.pmVisibilityEpoch++;
     [self startAutoRefreshTimerIfNeeded];
     [self reloadProcs];
     // Round 44: no fastkill pre-warm here — arming launchd just because the
     // viewer is visible was the live-45 black-screen trigger; the kill path
     // warms on demand.
+}
+
+- (void)pm_becameActive
+{
+    if (!self.isViewLoaded || !self.view.window) return;
+    [self pmResumePollingIfStalled];
+    // One retry: the screen-awake cache can lag the activation slightly.
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ [weakSelf pmResumePollingIfStalled]; });
+}
+
+// Restart the timer and run a deferred refresh if the viewer is on screen but
+// polling isn't running (both no-ops when they're already going).
+- (void)pmResumePollingIfStalled
+{
+    if (![self pmViewerIsActive]) return;
+    if (!self.autoRefreshTimer) [self startAutoRefreshTimerIfNeeded];
+    if (self.reloadPending && !self.reloadInFlight && self.killsInFlight == 0) {
+        self.reloadPending = NO;
+        [self reloadProcs];
+    }
+}
+
+- (void)pmResetCpuBaselines
+{
+    self.prevCpu = [NSMutableDictionary dictionary];
+    self.prevCpuTime = @{};
+    self.prevWall = 0;
+    self.prevCpuBusyTicks = 0;
+    self.prevCpuTotalTicks = 0;
+    self.havePrevCpuTicks = NO;
+    self.prevCpuFullTotals = NO;
+    self.pmHdrCpu.text = @"CPU: —";
+}
+
+- (void)pm_backgrounded
+{
+    self.pmVisibilityEpoch++;
+    [self pmResetCpuBaselines];
+    [self stopAutoRefreshTimer];
 }
 
 // --- round 46: kill-in-progress shield ----------------------------------------
@@ -9750,7 +9802,9 @@ static NSString *pm_chip_name(NSString *machine) {
     if ([tbc isKindOfClass:MainTabBarController.class]) {
         [(MainTabBarController *)tbc setPopupBarSuppressed:YES];
     }
+    self.pmVisibilityEpoch++;
     self.pmVisible = YES;
+    [self pmResetCpuBaselines];
     [self startAutoRefreshTimerIfNeeded];
 
     // Auto-arm on open: armKRW tries the parked-primitive restore first (safe,
@@ -9762,7 +9816,13 @@ static NSString *pm_chip_name(NSString *machine) {
         // newly-launched processes appear instead of showing a stale snapshot.
         // Skip when a pass is already running — on the first open viewDidLoad
         // just started one, and its result is fresh enough.
-        if (!self.reloadInFlight) [self reloadProcs];
+        if (!self.reloadInFlight) {
+            // A callback that completed while hidden leaves one deferred pass;
+            // this foreground pass consumes it rather than immediately doing a
+            // redundant second walk when its completion arrives.
+            self.reloadPending = NO;
+            [self reloadProcs];
+        }
         // Round 44: no fastkill pre-warm here (live 45 — speculative arming
         // on viewer visibility is the black-screen trigger; kills warm on
         // demand only).
@@ -9777,6 +9837,8 @@ static NSString *pm_chip_name(NSString *machine) {
         [(MainTabBarController *)tbc setPopupBarSuppressed:NO];
     }
     self.pmVisible = NO;
+    self.pmVisibilityEpoch++;
+    [self pmResetCpuBaselines];
     [self stopAutoRefreshTimer];
 }
 
@@ -9812,6 +9874,31 @@ static NSString *pm_chip_name(NSString *machine) {
     }
 }
 
+- (BOOL)pmViewerIsActive
+{
+    return self.pmVisible && self.isViewLoaded && self.view.window != nil &&
+           g_app_in_background == 0 && settings_screen_awake_cached();
+}
+
+- (void)pmDeferRefreshIfViewerHidden
+{
+    if (![self pmViewerIsActive]) {
+        self.reloadPending = YES;
+        [self stopAutoRefreshTimer];
+    }
+}
+
+// A kill worker may finish after navigation or backgrounding. Clear only its
+// local row/banner state, defer the authoritative rescan, and never present an
+// alert over the controller that replaced this viewer.
+- (void)pmFinishHiddenKillForPid:(int)pid showBanner:(BOOL)showBanner
+{
+    [self pmDeferRefreshIfViewerHidden];
+    [self.terminatingPids removeObject:@(pid)];
+    if (showBanner) [self pmHideKillShield];
+    [self pmKillEnded];
+}
+
 #pragma mark Auto Refresh
 
 - (double)autoRefreshInterval
@@ -9823,7 +9910,8 @@ static NSString *pm_chip_name(NSString *machine) {
 {
     [self stopAutoRefreshTimer];   // never stack timers
     if (self.killsInFlight > 0) return;   // the last kill verdict restarts it
-    if (!self.pmVisible) return;          // off screen: viewWillAppear restarts it
+    if (!self.pmVisible || g_app_in_background != 0 ||
+        !settings_screen_awake_cached()) return; // hidden/background: foreground restarts it
     double interval = [self autoRefreshInterval];
     if (interval <= 0) return;
     // Weak: a scheduled target/selector timer retains the viewer.
@@ -9918,6 +10006,11 @@ static NSString *pm_chip_name(NSString *machine) {
 
 - (void)reloadProcs
 {
+    if (![self pmViewerIsActive]) {
+        [self pmDeferRefreshIfViewerHidden];
+        [self.refreshControl endRefreshing];
+        return;
+    }
     // Don't poll KRW while the screen is off OR the app is backgrounded. The
     // auto-refresh timer keeps firing in both cases (viewWillDisappear does NOT
     // fire when the app merely backgrounds under UIScene), and each poll's
@@ -9967,6 +10060,7 @@ static NSString *pm_chip_name(NSString *machine) {
     NSDictionary<NSNumber *, NSNumber *> *prevCpu = self.prevCpu;
     NSDictionary<NSNumber *, NSNumber *> *prevCpuTime = self.prevCpuTime ?: @{};
     BOOL prevCpuFullTotals = self.prevCpuFullTotals;
+    NSUInteger visibilityEpoch = self.pmVisibilityEpoch;
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         // The app may have backgrounded (or the screen blanked) between the guard
@@ -10158,6 +10252,10 @@ static NSString *pm_chip_name(NSString *machine) {
             return [a[@"pid"] compare:b[@"pid"]];
         }];
         dispatch_async(dispatch_get_main_queue(), ^{
+            if (!self.pmVisible || self.pmVisibilityEpoch != visibilityEpoch) {
+                [self pm_reloadFinished];
+                return;
+            }
             self.prevCpu = newCpu;
             self.prevCpuTime = newCpuTime;
             self.prevCpuFullTotals = cpuFullTotals;
@@ -10190,7 +10288,7 @@ static NSString *pm_chip_name(NSString *machine) {
 - (void)pm_reloadFinished
 {
     self.reloadInFlight = NO;
-    if (self.reloadPending) {
+    if (self.reloadPending && self.pmVisible) {
         self.reloadPending = NO;
         [self reloadProcs];   // re-runs every guard (background / KRW peek)
     }
@@ -10595,6 +10693,10 @@ static NSString *pm_chip_name(NSString *machine) {
                                       ? "protected process (pid recycled since dialog?)"
                                       : "comm no longer matches the row (pid recycled since dialog?)"));
                     dispatch_async(dispatch_get_main_queue(), ^{
+                        if (![self pmViewerIsActive]) {
+                            [self pmDeferRefreshIfViewerHidden];
+                            return;
+                        }
                         UIAlertController *err = [UIAlertController
                             alertControllerWithTitle:@"Couldn't Quit"
                                              message:@"The process identity couldn't be verified (it may have exited), so nothing was signalled."
@@ -10607,6 +10709,10 @@ static NSString *pm_chip_name(NSString *machine) {
                 if (kill(pid, SIGTERM) != 0) {
                     int termErr = errno;
                     dispatch_async(dispatch_get_main_queue(), ^{
+                        if (![self pmViewerIsActive]) {
+                            [self pmDeferRefreshIfViewerHidden];
+                            return;
+                        }
                         UIAlertController *err = [UIAlertController
                             alertControllerWithTitle:@"Couldn't Quit"
                                              message:[NSString stringWithFormat:@"SIGTERM failed (errno %d — the process may have already exited).", termErr]
@@ -10623,6 +10729,10 @@ static NSString *pm_chip_name(NSString *machine) {
                 kill(pid, SIGCONT);
                 printf("[PROCMGR] fastkill: quit(%d) sent SIGTERM + SIGCONT\n", pid);
                 dispatch_async(dispatch_get_main_queue(), ^{
+                    if (![self pmViewerIsActive]) {
+                        [self pmDeferRefreshIfViewerHidden];
+                        return;
+                    }
                     [self.terminatingPids addObject:@(pid)];
                     [self pmKillBegan];   // ended after the alive-check below
                     [self applyFilter];   // dim the row immediately (cheap, no KRW)
@@ -10635,6 +10745,10 @@ static NSString *pm_chip_name(NSString *machine) {
                         int krwStat = procmgr_pid_status_krw(pid, &krwPresent, &krwKnown);   // ONE walk (round 13)
                         BOOL alive = krwPresent && krwStat != PM_SZOMB;
                         dispatch_async(dispatch_get_main_queue(), ^{
+                            if (![self pmViewerIsActive]) {
+                                [self pmFinishHiddenKillForPid:pid showBanner:NO];
+                                return;
+                            }
                             [self.terminatingPids removeObject:@(pid)];
                             [self pmKillEnded];
                             if (!krwKnown) {
@@ -10699,6 +10813,10 @@ static NSString *pm_chip_name(NSString *machine) {
             if (rc == -6)
                 rc = [self pmForceKillViaLaunchd:pid expectedName:name expectedKproc:rowKproc];
             dispatch_async(dispatch_get_main_queue(), ^{
+                if (![self pmViewerIsActive]) {
+                    [self pmFinishHiddenKillForPid:pid showBanner:showBanner];
+                    return;
+                }
                 if (showBanner) [self pmHideKillShield];   // verdict known — paired with the cold-kill show
                 if (rc != 0) {
                     [self pmKillEnded];   // nothing to verify
@@ -10755,6 +10873,10 @@ static NSString *pm_chip_name(NSString *machine) {
                 int krwStat = procmgr_pid_status_krw(pid, &krwPresent, &krwKnown);   // ONE walk (round 13)
                 BOOL alive = krwPresent && krwStat != PM_SZOMB;
                     dispatch_async(dispatch_get_main_queue(), ^{
+                        if (![self pmViewerIsActive]) {
+                            [self pmFinishHiddenKillForPid:pid showBanner:NO];   // banner already hidden at the verdict
+                            return;
+                        }
                         [self.terminatingPids removeObject:@(pid)];
                         [self pmKillEnded];   // the alive-check is done: refreshes may run again
                         if (!krwKnown) {
