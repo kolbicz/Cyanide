@@ -6577,9 +6577,20 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
             // Only now that work is needed: no live or parked kernel access
             // (e.g. after a restart) means the full exploit chain runs first
             // (~10 s on A18) — say so.
-            if (!settings_krw_available_without_exploit()) step(0.45f, @"Exploiting kernel", 12.0);
+            // A parked state can still turn out unusable: the chain says so
+            // when it falls back to a full run.
+            NSString *fullRun = @"No saved kernel access — running the full exploit";
+            if (!settings_krw_available_without_exploit()) step(0.45f, fullRun, 12.0);
             else                                            step(0.1f, @"Getting kernel ready", 0);
-            if (!settings_ensure_kexploit()) {
+            __block BOOL fullRunShown = !settings_krw_available_without_exploit();
+            kexploit_set_full_run_notice(^{
+                if (fullRunShown) return;
+                fullRunShown = YES;
+                step(0.45f, fullRun, 12.0);
+            });
+            BOOL kernelReady = settings_ensure_kexploit();
+            kexploit_set_full_run_notice(nil);
+            if (!kernelReady) {
                 message = @"Failed: kernel primitives were not acquired. Run the chain, then try again.";
                 return;
             }
@@ -6695,6 +6706,7 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
             message = ok ? doneText() : @"Location Services did not change. Check the log.";
         } @finally {
             g_springboard_connect_progress = nil;
+            kexploit_set_full_run_notice(nil);
             settings_release_actions_lock();
             postResult();   // no-op if already reported
             [CYControlReloader reloadLocationControl];   // show the real state in Control Center
