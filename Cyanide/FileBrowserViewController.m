@@ -11,6 +11,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <ImageIO/ImageIO.h>
 #import <fcntl.h>
+#import <dirent.h>
 #import <grp.h>
 #import <pwd.h>
 #import <sys/stat.h>
@@ -606,6 +607,55 @@ static BOOL fb_import_copy_path(NSString *source, NSString *target, NSUInteger *
         }
     }
     return YES;
+}
+
+static const NSUInteger kFBMaxOrdinaryEntries = 4000;
+
+// contentsOfDirectoryAtPath: materializes every name before the UI can show
+// anything.  Keep only a bounded immediate-directory window and tell the UI
+// when another entry exists; the caller still builds metadata only for this
+// bounded result.
+static NSArray<NSString *> *fb_bounded_directory_names(NSString *path, BOOL *incomplete, NSError **error)
+{
+    if (incomplete) *incomplete = NO;
+    DIR *dir = opendir(path.fileSystemRepresentation);
+    if (!dir) {
+        if (error) *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno
+                                            userInfo:@{ NSLocalizedDescriptionKey:
+                                                            [NSString stringWithUTF8String:strerror(errno)] ?: @"directory open failed" }];
+        return nil;
+    }
+    NSMutableArray<NSString *> *names = [NSMutableArray arrayWithCapacity:kFBMaxOrdinaryEntries];
+    BOOL failed = NO;
+    while (names.count < kFBMaxOrdinaryEntries) {
+        errno = 0;
+        struct dirent *ent = readdir(dir);
+        if (!ent) {
+            if (errno != 0) failed = YES;
+            break;
+        }
+        if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, "..")) continue;
+        NSString *name = [[NSString alloc] initWithBytes:ent->d_name length:strlen(ent->d_name)
+                                                 encoding:NSUTF8StringEncoding];
+        if (name) [names addObject:name];
+    }
+    if (!failed && names.count == kFBMaxOrdinaryEntries) {
+        errno = 0;
+        struct dirent *more = readdir(dir);
+        if (more) {
+            if (incomplete) *incomplete = YES;
+        } else if (errno != 0) {
+            failed = YES;
+        }
+    }
+    int closeError = closedir(dir);
+    if (failed || closeError != 0) {
+        if (error) *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno
+                                            userInfo:@{ NSLocalizedDescriptionKey:
+                                                            [NSString stringWithUTF8String:strerror(errno)] ?: @"directory enumeration failed" }];
+        return nil;
+    }
+    return names;
 }
 
 #pragma mark - Entries
@@ -1698,7 +1748,8 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
             return [a.name localizedStandardCompare:b.name];
         };
         NSError *err = nil;
-        NSArray<NSString *> *names = [NSFileManager.defaultManager contentsOfDirectoryAtPath:path error:&err];
+        BOOL ordinaryIncomplete = NO;
+        NSArray<NSString *> *names = fb_bounded_directory_names(path, &ordinaryIncomplete, &err);
         NSString *status = nil;
 
         // Not readable as mobile and root access is on: list it through launchd.
@@ -1762,7 +1813,11 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
             status = [NSString stringWithFormat:@"%lu hidden or inaccessible item%@. The ⋯ menu can show them.",
                       (unsigned long)filteredOut, filteredOut == 1 ? @"" : @"s"];
         }
-        publish(entries, status, NO, NO);
+        if (ordinaryIncomplete) {
+            status = [NSString stringWithFormat:@"Listing incomplete: the first %lu entries are shown.",
+                      (unsigned long)kFBMaxOrdinaryEntries];
+        }
+        publish(entries, status, NO, ordinaryIncomplete);
     });
 }
 
@@ -1826,10 +1881,10 @@ static const NSUInteger kFBMaxShareBytes = 64 * 1024 * 1024;
         }];
         self.shown = [self.entries filteredArrayUsingPredicate:p];
     }
-    // A cut-short root listing is a prefix of the folder, not all of it.
+    // A cut-short listing is a prefix of the folder, not all of it.
     if (self.listingIncomplete && self.entries.count) {
         UILabel *note = [UILabel new];
-        note.text = [NSString stringWithFormat:@"Listing incomplete: only %lu entries could be read as root.",
+        note.text = [NSString stringWithFormat:@"Listing incomplete: only %lu entries are shown; reload or narrow the folder.",
                      (unsigned long)self.entries.count];
         note.font = [UIFont systemFontOfSize:13];
         note.textColor = UIColor.systemOrangeColor;
