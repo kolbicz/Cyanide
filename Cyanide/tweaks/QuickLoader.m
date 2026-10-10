@@ -181,14 +181,30 @@ bool quickloader_is_repo_tweak_installed(NSString *repoURL, NSString *tweakID) {
 }
 
 void quickloader_clear_repo_tweak_if_matches(NSString *repoURL, NSString *tweakID) {
-    if (!quickloader_is_repo_tweak_installed(repoURL, tweakID)) return;
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-    [d removeObjectForKey:@"QuickLoaderSourceScriptName"];
-    [d removeObjectForKey:@"QuickLoaderSourceRawJS"];
-    [d removeObjectForKey:@"QuickLoaderSourceValues"];
-    [d removeObjectForKey:kQuickLoaderSourceRepoURLKey];
-    [d removeObjectForKey:kQuickLoaderSourceTweakIDKey];
-    [d removeObjectForKey:@"QuickLoaderSavedJS"];
+    NSString *safeRepo = quickloader_string_or_empty(repoURL);
+    NSString *safeID = quickloader_string_or_empty(tweakID);
+    if (safeRepo.length == 0 || safeID.length == 0) return;
+    BOOL activeMatch = quickloader_is_repo_tweak_installed(safeRepo, safeID);
+    if (activeMatch) {
+        // Stop before removing the ownership keys. Otherwise a running timer
+        // can keep executing an orphaned script after the source disappears.
+        quickloader_stop_in_session();
+        [d setBool:NO forKey:kSettingsQuickLoaderEnabled];
+        settings_mark_tweak_needs_apply(kSettingsQuickLoaderEnabled);
+    }
+    if (activeMatch) {
+        [d removeObjectForKey:@"QuickLoaderSourceScriptName"];
+        [d removeObjectForKey:@"QuickLoaderSourceRawJS"];
+        [d removeObjectForKey:@"QuickLoaderSourceValues"];
+        [d removeObjectForKey:kQuickLoaderSourceRepoURLKey];
+        [d removeObjectForKey:kQuickLoaderSourceTweakIDKey];
+        [d removeObjectForKey:@"QuickLoaderSavedJS"];
+    }
+    // PackageQueue uses this URL-scoped key to decide whether a repo package is
+    // installed. Source deletion must clear it even when QuickLoader was not the
+    // currently selected package.
+    [d removeObjectForKey:repotweaks_installed_version_key(safeRepo, safeID)];
     [d synchronize];
 }
 
