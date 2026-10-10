@@ -3457,6 +3457,17 @@ static void shmem_note_unmappable(uint64_t pageAddr)
     }
 }
 
+// A failed vm_map_remote_page can still hand back the named-entry port when
+// only the final mach_vm_map failed (localAddress 0, port set). Nothing caches
+// it, so drop it here with the same semantics as release_shmem_slot(); dropping
+// the entry also releases the object reference its patched copy entry holds.
+static void release_unmapped_shmem(struct VMShmem *shmem)
+{
+    if (!shmem || shmem->localAddress || !shmem->port) return;
+    mach_port_deallocate(mach_task_self_, (mach_port_name_t)shmem->port);
+    memset(shmem, 0, sizeof(*shmem));
+}
+
 struct VMShmem *get_shmem_for_page(uint64_t pageAddr)
 {
     struct VMShmem *cached = get_shmem_from_cache(pageAddr);
@@ -3465,6 +3476,7 @@ struct VMShmem *get_shmem_for_page(uint64_t pageAddr)
 
     struct VMShmem newShmem = vm_map_remote_page(g_RC_vmMap, pageAddr);
     if (!newShmem.localAddress) {
+        release_unmapped_shmem(&newShmem);
         static volatile uint64_t shmemRetryEvents = 0;
         uint64_t events = __sync_add_and_fetch(&shmemRetryEvents, 1);
         if (events == 1 || (events % 64) == 0) {
@@ -3476,8 +3488,10 @@ struct VMShmem *get_shmem_for_page(uint64_t pageAddr)
         newShmem = vm_map_remote_page(g_RC_vmMap, pageAddr);
         if (!newShmem.localAddress) shmem_note_unmappable(pageAddr);
     }
-    if (!newShmem.localAddress)
-            return NULL;
+    if (!newShmem.localAddress) {
+        release_unmapped_shmem(&newShmem);
+        return NULL;
+    }
     return put_shmem_in_cache(&newShmem);
 }
 
@@ -3496,6 +3510,7 @@ bool remote_read_internal(uint64_t src, void *dst, uint64_t size)
         return rc_vphone_bridge_read(src, dst, size);
 
     if (!src || !dst || !size) return false;
+    if (size > UINT64_MAX - src) return false;   // src + size would wrap
     uint64_t dstAddr = (uint64_t)(uintptr_t)dst;
     uint64_t until = src + size;
 
@@ -3579,6 +3594,7 @@ bool remote_write_internal(uint64_t dst, const void *src, uint64_t size)
         return rc_vphone_bridge_write(dst, src, size);
 
     if (!src || !dst || !size) return false;
+    if (size > UINT64_MAX - dst) return false;   // dst + size would wrap
 
     uint64_t srcAddr = (uint64_t)(uintptr_t)src;
     uint64_t until   = dst + size;

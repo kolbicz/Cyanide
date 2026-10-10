@@ -212,9 +212,34 @@ struct VMShmem vm_create_shmem_with_object(struct VMObject *object)
         return shmem;
     }
  
+    // Each hop below feeds the next read and, ultimately, the ref_count bump
+    // and the zone-element write at nextAddr. A failed read zero-fills, so an
+    // unchecked chain would end in a write through a garbage pointer. Validate
+    // every hop and back out (releasing the entry and the scaffolding) instead.
     uint64_t shmemNamedEntry = task_get_ipc_port_kobject(task_self(), memoryObject);
+    if (!is_kaddr_valid(shmemNamedEntry)) {
+        printf("[%s:%d] invalid named entry %#llx\n", __FUNCTION__, __LINE__,
+               (unsigned long long)shmemNamedEntry);
+        mach_port_deallocate(mach_task_self_, memoryObject);
+        mach_vm_deallocate(mach_task_self_, localAddr, roundedSize);
+        return shmem;
+    }
     uint64_t shmemVMCopyAddr = kread64(shmemNamedEntry + off_vm_named_entry_backing_copy);
+    if (!is_kaddr_valid(shmemVMCopyAddr)) {
+        printf("[%s:%d] invalid backing copy %#llx\n", __FUNCTION__, __LINE__,
+               (unsigned long long)shmemVMCopyAddr);
+        mach_port_deallocate(mach_task_self_, memoryObject);
+        mach_vm_deallocate(mach_task_self_, localAddr, roundedSize);
+        return shmem;
+    }
     uint64_t nextAddr        = kread64(shmemVMCopyAddr + off_vm_named_entry_size);
+    if (!is_kaddr_valid(nextAddr)) {
+        printf("[%s:%d] invalid copy entry %#llx\n", __FUNCTION__, __LINE__,
+               (unsigned long long)nextAddr);
+        mach_port_deallocate(mach_task_self_, memoryObject);
+        mach_vm_deallocate(mach_task_self_, localAddr, roundedSize);
+        return shmem;
+    }
  
     struct vm_map_entry entry = {0};
     kreadbuf(nextAddr, &entry, sizeof(struct vm_map_entry));
@@ -222,6 +247,7 @@ struct VMShmem vm_create_shmem_with_object(struct VMObject *object)
  
     if (entry.vme_kernel_object || entry.is_sub_map) {
         printf("[%s:%d] Entry cannot be a submap or kernel object\n", __FUNCTION__, __LINE__);
+        mach_port_deallocate(mach_task_self_, memoryObject);
         mach_vm_deallocate(mach_task_self_, localAddr, roundedSize);
         return shmem;
     }
