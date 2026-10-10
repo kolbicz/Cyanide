@@ -22,13 +22,13 @@ static const char *const kDeleteSelectors[] = {
     "deleteAppLayoutsMatchingBundleIdentifier:",
 };
 
-bool appswitcher_schedule_remove_in_session(const char *bundleID, double delaySeconds)
+ASRemovalResult appswitcher_schedule_remove_in_session(const char *bundleID, double delaySeconds)
 {
-    if (!bundleID || !bundleID[0]) return false;
+    if (!bundleID || !bundleID[0]) return ASRemovalNotScheduled;
     // +sharedInstance blocked on heavy init on iOS 26 (see killallapps.m).
     if (NSProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26) {
         printf("[SWITCHER] card removal not supported on iOS 26+\n");
-        return false;
+        return ASRemovalNotScheduled;
     }
 
     uint64_t owner = 0;
@@ -49,14 +49,14 @@ bool appswitcher_schedule_remove_in_session(const char *bundleID, double delaySe
     }
     if (!deleteSel) {
         printf("[SWITCHER] no delete-by-bundle selector found; card left in place\n");
-        return false;
+        return ASRemovalNotScheduled;
     }
 
     uint64_t bid = r_nsstr_retained(bundleID);
     uint64_t sel = r_sel(deleteSel);
     if (!r_is_objc_ptr(bid) || !sel) {
         if (r_is_objc_ptr(bid)) r_release(bid);
-        return false;
+        return ASRemovalNotScheduled;
     }
     // Must be sent on SpringBoard's main thread: afterDelay: schedules on the
     // calling thread's run loop, and our synthetic call thread has none.
@@ -65,9 +65,11 @@ bool appswitcher_schedule_remove_in_session(const char *bundleID, double delaySe
     double delay = delaySeconds;
     r_msg2_main_raw(owner, "performSelector:withObject:afterDelay:",
                     &sel, sizeof(sel), &bid, sizeof(bid), &delay, sizeof(delay), NULL, 0);
-    bool ok = r_last_main_ok();
+    // A lost result doesn't mean "not scheduled": SpringBoard may already
+    // have armed the timer before the return got lost.
+    ASRemovalResult r = r_last_main_ok() ? ASRemovalScheduled : ASRemovalUnknown;
     r_release(bid);
-    printf("[SWITCHER] card removal for %s %s (in %.1fs)\n",
-           bundleID, ok ? "scheduled" : "could not be scheduled", delaySeconds);
-    return ok;
+    printf("[SWITCHER] card removal for %s %s (in %.2fs)\n", bundleID,
+           r == ASRemovalScheduled ? "scheduled" : "result UNKNOWN (treated as scheduled)", delaySeconds);
+    return r;
 }

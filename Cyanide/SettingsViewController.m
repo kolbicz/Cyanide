@@ -2624,10 +2624,17 @@ static UIBackgroundTaskIdentifier settings_safe_detach_begin(const char *reason)
 // Release the window after the in-flight RemoteCall ops have drained (so we do
 // not suspend with a Cyanide helper thread mid-trap). Runs the drain-wait on a
 // background queue; the assertion keeps us alive meanwhile.
+static void locsvc_switcher_note_safe(BOOL clean);   // location shortcut, below
+
 static void settings_safe_detach_drain_and_end(UIBackgroundTaskIdentifier task,
                                                const char *reason)
 {
-    if (task == UIBackgroundTaskInvalid) { __sync_lock_release(&g_safe_detach_in_flight); return; }
+    if (task == UIBackgroundTaskInvalid) {
+        __sync_lock_release(&g_safe_detach_in_flight);
+        // No assertion was taken, so nothing was drained: not a confirmed safe point.
+        locsvc_switcher_note_safe(NO);
+        return;
+    }
     const char *why = reason ?: "backgrounding";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const uint64_t deadlineNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)
@@ -2661,6 +2668,10 @@ static void settings_safe_detach_drain_and_end(UIBackgroundTaskIdentifier task,
         else if (waited)
             printf("[SETTINGS] safe-detach: in-flight ops drained after %d ms (%s)\n",
                    waited * 100, why);
+        // The location shortcut's measurement point: the toggle's teardown,
+        // the background teardown/hand-off and this drain are all done.
+        locsvc_switcher_note_safe(remote_call_inflight_count() == 0 &&
+                                  remote_call_helper_unaccounted_count() == 0);
         @synchronized (settings_bg_lock()) {
             if (g_safe_detach_task == task) {
                 [[UIApplication sharedApplication] endBackgroundTask:task];
@@ -6198,72 +6209,150 @@ static void settings_apply_axonlite_once_async(const char *reason)
 // --- Location shortcut: measured switcher-card removal delay ---------------
 //
 // SpringBoard removes Cyanide's switcher card (ending Cyanide, like a
-// swipe-up) on a timer that must be set while the SpringBoard channel is
-// still open, and must not fire before that channel's teardown is done and
-// Cyanide is in the background. Instead of a fixed delay, each run measures
-// the real time from scheduling to "in the background" and the next delay is
-// the longest recent measurement plus a margin. A run that never reached the
-// background before the removal (no measurement, marker still set at the next
-// run) counts as too short and lengthens the delay.
-static NSString * const kLocSvcSwitcherSamplesKey = @"LocationShortcutSwitcherSafeSeconds";
-static NSString * const kLocSvcSwitcherPendingKey = @"LocationShortcutSwitcherPendingDelay";
-static const double kLocSvcSwitcherMargin = 0.5, kLocSvcSwitcherMin = 1.2, kLocSvcSwitcherMax = 3.0;
+// swipe-up) on a timer that has to be set while the SpringBoard channel is
+// still open. Ending Cyanide is only safe once ALL of its privileged work is
+// done: the toggle's SpringBoard teardown, and then the background handler's
+// launchd-session teardown, KRW hand-off and RemoteCall drain. That last
+// point ("safe") is reported by settings_safe_detach_drain_and_end.
+//
+// Each run measures arm → safe. The next delay is the longest of the last
+// runs plus a margin. Rules that keep it from ever being shorter than needed:
+//  - The timestamp is taken BEFORE the scheduling call (the timer may start
+//    counting before that call returns).
+//  - If the longest recent run plus margin exceeds the cap, the removal is
+//    SKIPPED for that run rather than scheduled earlier than needed. The cap
+//    equals the activation settle window: if Cyanide is reopened before an
+//    old timer fires, no SpringBoard/launchd injection can start before it
+//    has fired.
+//  - A run whose safe point was never confirmed (marker still set) counts as
+//    needing longer. Runs whose drain did not finish cleanly count the same.
+//  - Runs keep being measured while removal is skipped, so a skip isn't
+//    permanent.
+static NSString * const kLocSvcSwitcherSamplesKey = @"LocationShortcutArmToSafeSeconds";
+static NSString * const kLocSvcSwitcherPendingKey = @"LocationShortcutRemovalPending";
+static const double kLocSvcSwitcherMargin = 0.5, kLocSvcSwitcherMin = 1.2;
+static const double kLocSvcSwitcherCap = 3.0;   // == kActivationSettleNs
 static const double kLocSvcSwitcherDefault = 2.0;
-static const NSUInteger kLocSvcSwitcherSampleCount = 5;
-static uint64_t g_locsvc_removal_scheduled_ns = 0;   // atomic access
+static const NSUInteger kLocSvcSwitcherSampleCount = 10;
 
-static void locsvc_switcher_record(double seconds)
+// One run at a time; all transitions under this lock.
+static NSObject *locsvc_switcher_lock(void)
 {
+    static NSObject *lock;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ lock = [NSObject new]; });
+    return lock;
+}
+static uint64_t g_locsvc_run_start_ns = 0;      // 0 = no run being measured
+static BOOL g_locsvc_run_armed = NO;            // a removal timer may exist
+static uint64_t g_locsvc_removal_deadline_ns = 0;   // when an armed timer fires (this process)
+
+static void locsvc_switcher_record_locked(double seconds)
+{
+    if (!isfinite(seconds) || seconds < 0) return;
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-    NSMutableArray<NSNumber *> *samples = [[d arrayForKey:kLocSvcSwitcherSamplesKey] mutableCopy] ?: [NSMutableArray array];
+    NSMutableArray<NSNumber *> *samples = [NSMutableArray array];
+    for (id n in [d arrayForKey:kLocSvcSwitcherSamplesKey])
+        if ([n isKindOfClass:NSNumber.class] && isfinite([n doubleValue]) && [n doubleValue] >= 0) [samples addObject:n];
     [samples addObject:@(seconds)];
     while (samples.count > kLocSvcSwitcherSampleCount) [samples removeObjectAtIndex:0];
     [d setObject:samples forKey:kLocSvcSwitcherSamplesKey];
 }
 
+// Delay for this run, or a negative value if removal must be skipped.
+// Consumes an unconfirmed marker from an earlier run.
 static double locsvc_switcher_delay(void)
 {
-    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-    double pending = [d doubleForKey:kLocSvcSwitcherPendingKey];
-    if (pending > 0) {
-        // The previous run's removal came before Cyanide reached the
-        // background (or the background was never recorded): too short.
-        log_user("[SWITCHER] previous removal (%.2fs) came before Cyanide was in the background — lengthening\n", pending);
-        locsvc_switcher_record(pending + kLocSvcSwitcherMargin);
-        [d removeObjectForKey:kLocSvcSwitcherPendingKey];
+    @synchronized (locsvc_switcher_lock()) {
+        NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+        double pending = [d doubleForKey:kLocSvcSwitcherPendingKey];
+        if (pending > 0) {
+            // Crash, forced close, early removal, or a background that
+            // never finished: unknown — assume it needed longer.
+            log_user("[SWITCHER] the previous run's safe point was not confirmed — assuming it needed longer than %.2fs\n", pending);
+            locsvc_switcher_record_locked(pending + kLocSvcSwitcherMargin);
+            [d removeObjectForKey:kLocSvcSwitcherPendingKey];
+        }
+        double longest = -1;
+        for (id n in [d arrayForKey:kLocSvcSwitcherSamplesKey])
+            if ([n isKindOfClass:NSNumber.class]) longest = MAX(longest, [n doubleValue]);
+        if (longest < 0) return kLocSvcSwitcherDefault;
+        double needed = longest + kLocSvcSwitcherMargin;
+        if (needed > kLocSvcSwitcherCap) return -needed;   // never schedule earlier than needed
+        return MAX(kLocSvcSwitcherMin, needed);
     }
-    NSArray<NSNumber *> *samples = [d arrayForKey:kLocSvcSwitcherSamplesKey];
-    if (!samples.count) return kLocSvcSwitcherDefault;
-    double longest = 0;
-    for (NSNumber *n in samples) longest = MAX(longest, n.doubleValue);
-    return MIN(kLocSvcSwitcherMax, MAX(kLocSvcSwitcherMin, longest + kLocSvcSwitcherMargin));
 }
 
-static void locsvc_switcher_note_scheduled(double delay)
+// Call right BEFORE the scheduling call (armed) — or, when removal is
+// skipped, at the same point with armed = NO so the run is still measured.
+// The marker is persisted first, then the timestamp is published.
+static void locsvc_switcher_begin_run(BOOL armed, double delay)
 {
-    __atomic_store_n(&g_locsvc_removal_scheduled_ns, clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW), __ATOMIC_SEQ_CST);
-    [NSUserDefaults.standardUserDefaults setDouble:delay forKey:kLocSvcSwitcherPendingKey];
-    [NSUserDefaults.standardUserDefaults synchronize];   // must survive the removal ending the app
+    @synchronized (locsvc_switcher_lock()) {
+        if (armed) {
+            [NSUserDefaults.standardUserDefaults setDouble:delay forKey:kLocSvcSwitcherPendingKey];
+            [NSUserDefaults.standardUserDefaults synchronize];   // must survive the removal ending the app
+        }
+        uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        g_locsvc_run_armed = armed;
+        g_locsvc_removal_deadline_ns = armed ? now + (uint64_t)(delay * 1e9) : 0;
+        g_locsvc_run_start_ns = now;
+    }
 }
 
-// Main thread, from didEnterBackground: the safe point was reached.
-static void locsvc_switcher_note_background(void)
+// The scheduling call definitely didn't arm a timer: nothing pending.
+static void locsvc_switcher_disarm(void)
 {
-    uint64_t t = __atomic_exchange_n(&g_locsvc_removal_scheduled_ns, 0, __ATOMIC_SEQ_CST);
-    if (!t) return;
-    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-    double scheduledDelay = [d doubleForKey:kLocSvcSwitcherPendingKey];
-    double safe = (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - t) / 1e9;
-    locsvc_switcher_record(safe);
-    [d removeObjectForKey:kLocSvcSwitcherPendingKey];
-    [d synchronize];
-    log_user("[SWITCHER] in the background %.2fs after scheduling (card removal at %.2fs)%s\n",
-             safe, scheduledDelay, safe > scheduledDelay ? " — TOO LATE, next delay grows" : "");
+    @synchronized (locsvc_switcher_lock()) {
+        g_locsvc_run_armed = NO;
+        g_locsvc_removal_deadline_ns = 0;
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:kLocSvcSwitcherPendingKey];
+    }
+}
+
+// From settings_safe_detach_drain_and_end: all privileged work is finished
+// (clean) or the drain gave up (not clean).
+static void locsvc_switcher_note_safe(BOOL clean)
+{
+    @synchronized (locsvc_switcher_lock()) {
+        uint64_t t = g_locsvc_run_start_ns;
+        if (!t) return;
+        g_locsvc_run_start_ns = 0;
+        double safe = (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - t) / 1e9;
+        NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+        double armedDelay = g_locsvc_run_armed ? [d doubleForKey:kLocSvcSwitcherPendingKey] : 0;
+        if (clean) {
+            locsvc_switcher_record_locked(safe);
+            [d removeObjectForKey:kLocSvcSwitcherPendingKey];   // confirmed
+        }
+        // Not clean: the marker stays, so the next run treats it as unconfirmed.
+        [d synchronize];
+        log_user("[SWITCHER] safe %.2fs after scheduling%s%s\n", safe,
+                 armedDelay > 0 ? [NSString stringWithFormat:@" (card removal at %.2fs)", armedDelay].UTF8String
+                                : " (removal skipped this run)",
+                 !clean ? " — drain NOT clean, not counted as safe"
+                        : (armedDelay > 0 && safe > armedDelay ? " — TOO LATE, next delay grows" : ""));
+    }
+}
+
+// A removal armed by an earlier run in this process may still be pending.
+// Waits (up to its deadline + margin) so no new privileged work starts
+// before SpringBoard's timer has fired. Returns once it is past.
+static void locsvc_switcher_wait_for_pending_removal(void)
+{
+    uint64_t deadline;
+    @synchronized (locsvc_switcher_lock()) { deadline = g_locsvc_removal_deadline_ns; }
+    if (!deadline) return;
+    deadline += 300000000ULL;   // 0.3 s margin
+    uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    if (now >= deadline) return;
+    log_user("[SWITCHER] waiting %.1fs for the previous run's card removal before starting\n",
+             (double)(deadline - now) / 1e9);
+    while (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) < deadline) usleep(100000);
 }
 
 void settings_application_did_enter_background(void)
 {
-    locsvc_switcher_note_background();
     // Round 21: refuse NEW own-process exception-port traps from this moment
     // (runningboardd starts policy-managing this task around the transition —
     // the ABBA deadlock window of panics 1+3). In-flight operations finish
@@ -6449,6 +6538,9 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                 return;
             }
             log_user("[LOCSVC] Turning Location Services %s…\n", enable ? "on" : "off");
+            // A card removal armed by an earlier run in this process ends
+            // Cyanide when it fires: start no privileged work before then.
+            locsvc_switcher_wait_for_pending_removal();
             if (!settings_ensure_kexploit()) {
                 message = @"Failed: kernel primitives were not acquired. Run the chain, then try again.";
                 return;
@@ -6460,21 +6552,33 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                     // Sent/uncertain: the readback decides.
                     ok = sent != LSCallNotSent && locationservices_wait_for_state(enable, 3000);
                     uint64_t removalScheduledNs = 0;
-                    const double kRemovalDelay = locsvc_switcher_delay();   // measured, see above
+                    double removalDelay = 0;
                     if (ok) {
                         // Report now; the teardown below runs while the
                         // result is already on screen.
                         message = doneText();
                         postResult();
-                        // SpringBoard deletes Cyanide's card kRemovalDelay
-                        // from now, on its own main run loop. The teardown
-                        // below normally takes ~0.5 s and the return to
-                        // Home follows right after it.
-                        if (removeFromSwitcher &&
-                            appswitcher_schedule_remove_in_session(NSBundle.mainBundle.bundleIdentifier.UTF8String,
-                                                                   kRemovalDelay)) {
-                            removalScheduledNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-                            locsvc_switcher_note_scheduled(kRemovalDelay);
+                        // Switcher card: SpringBoard deletes it removalDelay
+                        // from now (measured; see locsvc_switcher_delay).
+                        // Never while a live tweak keeps this channel open
+                        // across the background: ending Cyanide would
+                        // orphan it.
+                        if (removeFromSwitcher && !settings_has_persistent_springboard_remote_call_user()) {
+                            removalDelay = locsvc_switcher_delay();
+                            if (removalDelay > 0) {
+                                locsvc_switcher_begin_run(YES, removalDelay);   // before the call: the timer may start first
+                                removalScheduledNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+                                ASRemovalResult rr = appswitcher_schedule_remove_in_session(
+                                    NSBundle.mainBundle.bundleIdentifier.UTF8String, removalDelay);
+                                if (rr == ASRemovalNotScheduled) {
+                                    locsvc_switcher_disarm();
+                                    removalScheduledNs = 0;
+                                }
+                            } else {
+                                log_user("[SWITCHER] card kept this run: recent runs needed %.2fs, over the %.0fs limit\n",
+                                         -removalDelay, kLocSvcSwitcherCap);
+                                locsvc_switcher_begin_run(NO, 0);   // still measure, so this can recover
+                            }
                         }
                     }
                     if (!settings_has_persistent_springboard_remote_call_user() && g_springboard_rc_ready) {
@@ -6483,9 +6587,9 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                     }
                     if (removalScheduledNs) {
                         double elapsed = (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - removalScheduledNs) / 1e9;
-                        if (elapsed > kRemovalDelay - 0.25)
-                            log_user("[SWITCHER] WARNING: SpringBoard teardown took %.2fs — close to the "
-                                     "%.2fs card removal.\n", elapsed, kRemovalDelay);
+                        if (elapsed > removalDelay - 0.25)
+                            log_user("[SWITCHER] WARNING: scheduling + SpringBoard teardown took %.2fs — close to the "
+                                     "%.2fs card removal.\n", elapsed, removalDelay);
                     }
                 } else {
                     log_user("[LOCSVC] SpringBoard not reachable.\n");
