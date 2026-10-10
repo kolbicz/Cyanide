@@ -27,8 +27,9 @@ uint64_t r_msg_main(uint64_t obj, uint64_t sel,
                     uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3);
 uint64_t r_msg2_main(uint64_t obj, const char *selName,
                      uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3);
-void     r_msg2_main_async(uint64_t obj, const char *selName,
-                           uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3);
+// false: not dispatched, or dispatch status unknown (may still run).
+bool     r_msg2_main_async(uint64_t obj, const char *selName,
+                          uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3);
 // Status of the calling thread's last r_msg / r_call (r_last_call_ok) or
 // r_msg_main* (r_last_main_ok): false when the call didn't complete, so a 0
 // return can be told apart from a failure. A failed main-thread call may or

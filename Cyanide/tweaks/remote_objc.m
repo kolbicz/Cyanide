@@ -769,12 +769,15 @@ uint64_t r_msg2_main(uint64_t obj, const char *selName,
 // waitUntilDone:NO and skips the return-value plumbing. Use this when the
 // selector returns void and we don't need to wait — main thread retains the
 // NSInvocation for the duration of the call, so it's safe to release here.
-void r_msg2_main_async(uint64_t obj, const char *selName,
+// Returns false when the invocation couldn't be built or the dispatch didn't
+// complete; on a setter failure nothing is dispatched. A false after the
+// perform itself means the selector may or may not run — never blindly retry.
+bool r_msg2_main_async(uint64_t obj, const char *selName,
                        uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3)
 {
-    if (!r_is_objc_ptr(obj) || !selName) return;
+    if (!r_is_objc_ptr(obj) || !selName) return false;
     uint64_t sel = r_sel(selName);
-    if (!sel) return;
+    if (!sel) return false;
     r_settle_for(selName);
 
     uint64_t sig = 0;
@@ -782,25 +785,27 @@ void r_msg2_main_async(uint64_t obj, const char *selName,
         uint64_t sigSel = r_sel("methodSignatureForSelector:");
         sig = r_msg(obj, sigSel, sel, 0, 0, 0);
     }
-    if (!r_is_objc_ptr(sig)) return;
+    if (!r_is_objc_ptr(sig)) return false;
 
     uint64_t NSInvocation = r_class("NSInvocation");
-    if (!r_is_objc_ptr(NSInvocation)) return;
+    if (!r_is_objc_ptr(NSInvocation)) return false;
     uint64_t inv = r_msg_retained_return(NSInvocation,
                                          r_sel("invocationWithMethodSignature:"),
                                          sig, 0, 0, 0);
-    if (!r_is_objc_ptr(inv)) return;
+    if (!r_is_objc_ptr(inv)) return false;
 
     uint64_t numArgs = r_msg2(sig, "numberOfArguments", 0, 0, 0, 0);
+    bool argsOK = t_r_last_ok;
     uint64_t maxUserArgs = (numArgs > 2) ? (numArgs - 2) : 0;
     if (maxUserArgs > 4) maxUserArgs = 4;
 
     r_msg2(inv, "setTarget:", obj, 0, 0, 0);
+    argsOK = argsOK && t_r_last_ok;
     r_msg2(inv, "setSelector:", sel, 0, 0, 0);
+    argsOK = argsOK && t_r_last_ok;
 
-    bool argsOK = true;
     uint64_t userArgs[4] = { a0, a1, a2, a3 };
-    for (uint64_t i = 0; i < maxUserArgs; i++) {
+    for (uint64_t i = 0; argsOK && i < maxUserArgs; i++) {
         uint64_t argBuf = r_call_stable(R_TIMEOUT, "malloc",
                                         8, 0, 0, 0, 0, 0, 0, 0);
         if (!argBuf) {
@@ -809,28 +814,35 @@ void r_msg2_main_async(uint64_t obj, const char *selName,
         }
         if (remote_write64(argBuf, userArgs[i])) {
             r_msg2(inv, "setArgument:atIndex:", argBuf, i + 2, 0, 0);
+            if (!t_r_last_ok) argsOK = false;
         } else {
             argsOK = false;
         }
         r_free(argBuf);
     }
 
-    if (!argsOK) {
-        r_msg2(inv, "release", 0, 0, 0, 0);
-        return;
+    if (argsOK) {
+        r_msg2(inv, "retainArguments", 0, 0, 0, 0);
+        argsOK = t_r_last_ok;
     }
-
-    r_msg2(inv, "retainArguments", 0, 0, 0, 0);
 
     uint64_t performSel = r_sel("performSelectorOnMainThread:withObject:waitUntilDone:");
     uint64_t invokeSel = r_sel("invoke");
-    if (performSel && invokeSel) r_msg(inv, performSel, invokeSel, 0, 0, 0);
+    if (!argsOK || !performSel || !invokeSel) {
+        r_msg2(inv, "release", 0, 0, 0, 0);
+        return false;
+    }
+
+    r_msg(inv, performSel, invokeSel, 0, 0, 0);
+    bool ok = t_r_last_ok;
+    if (!ok) printf("[R_OBJC] async main-thread dispatch failed (completion unknown)\n");
     // performSelectorOnMainThread: retains the receiver until it has run.
     r_msg2(inv, "release", 0, 0, 0, 0);
 
     // Fire-and-forget: the main thread may still be running this when we
     // return, so the next remote interaction owes a settle.
-    gSettleOwed = true;
+    if (ok) gSettleOwed = true;
+    return ok;
 }
 
 uint64_t r_msg2_main_raw(uint64_t obj, const char *selName,
@@ -856,76 +868,85 @@ bool r_msg2_main_struct_ret(uint64_t obj, const char *selName,
                             const void *a2, size_t a2Size,
                             const void *a3, size_t a3Size)
 {
+    t_r_main_ok = false;
     if (!r_is_objc_ptr(obj) || !selName || !outBuf || outSize == 0) return false;
     uint64_t sel = r_sel(selName);
     if (!sel) return false;
     r_settle_for(selName);
 
-    uint64_t sig = r_method_signature(obj, sel);
+    uint64_t sig = r_method_signature(obj, sel);   // retained
     if (!r_is_objc_ptr(sig)) return false;
 
-    uint64_t NSInvocation = r_class("NSInvocation");
-    if (!r_is_objc_ptr(NSInvocation)) return false;
-
-    uint64_t inv = r_msg_retained_return(NSInvocation,
-                                         r_sel("invocationWithMethodSignature:"),
-                                         sig, 0, 0, 0);
-    if (!r_is_objc_ptr(inv)) return false;
-
-    uint64_t numArgs = r_msg2(sig, "numberOfArguments", 0, 0, 0, 0);
-    uint64_t maxUserArgs = (numArgs > 2) ? (numArgs - 2) : 0;
-    if (maxUserArgs > 4) maxUserArgs = 4;
-
-    r_msg2(inv, "setTarget:", obj, 0, 0, 0);
-    r_msg2(inv, "setSelector:", sel, 0, 0, 0);
-
-    bool argsOK = true;
-    const void *argData[4] = { a0, a1, a2, a3 };
-    size_t argSizes[4] = { a0Size, a1Size, a2Size, a3Size };
-    for (uint64_t i = 0; i < maxUserArgs; i++) {
-        size_t argBufLen = (argSizes[i] > 8) ? argSizes[i] : 8;
-        uint64_t argBuf = r_call_stable(R_TIMEOUT, "malloc",
-                                        argBufLen, 0, 0, 0, 0, 0, 0, 0);
-        if (!argBuf) {
-            argsOK = false;
-            continue;
-        }
-        if (r_write_remote_arg(argBuf, argData[i], argSizes[i], argBufLen)) {
-            r_msg2(inv, "setArgument:atIndex:", argBuf, i + 2, 0, 0);
-        } else {
-            argsOK = false;
-        }
-        r_free(argBuf);
-    }
-
-    if (!argsOK) {
-        r_msg2(inv, "release", 0, 0, 0, 0);
-        return false;
-    }
-
-    r_msg2(inv, "retainArguments", 0, 0, 0, 0);
-
-    uint64_t performSel = r_sel("performSelectorOnMainThread:withObject:waitUntilDone:");
-    uint64_t invokeSel = r_sel("invoke");
-    if (!performSel || !invokeSel) {
-        r_msg2(inv, "release", 0, 0, 0, 0);
-        return false;
-    }
-    r_invoke_on_main_wait(inv, performSel, invokeSel);
-
     bool ok = false;
-    uint64_t retLen = r_msg2(sig, "methodReturnLength", 0, 0, 0, 0);
-    if (retLen >= outSize) {
-        uint64_t retBuf = r_call_stable(R_TIMEOUT, "malloc",
-                                        retLen, 0, 0, 0, 0, 0, 0, 0);
-        if (retBuf) {
-            r_msg2(inv, "getReturnValue:", retBuf, 0, 0, 0);
-            ok = remote_read(retBuf, outBuf, outSize);
-            r_free(retBuf);
+    uint64_t inv = 0;
+    uint64_t NSInvocation = r_class("NSInvocation");
+    if (!r_is_objc_ptr(NSInvocation)) goto out;
+
+    inv = r_msg_retained_return(NSInvocation,
+                                r_sel("invocationWithMethodSignature:"),
+                                sig, 0, 0, 0);
+    if (!r_is_objc_ptr(inv)) { inv = 0; goto out; }
+
+    {
+        uint64_t numArgs = r_msg2(sig, "numberOfArguments", 0, 0, 0, 0);
+        if (!t_r_last_ok) goto out;
+        uint64_t maxUserArgs = (numArgs > 2) ? (numArgs - 2) : 0;
+        if (maxUserArgs > 4) maxUserArgs = 4;
+
+        r_msg2(inv, "setTarget:", obj, 0, 0, 0);
+        bool argsOK = t_r_last_ok;
+        r_msg2(inv, "setSelector:", sel, 0, 0, 0);
+        argsOK = argsOK && t_r_last_ok;
+
+        const void *argData[4] = { a0, a1, a2, a3 };
+        size_t argSizes[4] = { a0Size, a1Size, a2Size, a3Size };
+        for (uint64_t i = 0; argsOK && i < maxUserArgs; i++) {
+            size_t argBufLen = (argSizes[i] > 8) ? argSizes[i] : 8;
+            uint64_t argBuf = r_call_stable(R_TIMEOUT, "malloc",
+                                            argBufLen, 0, 0, 0, 0, 0, 0, 0);
+            if (!argBuf) {
+                argsOK = false;
+                continue;
+            }
+            if (r_write_remote_arg(argBuf, argData[i], argSizes[i], argBufLen)) {
+                r_msg2(inv, "setArgument:atIndex:", argBuf, i + 2, 0, 0);
+                if (!t_r_last_ok) argsOK = false;
+            } else {
+                argsOK = false;
+            }
+            r_free(argBuf);
         }
+        if (!argsOK) goto out;
+
+        r_msg2(inv, "retainArguments", 0, 0, 0, 0);
+        if (!t_r_last_ok) goto out;
+
+        uint64_t performSel = r_sel("performSelectorOnMainThread:withObject:waitUntilDone:");
+        uint64_t invokeSel = r_sel("invoke");
+        if (!performSel || !invokeSel) goto out;
+        r_invoke_on_main_wait(inv, performSel, invokeSel);
+        if (!t_r_last_ok) {
+            // The selector may or may not have run; report failure, don't retry.
+            printf("[R_OBJC] main-thread dispatch failed (completion unknown)\n");
+            goto out;
+        }
+
+        uint64_t retLen = r_msg2(sig, "methodReturnLength", 0, 0, 0, 0);
+        if (!t_r_last_ok || retLen < outSize) goto out;
+        // calloc: a getReturnValue: that doesn't fill the buffer must not
+        // hand back stale heap bytes as a valid result.
+        uint64_t retBuf = r_call_stable(R_TIMEOUT, "calloc",
+                                        1, retLen, 0, 0, 0, 0, 0, 0);
+        if (!t_r_last_ok || !retBuf) goto out;
+        r_msg2(inv, "getReturnValue:", retBuf, 0, 0, 0);
+        if (t_r_last_ok) ok = remote_read(retBuf, outBuf, outSize);
+        r_free(retBuf);
     }
 
-    r_msg2(inv, "release", 0, 0, 0, 0);
+out:
+    if (inv) r_msg2(inv, "release", 0, 0, 0, 0);
+    r_msg(sig, r_sel("release"), 0, 0, 0, 0);
+    t_r_main_ok = ok;
     return ok;
 }
 

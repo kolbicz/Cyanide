@@ -3013,20 +3013,24 @@ static void axn_apply_filter(uint64_t clvc, uint64_t tick)
         bool fired = false;
 
         if (!wantsVisible && !e->hiddenByAxon) {
-            r_msg2_main_async(clvc, "removeNotificationRequest:", e->request, 0, 0, 0);
-            e->hiddenByAxon = true;
-            e->hiddenCell = 0;
-            removed++;
-            fired = true;
+            // Only record the hide once the dispatch succeeded; a failed
+            // async call leaves the entry as-is for the next pass.
+            if (r_msg2_main_async(clvc, "removeNotificationRequest:", e->request, 0, 0, 0)) {
+                e->hiddenByAxon = true;
+                e->hiddenCell = 0;
+                removed++;
+                fired = true;
+            }
         } else if (wantsVisible && e->hiddenByAxon) {
             if (!canRestore) {
                 restoreSkipped++;
                 continue;
             }
-            r_msg2_main_async(model, "_insertNotificationRequest:", e->request, 0, 0, 0);
-            e->hiddenByAxon = false;
-            inserted++;
-            fired = true;
+            if (r_msg2_main_async(model, "_insertNotificationRequest:", e->request, 0, 0, 0)) {
+                e->hiddenByAxon = false;
+                inserted++;
+                fired = true;
+            }
         }
 
         if (fired && ++batchSinceFlush >= kAxonAsyncBatchSize) {

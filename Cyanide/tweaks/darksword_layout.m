@@ -219,15 +219,20 @@ static bool rc_set_insets_on(uint64_t cfg, uint64_t clsInv,
     uint64_t inv = r_msg(clsInv, selWithSig, sig, 0, 0, 0);
     if (!inv) return false;
     r_msg(inv, selSetTgt, cfg, 0, 0, 0);
+    if (!r_last_call_ok()) return false;
     r_msg(inv, selSetSel, selSetInsets, 0, 0, 0);
+    if (!r_last_call_ok()) return false;
 
     uint64_t mem = do_remote_call_stable(R_TIMEOUT, "calloc", 1, 32, 0, 0, 0, 0, 0, 0);
     if (!mem) return false;
     if (!remote_write(mem, insets, sizeof(*insets))) { r_free(mem); return false; }
     r_msg(inv, selSetArg, mem, 2, 0, 0);
+    if (!r_last_call_ok()) { r_free(mem); return false; }
     r_msg(inv, selPerform, selInvoke, 0, 1, 0);
+    // false = the dispatch didn't complete; the setter may or may not have run.
+    bool ok = r_last_call_ok();
     r_free(mem);
-    return true;
+    return ok;
 }
 
 // When async is true the invocation is fired onto SpringBoard's main thread
@@ -256,16 +261,24 @@ static bool rc_set_icon_info_on(uint64_t cfg, uint64_t clsInv,
     uint64_t inv = r_msg(clsInv, selWithSig, sig, 0, 0, 0);
     if (!inv) return false;
     r_msg(inv, selSetTgt, cfg, 0, 0, 0);
+    if (!r_last_call_ok()) return false;
     r_msg(inv, selSetSel, selSetIconInfo, 0, 0, 0);
+    if (!r_last_call_ok()) return false;
 
     uint64_t mem = do_remote_call_stable(R_TIMEOUT, "calloc", 1, 32, 0, 0, 0, 0, 0, 0);
     if (!mem) return false;
     if (!remote_write(mem, info, sizeof(*info))) { r_free(mem); return false; }
     r_msg(inv, selSetArg, mem, 2, 0, 0);
-    if (async) r_msg(inv, r_sel("retainArguments"), 0, 0, 0, 0);
+    if (!r_last_call_ok()) { r_free(mem); return false; }
+    if (async) {
+        r_msg(inv, r_sel("retainArguments"), 0, 0, 0, 0);
+        if (!r_last_call_ok()) { r_free(mem); return false; }
+    }
     r_msg(inv, selPerform, selInvoke, 0, async ? 0 : 1, 0);
+    // false = the dispatch didn't complete; the setter may or may not have run.
+    bool ok = r_last_call_ok();
     r_free(mem);
-    return true;
+    return ok;
 }
 
 // True for the icon classes we resize: real app icons, PLUS the special dynamic
@@ -397,12 +410,13 @@ static int rc_list_view_icon_views(uint64_t listView, uint64_t *out, int cap,
 }
 
 // Resize every icon view of one list view. Returns how many were resized.
-static int rc_refresh_list_view(RCResizeCtx *ctx, uint64_t listView)
+static int rc_refresh_list_view(RCResizeCtx *ctx, uint64_t listView, int *outTotal)
 {
     enum { ICON_CAP = 256 };
     uint64_t views[ICON_CAP];
     uint64_t subs = 0;
     int n = rc_list_view_icon_views(listView, views, ICON_CAP, &subs);
+    if (outTotal) *outTotal += n;
     int resized = 0;
     for (int i = 0; i < n; i++) {
         if (rc_resize_icon_view(ctx, views[i])) resized++;
@@ -629,7 +643,7 @@ bool darksword_layout_home_scale_in_session(double scale)
     for (int p = 0; p < npages; p++) r_msg(subsHeld[p], selRel, 0, 0, 0, 0);
 
     printf("[HSSCALE] resized %d of %d live icon view(s) on %d page(s)\n", resized, nviews, npages);
-    return true;
+    return resized > 0 || nviews == 0;
 }
 
 bool darksword_layout_dock_scale_in_session(double scale)
@@ -659,7 +673,8 @@ bool darksword_layout_dock_scale_in_session(double scale)
 
     RCResizeCtx ctx;
     rc_resize_ctx_init(&ctx, clsInv, &info);
-    int touched = rc_refresh_list_view(&ctx, dock);
+    int total = 0;
+    int touched = rc_refresh_list_view(&ctx, dock, &total);
     if (touched == 0) {
         uint64_t clsListView = r_class("SBIconListView");
         enum { LV_CAP = 64 };
@@ -667,12 +682,12 @@ bool darksword_layout_dock_scale_in_session(double scale)
         int nlv = sb_collect_views_in_windows_main(clsListView, lvs, LV_CAP);
         for (int i = 0; i < nlv; i++) {
             if (rc_safe_msg(lvs[i], "isDock", 0, 0, 0, 0))
-                touched += rc_refresh_list_view(&ctx, lvs[i]);
+                touched += rc_refresh_list_view(&ctx, lvs[i], &total);
         }
     }
     rc_resize_ctx_destroy(&ctx);
-    printf("[DOCKSCALE] resized %d live dock icon view(s)\n", touched);
-    return true;
+    printf("[DOCKSCALE] resized %d of %d live dock icon view(s)\n", touched, total);
+    return touched > 0 || total == 0;
 }
 
 // iOS 26: the (now-immutable) AMUIInfographIconListLayout doesn't have a
@@ -840,16 +855,18 @@ static bool darksword_layout_apply_in_session_ios26(double exL, double exR, doub
                 r_msg2_main_raw(lv, "setTransform:",
                                 xf, sizeof(xf),
                                 NULL, 0, NULL, 0, NULL, 0);
-                printf("[LAYOUT26]   %s transform scale=(%.3f,%.3f) tx=%.1f frameWxH=%.1fx%.1f\n",
-                       isDock ? "dock" : "home", scaleX, scaleY, tx, w, h);
-                anyOk = true;
+                bool setOk = r_last_main_ok();
+                printf("[LAYOUT26]   %s transform scale=(%.3f,%.3f) tx=%.1f frameWxH=%.1fx%.1f%s\n",
+                       isDock ? "dock" : "home", scaleX, scaleY, tx, w, h,
+                       setOk ? "" : " (setTransform: failed)");
+                if (setOk) anyOk = true;
             } else {
                 // Reset to identity in case a prior Run left a transform.
                 double identity[6] = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
                 r_msg2_main_raw(lv, "setTransform:",
                                 identity, sizeof(identity),
                                 NULL, 0, NULL, 0, NULL, 0);
-                anyOk = true;
+                if (r_last_main_ok()) anyOk = true;
             }
         }
     }

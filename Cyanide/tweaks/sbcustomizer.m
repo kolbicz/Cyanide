@@ -236,7 +236,8 @@ static bool remove_icon_from_model(uint64_t model, uint64_t index, uint64_t icon
     } else {
         r_msg2_main(model, "removeIconAtIndex:", index, 0, 0, 0);
     }
-    return true;
+    // false = the main-thread call didn't complete; it may or may not have run.
+    return r_last_main_ok();
 }
 
 static bool insert_icon_into_model(uint64_t model, uint64_t index, uint64_t icon)
@@ -248,7 +249,8 @@ static bool insert_icon_into_model(uint64_t model, uint64_t index, uint64_t icon
     } else {
         r_msg2_main(model, "addIcon:", icon, 0, 0, 0);
     }
-    return true;
+    // false = the main-thread call didn't complete; it may or may not have run.
+    return r_last_main_ok();
 }
 
 static uint64_t icon_array_count(uint64_t model);
@@ -362,7 +364,7 @@ static bool auto_add_app_to_dock(uint64_t iconCtrl, int dockIcons, const char *b
 
     uint64_t sourceCountBefore = icon_array_count(sourceModel);
     if (!remove_icon_from_model(sourceModel, sourceIndex, icon)) {
-        printf("[SBC:DOCKAPP] source removal selector unavailable\n");
+        printf("[SBC:DOCKAPP] source removal failed\n");
         release_remote_object(sourceModel);
         release_remote_object(icon);
         return false;
@@ -395,7 +397,10 @@ static bool auto_add_app_to_dock(uint64_t iconCtrl, int dockIcons, const char *b
     dockView = try_msg0(mgr, "dockListView");
     if (!dockView) dockView = try_msg0(iconCtrl, "dockListView");
     dockModel = list_view_model(dockView);
-    bool inserted = insert_icon_into_model(dockModel, dockCount, icon);
+    // The verification below is authoritative: a failed status doesn't mean
+    // the insert didn't run, and restoring an icon that did land duplicates it.
+    insert_icon_into_model(dockModel, dockCount, icon);
+    bool inserted = true;
     mgr = try_msg0(iconCtrl, "iconManager");
     dockView = try_msg0(mgr, "dockListView");
     dockModel = list_view_model(dockView);
@@ -1084,7 +1089,10 @@ static bool move_icon_between_pages(uint64_t rootFolder,
 
     // Removal can rebuild the destination page model as well.
     destinationModel = page_model_at(rootFolder, destinationPage);
-    if (insert_icon_into_model(destinationModel, destinationIndex, icon)) {
+    // The count check is authoritative: a failed insert status doesn't mean it
+    // didn't run, and restoring an icon that did land would duplicate it.
+    insert_icon_into_model(destinationModel, destinationIndex, icon);
+    {
         uint64_t destinationCountAfter = wait_for_page_count(
             rootFolder, destinationPage, destinationCountBefore + 1);
         if (destinationCountAfter == destinationCountBefore + 1) return true;
@@ -1104,26 +1112,38 @@ static bool move_icon_between_pages(uint64_t rootFolder,
 // already tracks; the arrange verifies each page's final count once instead (see
 // rebalance_impl) and falls back to the settling path if that check ever fails.
 // The destination re-resolve is kept -- removal can rebuild the destination page
-// model -- and a failed insert still restores the icon to the source page.
-// sourceModel is the model the caller just read `icon` from: nothing mutates
+// model. A failed removal moved nothing. A failed insert is NOT restored here: the
+// call may still have run, and a blind re-insert could duplicate the icon. It
+// sets *needsVerify instead, and the caller re-runs with the slow, count-verified
+// path. sourceModel is the model the caller just read `icon` from: nothing mutates
 // between that read and the removal, so re-resolving it would only repeat a
 // ~6 round-trip main-thread lookup per move.
 static bool move_icon_fast(uint64_t rootFolder, uint64_t sourceModel,
                            uint64_t sourcePage, uint64_t sourceIndex,
                            uint64_t destinationPage, uint64_t destinationIndex,
-                           uint64_t icon, const char *tag)
+                           uint64_t icon, const char *tag, bool *needsVerify)
 {
+    *needsVerify = false;
     if (!r_is_objc_ptr(sourceModel) || !r_is_objc_ptr(icon)) {
         printf("[SBC:MOVE] %s unsupported page mutation\n", tag);
         return false;
     }
-    if (!remove_icon_from_model(sourceModel, sourceIndex, icon)) return false;
+    if (!remove_icon_from_model(sourceModel, sourceIndex, icon)) {
+        printf("[SBC:MOVE] %s removal failed\n", tag);
+        return false;
+    }
     uint64_t destinationModel = page_model_at(rootFolder, destinationPage);
-    if (!r_is_objc_ptr(destinationModel) ||
-        !insert_icon_into_model(destinationModel, destinationIndex, icon)) {
-        printf("[SBC:MOVE] %s insertion failed; restoring source page\n", tag);
+    if (!r_is_objc_ptr(destinationModel)) {
+        // Nothing was sent to the destination: the icon is certainly detached,
+        // so putting it back can't duplicate it.
+        printf("[SBC:MOVE] %s destination unavailable; restoring source page\n", tag);
         sourceModel = page_model_at(rootFolder, sourcePage);
         insert_icon_into_model(sourceModel, sourceIndex, icon);
+        return false;
+    }
+    if (!insert_icon_into_model(destinationModel, destinationIndex, icon)) {
+        printf("[SBC:MOVE] %s insertion status unknown; deferring to verified path\n", tag);
+        *needsVerify = true;
         return false;
     }
     return true;
@@ -1167,10 +1187,11 @@ static int rebalance_impl(uint64_t rootFolder, uint64_t count,
             uint64_t iconIndex = current - 1;
             uint64_t icon = icon_at_index_transient(model, iconIndex);
             bool didMove;
+            bool needsVerify = false;
             if (fast) {
                 didMove = r_is_objc_ptr(icon) &&
                     move_icon_fast(rootFolder, model, page, iconIndex, page + 1, 0,
-                                   icon, "page overflow");
+                                   icon, "page overflow", &needsVerify);
             } else {
                 if (destinationCount == UINT64_MAX) {
                     destinationCount = icon_array_count_transient(
@@ -1183,6 +1204,12 @@ static int rebalance_impl(uint64_t rootFolder, uint64_t count,
                 destinationCount++;
             }
             if (!didMove) {
+                // Insert status unknown: re-run with per-move verification,
+                // which re-reads live counts instead of trusting ours.
+                if (needsVerify) {
+                    return rebalance_impl(rootFolder, count, firstPageIcons,
+                                          otherPageIcons, false);
+                }
                 return -1;
             }
             moved++;
@@ -1218,10 +1245,11 @@ static int rebalance_impl(uint64_t rootFolder, uint64_t count,
             uint64_t donorModel = page_model_at(rootFolder, donorPage);
             uint64_t icon = icon_at_index_transient(donorModel, 0);
             bool didMove;
+            bool needsVerify = false;
             if (fast) {
                 didMove = r_is_objc_ptr(icon) &&
                     move_icon_fast(rootFolder, donorModel, donorPage, 0, page, current,
-                                   icon, "page fill");
+                                   icon, "page fill", &needsVerify);
             } else {
                 didMove = r_is_objc_ptr(icon) &&
                     move_icon_between_pages(rootFolder, donorPage, 0,
@@ -1229,6 +1257,12 @@ static int rebalance_impl(uint64_t rootFolder, uint64_t count,
                                             icon, "page fill");
             }
             if (!didMove) {
+                // Insert status unknown: re-run with per-move verification,
+                // which re-reads live counts instead of trusting ours.
+                if (needsVerify) {
+                    return rebalance_impl(rootFolder, count, firstPageIcons,
+                                          otherPageIcons, false);
+                }
                 return -1;
             }
             moved++;

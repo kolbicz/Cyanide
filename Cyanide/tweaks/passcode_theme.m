@@ -1975,21 +1975,79 @@ BOOL settings_passcode_import_folder_named(NSURL *url,
         [staged addObject:tmpPath];
     }
 
-    // Swap the staged art in. Each rename stays inside one directory, so a digit
-    // is either fully old or fully new — never missing.
+    // Back up every digit the swap will replace as "<digit>.png.bak" (a hard
+    // link, or a copy where linking fails), so a swap that fails partway can put
+    // the whole previous style back instead of leaving a mix of old and new art.
+    NSUInteger stagedCount = staged.count;
+    NSMutableArray<NSString *> *finals = [NSMutableArray arrayWithCapacity:stagedCount];
+    NSMutableArray<NSString *> *backups = [NSMutableArray arrayWithCapacity:stagedCount];
+    NSMutableArray<NSNumber *> *hadPrevious = [NSMutableArray arrayWithCapacity:stagedCount];
+    bool backupOK = true;
     for (NSString *tmpPath in staged) {
         NSString *finalPath = [tmpPath substringToIndex:tmpPath.length - 4];   // drop ".tmp"
-        [fm removeItemAtPath:finalPath error:nil];
-        if (![fm moveItemAtPath:tmpPath toPath:finalPath error:nil]) {
-            for (NSString *rest in staged) [fm removeItemAtPath:rest error:nil];
-            if (error) {
-                *error = [NSError errorWithDomain:@"PasscodeTheme" code:5 userInfo:@{
-                    NSLocalizedDescriptionKey: @"The style could not be written; the previous style is unchanged."
-                }];
-            }
-            return NO;
+        NSString *bakPath = [finalPath stringByAppendingString:@".bak"];
+        [finals addObject:finalPath];
+        [backups addObject:bakPath];
+        unlink(bakPath.fileSystemRepresentation);   // stale leftover, if any
+        bool exists = [fm fileExistsAtPath:finalPath];
+        [hadPrevious addObject:@(exists)];
+        if (!backupOK || !exists) continue;
+        if (link(finalPath.fileSystemRepresentation, bakPath.fileSystemRepresentation) != 0 &&
+            ![fm copyItemAtPath:finalPath toPath:bakPath error:nil]) {
+            backupOK = false;
         }
     }
+    if (!backupOK) {
+        // Nothing live has been touched yet.
+        for (NSString *bak in backups) unlink(bak.fileSystemRepresentation);
+        for (NSString *rest in staged) [fm removeItemAtPath:rest error:nil];
+        if (error) {
+            *error = [NSError errorWithDomain:@"PasscodeTheme" code:5 userInfo:@{
+                NSLocalizedDescriptionKey: @"The style could not be written; the previous style is unchanged."
+            }];
+        }
+        return NO;
+    }
+
+    // Swap the staged art in. rename() replaces the final file atomically within
+    // one directory, so each digit is either fully old or fully new.
+    for (NSUInteger i = 0; i < stagedCount; i++) {
+        if (rename(staged[i].fileSystemRepresentation, finals[i].fileSystemRepresentation) == 0) {
+            continue;
+        }
+        int swapErr = errno;
+        // Roll back every digit already swapped: put its backup back, or remove
+        // it if the previous style had no art for that digit. The failed digit's
+        // own rename didn't happen, so its previous file is still in place.
+        bool restoreOK = true;
+        for (NSUInteger j = 0; j < i; j++) {
+            if (hadPrevious[j].boolValue) {
+                if (rename(backups[j].fileSystemRepresentation,
+                           finals[j].fileSystemRepresentation) != 0) restoreOK = false;
+            } else if (unlink(finals[j].fileSystemRepresentation) != 0 && errno != ENOENT) {
+                restoreOK = false;
+            }
+        }
+        for (NSString *rest in staged) [fm removeItemAtPath:rest error:nil];
+        // Keep backups that couldn't be restored; they're the only copy left.
+        if (restoreOK) {
+            for (NSString *bak in backups) unlink(bak.fileSystemRepresentation);
+        }
+        log_user("[PASSCODE] Style swap failed at %s (errno %d); restore %s.\n",
+                 finals[i].lastPathComponent.UTF8String, swapErr,
+                 restoreOK ? "succeeded" : "FAILED");
+        if (error) {
+            NSString *msg = restoreOK
+                ? @"The style could not be written; the previous style is unchanged."
+                : @"The style could not be written, and the previous style could not be fully restored. Import a style again or reset the passcode theme.";
+            *error = [NSError errorWithDomain:@"PasscodeTheme" code:5 userInfo:@{
+                NSLocalizedDescriptionKey: msg
+            }];
+        }
+        if (!restoreOK) settings_passcode_invalidate_caches();
+        return NO;
+    }
+    for (NSString *bak in backups) unlink(bak.fileSystemRepresentation);
 
     // The staged art is live; only now drop PNGs the new style does not cover.
     NSMutableSet<NSString *> *covered = [NSMutableSet set];
