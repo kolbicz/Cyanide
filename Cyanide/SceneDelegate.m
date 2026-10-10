@@ -550,6 +550,10 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
         return;
     }
     if (settings_switcher_removal_pending()) {
+        // actionInProgress was rejected above, so any remaining quiet cover is
+        // an early/stale cover owned by no running request. Remove only that
+        // unowned cover; a live request's UI is never reached here.
+        [self hideQuietCover];
         // An earlier cold run's card removal is still armed and will end
         // Cyanide within its window. It cannot be cancelled safely (a
         // pre-fire SpringBoard hijack is the activation ABBA deadlock the
