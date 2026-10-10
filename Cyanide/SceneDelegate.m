@@ -230,6 +230,15 @@ static int scene_expected_target(int desired)
 }
 
 // Private but long-stable: what the Home gesture does.
+// Whether Cyanide can send itself to the Home Screen at all (UIKit's private
+// -suspend). Without it the run stays in front, so it must not arm the
+// switcher-card removal: the removal would then close the app in front of
+// the user.
+static BOOL scene_can_suspend_to_home(void)
+{
+    return [UIApplication.sharedApplication respondsToSelector:NSSelectorFromString(@"suspend")];
+}
+
 static void scene_suspend_to_home(void)
 {
     SEL suspend = NSSelectorFromString(@"suspend");
@@ -513,7 +522,7 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     // Only a run that cold-launched Cyanide removes the switcher card (and
     // keepInSwitcher=1 opts even that out). A run that found Cyanide open
     // keeps the card — the app was the user's before the request.
-    BOOL removeCard = cold && !keepCard;
+    BOOL removeCard = cold && !keepCard && scene_can_suspend_to_home();
     NSUInteger generation = ++self.actionGeneration;
     self.actionInProgress = YES;
     // When the result actually appears on screen (main thread), for the
@@ -588,6 +597,18 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
                     return;
                 }
                 scene_suspend_to_home();
+                // Diagnostic: if this run armed the card removal and Cyanide is
+                // still in front shortly after, the removal will close it in
+                // front of the user (it can't be cancelled; see
+                // settings_switcher_removal_pending). Log it so the case shows.
+                if (removeCard) {
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                                   dispatch_get_main_queue(), ^{
+                        if (UIApplication.sharedApplication.applicationState == UIApplicationStateActive)
+                            NSLog(@"[URL] WARNING: still in front 0.5 s after going Home, with the "
+                                  @"switcher-card removal armed");
+                    });
+                }
             });
         });
     };
