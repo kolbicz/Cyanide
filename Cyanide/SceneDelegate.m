@@ -6,6 +6,7 @@
 //
 
 #import "SceneDelegate.h"
+#import "LogTextView.h"
 #import "AppDelegate.h"            // round 31: cyanide_launch_trace
 #import "SettingsViewController.h"
 #import "tweaks/location_services.h"
@@ -30,12 +31,34 @@ __attribute__((constructor)) static void scene_note_process_start(void)
 }
 static BOOL g_scene_any_request = NO;   // main thread only
 
+// A fresh PROCESS doesn't mean a fresh card: iOS often ends a backgrounded
+// Cyanide while its switcher card stays, and the next toggle starts a new
+// process. The card is backed by the scene session, which survives until the
+// user swipes the card away; a relaunch with the card still there reconnects
+// the SAME session, a launch after a swipe-away gets a new one. So the card
+// existed before this launch exactly when the session is one we saw before.
+static NSString * const kSceneLastSessionIDKey = @"SceneLastSessionID";
+static BOOL g_scene_session_restored = NO;
+
+static void scene_note_session(UISceneSession *session)
+{
+    NSString *sid = session.persistentIdentifier;
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    NSString *last = [d stringForKey:kSceneLastSessionIDKey];
+    g_scene_session_restored = sid.length > 0 && [sid isEqualToString:last];
+    if (sid.length) [d setObject:sid forKey:kSceneLastSessionIDKey];
+    log_user("[URL] scene session %s — %s\n", sid.UTF8String ?: "?",
+             g_scene_session_restored ? "restored: the switcher card existed before this launch"
+                                      : "new: no earlier switcher card");
+}
+
 static BOOL scene_request_launched_app(void)
 {
     BOOL first = !g_scene_any_request;
     g_scene_any_request = YES;
     uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-    return first && now - g_scene_process_start_ns < 8ULL * NSEC_PER_SEC;
+    return first && !g_scene_session_restored &&
+           now - g_scene_process_start_ns < 8ULL * NSEC_PER_SEC;
 }
 
 @interface SceneDelegate ()
@@ -81,6 +104,7 @@ static CYLocationRequestCompletion g_scene_intent_completion = nil;
 
 
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
+    scene_note_session(session);   // before any request is judged (scene_request_launched_app)
     cyanide_launch_trace("scene willConnect: entry");
     UITabBarController *tab = (UITabBarController *)self.window.rootViewController;
     if ([tab isKindOfClass:UITabBarController.class] && tab.viewControllers.count > 1) {
