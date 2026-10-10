@@ -235,6 +235,10 @@ BOOL settings_apply_passcode_theme_now(BOOL apply);
 
 void settings_run_actions(void);
 void settings_run_pending_actions(void);
+// Records a pre-run failure (e.g. an installer package whose apply failed
+// before the run started) to be folded into the next run's completion, so a
+// failed install can't end with the progress screen showing "Done".
+void settings_note_run_preflight_failure(NSString *message);
 void settings_destroy_springboard_remote_call(void);
 void settings_destroy_springboard_remote_call_sync(void);
 void settings_best_effort_termination_cleanup(const char *reason);
@@ -272,6 +276,11 @@ void settings_location_services_set_async(int desired, BOOL allowFullExploit,
                                           SettingsProgressBlock progress,
                                           void (^completion)(BOOL ok, NSString *message,
                                                              NSTimeInterval resultAge));
+// YES while a card removal armed by an earlier shortcut run can still fire
+// (ending Cyanide). It cannot be cancelled safely (a pre-fire SpringBoard
+// hijack is the activation ABBA deadlock), so new requests must fail fast
+// instead of starting work the removal will kill.
+BOOL settings_switcher_removal_pending(void);
 
 @interface SettingsViewController : UITableViewController
 

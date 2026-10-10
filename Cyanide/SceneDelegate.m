@@ -18,6 +18,11 @@
 // A shortcut URL waiting for the scene to become active: kernel access is
 // gated off until then (excport gate), so actions can't run any earlier.
 @property (nonatomic, strong) NSURL *pendingActionURL;
+// YES when that request cold-launched Cyanide (no scene, often no process,
+// existed before it). Only such a run may have its switcher card removed
+// afterwards — a request that found Cyanide already open must never take
+// the app (and whatever the user had open in it) down with the card.
+@property (nonatomic, assign) BOOL pendingActionCold;
 // A cyanide://location-services link arrived while links are off; told once active.
 @property (nonatomic, assign) BOOL blockedLinkNotice;
 // Who asked for pendingActionURL, if it was the Control Center toggle.
@@ -69,14 +74,16 @@ static CYLocationRequestCompletion g_scene_intent_completion = nil;
         }
     }
     // Cold launch from a shortcut URL (or a Control Center toggle that ran
-    // before this scene existed); handled once the scene is active.
+    // before this scene existed); handled once the scene is active. Both
+    // paths cold-launched Cyanide — no scene existed before the request —
+    // so a successful quiet run may remove the switcher card afterwards.
     NSURL *linkURL = connectionOptions.URLContexts.anyObject.URL;
     if (linkURL && ![self acceptLinkURL:linkURL]) linkURL = nil;
     if (linkURL) {
-        [self setPendingURL:linkURL completion:nil];
+        [self setPendingURL:linkURL completion:nil coldLaunched:YES];
         if (g_scene_intent_completion) g_scene_intent_completion(NO, @"Another Location Services request came first.");
     } else {
-        [self setPendingURL:g_scene_intent_url completion:g_scene_intent_completion];
+        [self setPendingURL:g_scene_intent_url completion:g_scene_intent_completion coldLaunched:YES];
     }
     g_scene_intent_url = nil;
     g_scene_intent_completion = nil;
@@ -90,7 +97,8 @@ static CYLocationRequestCompletion g_scene_intent_completion = nil;
         if (scene.activationState == UISceneActivationStateForegroundActive) [self showBlockedLinkNoticeIfNeeded];
         return;
     }
-    [self receiveActionURL:url scene:scene];
+    // A URL delivered to an already-connected scene: Cyanide was open.
+    [self receiveActionURL:url scene:scene completion:nil coldLaunched:NO];
 }
 
 // cyanide:// links can be opened by ANY app, without a prompt (only Safari
@@ -117,25 +125,23 @@ static CYLocationRequestCompletion g_scene_intent_completion = nil;
 }
 
 // A request waiting for activation. A newer one replaces it; the replaced
-// one's requester is told it didn't run.
-- (void)setPendingURL:(NSURL *)url completion:(CYLocationRequestCompletion)completion {
+// one's requester is told it didn't run. `cold` is whether that request
+// cold-launched Cyanide (see pendingActionCold).
+- (void)setPendingURL:(NSURL *)url completion:(CYLocationRequestCompletion)completion coldLaunched:(BOOL)cold {
     CYLocationRequestCompletion replaced = self.pendingActionCompletion;
     self.pendingActionURL = url;
     self.pendingActionCompletion = completion;
+    self.pendingActionCold = cold;
     if (replaced && replaced != completion) replaced(NO, @"A newer Location Services request replaced this one.");
 }
 
-- (void)receiveActionURL:(NSURL *)url scene:(UIScene *)scene completion:(CYLocationRequestCompletion)completion {
+- (void)receiveActionURL:(NSURL *)url scene:(UIScene *)scene completion:(CYLocationRequestCompletion)completion coldLaunched:(BOOL)cold {
     if (scene.activationState == UISceneActivationStateForegroundActive) {
-        [self handleActionURL:url completion:completion];
+        [self handleActionURL:url completion:completion coldLaunched:cold];
     } else {
-        [self setPendingURL:url completion:completion];   // sceneDidBecomeActive runs it
+        [self setPendingURL:url completion:completion coldLaunched:cold];   // sceneDidBecomeActive runs it
         [self coverEarlyForURL:url];
     }
-}
-
-- (void)receiveActionURL:(NSURL *)url scene:(UIScene *)scene {
-    [self receiveActionURL:url scene:scene completion:nil];
 }
 
 // A request from the Control Center toggle (SetLocationServicesIntent, run
@@ -154,7 +160,9 @@ static CYLocationRequestCompletion g_scene_intent_completion = nil;
     if (![url isKindOfClass:NSURL.class]) { once(NO, @"Invalid request."); return; }
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if ([scene.delegate isKindOfClass:SceneDelegate.class]) {
-            [(SceneDelegate *)scene.delegate receiveActionURL:url scene:scene completion:once];
+            // A live scene means Cyanide was already open (in front or
+            // suspended with a switcher card): not a cold launch.
+            [(SceneDelegate *)scene.delegate receiveActionURL:url scene:scene completion:once coldLaunched:NO];
             return;
         }
     }
@@ -453,15 +461,18 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
 // cyanide://location-services/toggle | /on | /off. Runs only that action.
 //  - Default (quiet): a progress screen instead of Cyanide's UI; on success
 //    Cyanide returns to the Home Screen as soon as its SpringBoard work is
-//    finished (and SpringBoard then removes the switcher card unless
-//    keepInSwitcher=1). On failure an alert explains why.
+//    finished. Only a run that COLD-LAUNCHED Cyanide then has SpringBoard
+//    remove the switcher card (unless keepInSwitcher=1) — the card was
+//    created for that run. A request that found Cyanide already open never
+//    removes the card: it would close the app in front of the user, and a
+//    quick second toggle would be cut off by the first run's timer.
 //  - log=1: the activity log is shown, with a short pause on the result.
 // While one request runs, another is rejected without touching its screen.
 - (void)handleActionURL:(NSURL *)url {
-    [self handleActionURL:url completion:nil];
+    [self handleActionURL:url completion:nil coldLaunched:NO];
 }
 
-- (void)handleActionURL:(NSURL *)url completion:(CYLocationRequestCompletion)requester {
+- (void)handleActionURL:(NSURL *)url completion:(CYLocationRequestCompletion)requester coldLaunched:(BOOL)cold {
     if (![url.host.lowercaseString isEqualToString:@"location-services"]) {
         NSLog(@"[URL] unhandled %@", url);
         if (requester) requester(NO, @"Unsupported link.");
@@ -475,6 +486,20 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
         if (requester) requester(NO, @"A Location Services change is already in progress.");
         return;
     }
+    if (settings_switcher_removal_pending()) {
+        // An earlier cold run's card removal is still armed and will end
+        // Cyanide within its window. It cannot be cancelled safely (a
+        // pre-fire SpringBoard hijack is the activation ABBA deadlock the
+        // settle window prevents), and any kernel work started now would be
+        // killed mid-flight — so fail fast instead of letting the caller
+        // watch a progress screen that is about to disappear.
+        NSLog(@"[URL] rejected: an App Switcher card removal is still pending: %@", url);
+        NSString *busy = @"Cyanide is closing from the previous run. Try again in a few seconds.";
+        scene_announce(busy);
+        if (requester) requester(NO, busy);
+        else [self showAlertTitle:@"Location Services" message:busy];
+        return;
+    }
     self.homeOnNextActivation = NO;
     int desired = -1;
     BOOL keepCard = NO, showLog = NO;
@@ -485,6 +510,10 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
         if (requester) requester(NO, parseError);
         return;
     }
+    // Only a run that cold-launched Cyanide removes the switcher card (and
+    // keepInSwitcher=1 opts even that out). A run that found Cyanide open
+    // keeps the card — the app was the user's before the request.
+    BOOL removeCard = cold && !keepCard;
     NSUInteger generation = ++self.actionGeneration;
     self.actionInProgress = YES;
     // When the result actually appears on screen (main thread), for the
@@ -518,7 +547,9 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
         // Never a fresh exploit run from outside the app (Control Center,
         // Shortcuts, links): it can reboot A18/M4 devices, and nobody tapped
         // "Run Full Exploit". Live or parked kernel access only.
-        settings_location_services_set_async(desired, NO, !keepCard, showLog ? kLogResultPause : 0, progress,
+        // removeCard: only a run that cold-launched Cyanide (and did not ask
+        // to keep the card) may have the switcher card removed afterwards.
+        settings_location_services_set_async(desired, NO, removeCard, showLog ? kLogResultPause : 0, progress,
                                              ^(BOOL ok, NSString *rawMessage, NSTimeInterval resultAge) {
             NSString *message = [rawMessage isEqualToString:kSettingsFullExploitRequiredMessage]
                 ? @"Cyanide has no saved kernel access (for example after a restart). Open Cyanide and run it once, then try again."
@@ -620,9 +651,11 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     if (self.pendingActionURL) {
         NSURL *url = self.pendingActionURL;
         CYLocationRequestCompletion completion = self.pendingActionCompletion;
+        BOOL cold = self.pendingActionCold;
         self.pendingActionURL = nil;
         self.pendingActionCompletion = nil;
-        [self handleActionURL:url completion:completion];
+        self.pendingActionCold = NO;
+        [self handleActionURL:url completion:completion coldLaunched:cold];
     } else if (self.homeOnNextActivation && !self.actionInProgress) {
         self.homeOnNextActivation = NO;
         scene_suspend_to_home();

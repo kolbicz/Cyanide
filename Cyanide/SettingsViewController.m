@@ -1539,6 +1539,18 @@ static BOOL settings_wait_for_pending_switcher_removal(void)
     }
     return YES;
 }
+
+// YES while a switcher-card removal armed by an earlier shortcut run can
+// still fire (ending Cyanide). Such a timer cannot be cancelled from here:
+// the cancel would have to reach SpringBoard BEFORE the bound, but a fresh
+// SpringBoard hijack that soon after activation is the runningboardd
+// task_policy_set ABBA deadlock the settle window exists to prevent (panic
+// 235811). So a request that arrives while this is pending must fail fast
+// instead of starting kernel work the removal will kill mid-flight.
+BOOL settings_switcher_removal_pending(void)
+{
+    return g_removal_fire_bound_ns > clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+}
 // Progress hook for the location shortcut: called when a fresh SpringBoard
 // connection actually starts (after the settle wait). Set only while that
 // action runs.
@@ -1666,6 +1678,39 @@ static void settings_post_actions_complete_async(BOOL success, NSString *message
                           object:nil
                         userInfo:info];
     });
+}
+
+// A failure that happened BEFORE the run (e.g. a repo tweak whose script
+// download failed during the installer's queue commit). The progress screen's
+// final status comes from the run's own completion, so without folding this
+// in, a failed install shows as "Done" whenever the rest of the run succeeds.
+// Set right before settings_run_pending_actions; consumed by that run's
+// completion (auto-retries/re-runs return before consuming, so it survives
+// into the completion that is actually posted).
+static NSString *g_settings_run_preflight_failure = nil;
+static NSObject *settings_preflight_failure_lock(void)
+{
+    static NSObject *lock;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ lock = [NSObject new]; });
+    return lock;
+}
+
+void settings_note_run_preflight_failure(NSString *message)
+{
+    @synchronized (settings_preflight_failure_lock()) {
+        g_settings_run_preflight_failure = [message copy];
+    }
+}
+
+// Consumed exactly once, by the completion that is posted.
+static NSString *settings_take_run_preflight_failure(void)
+{
+    @synchronized (settings_preflight_failure_lock()) {
+        NSString *message = g_settings_run_preflight_failure;
+        g_settings_run_preflight_failure = nil;
+        return message;
+    }
 }
 
 static NSArray<NSString *> * const kPowercuffLevels = nil;
@@ -8885,6 +8930,17 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                 log_user("[RUN] Applying queued follow-up run.\n");
                 settings_run_actions_internal(pendingOnly);
                 return;
+            }
+            // An installer preflight failure (e.g. a repo tweak whose script
+            // download failed) rides along into this completion, so the
+            // progress screen can't show "Done" for a failed install.
+            NSString *preflightFailure = settings_take_run_preflight_failure();
+            if (preflightFailure.length) {
+                runSucceeded = NO;
+                runPartial = YES;
+                runCompletionMessage = runCompletionMessage.length
+                    ? [NSString stringWithFormat:@"%@ — %@", preflightFailure, runCompletionMessage]
+                    : preflightFailure;
             }
             dispatch_async(dispatch_get_main_queue(), ^{
                 // A new run that started after the release above keeps the

@@ -430,6 +430,11 @@ static BOOL PackageShouldAutoQueueForApply(Package *package)
     if (needsRunActions) {
         if (!allApplied) {
             log_user("[INSTALLER] Some queued packages failed to apply (see above); applying the rest.\n");
+            // The run's completion reports the run's own outcome; without
+            // this, a package whose apply failed (e.g. a repo tweak whose
+            // script download failed) would show as installed successfully
+            // whenever the rest of the run succeeds.
+            settings_note_run_preflight_failure(@"Some packages failed to apply — check the log above.");
         }
         settings_run_pending_actions();
         return;
