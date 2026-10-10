@@ -104,7 +104,9 @@ int      r_array_items_of_class(uint64_t array, uint64_t cls, uint64_t *out, int
 // Release with r_release.
 uint64_t r_invocation_retained(uint64_t sample, const char *selName,
                                const void *arg, size_t argSize);
-void     r_invocation_invoke_main(uint64_t inv, uint64_t target);
+// Returns false when setTarget: or the perform did not verifiably complete
+// (after a lost setTarget: reply nothing is invoked).
+bool     r_invocation_invoke_main(uint64_t inv, uint64_t target);
 
 // Copies the UTF-8 bytes of a remote NSString into a local C buffer (NUL
 // terminated, truncated to outLen-1). Returns true only if at least one

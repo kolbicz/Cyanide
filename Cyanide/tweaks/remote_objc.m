@@ -512,34 +512,52 @@ static RemoteInvocationEntry *r_inv_entry(int pid, uint64_t obj, uint64_t cls, u
 
     uint64_t inv = 0, numUserArgs = 0, retLen = 0;
     bool retIsObject = false;
+    // Every setup call must verifiably complete. A lost reply would cache a
+    // wrong shape for good: numberOfArguments read as 0 runs every later call
+    // with zeroed arguments (e.g. removeIconAtIndex:0), and a retainArguments
+    // that didn't run reopens the freed-return-value window the cache exists
+    // to close. On any failure nothing is cached: this call takes the slow
+    // path, and the next one tries to build the entry again.
+    bool setupOK = true;
     uint64_t sig = r_method_signature(obj, sel);   // retained
     uint64_t NSInvocation = r_class("NSInvocation");
     if (r_is_objc_ptr(sig) && r_is_objc_ptr(NSInvocation)) {
         uint64_t numArgs = r_msg(sig, r_sel("numberOfArguments"), 0, 0, 0, 0);
+        setupOK = setupOK && r_last_call_ok() && numArgs >= 2;
         numUserArgs = (numArgs > 2) ? (numArgs - 2) : 0;
         if (numUserArgs > 4) numUserArgs = 4;
         retLen = r_msg(sig, r_sel("methodReturnLength"), 0, 0, 0, 0);
+        setupOK = setupOK && r_last_call_ok();
         // Is the return type '@'? Not via remote_read: the type string lives
         // in the dyld shared cache, which the shmem page mapping cannot map
         // (each attempt logged 3 errors and wiped the whole shmem cache).
         // strchr(t, '@') == t exactly when t[0] == '@': one call, no read.
         uint64_t retType = r_msg(sig, r_sel("methodReturnType"), 0, 0, 0, 0);
+        setupOK = setupOK && r_last_call_ok();
         retIsObject = retType &&
             r_call_stable(R_TIMEOUT, "strchr", retType, '@', 0, 0, 0, 0, 0, 0) == retType;
-        if (retLen <= R_INV_RET_SLOT) {
+        setupOK = setupOK && (!retType || r_last_call_ok());
+        if (setupOK && retLen <= R_INV_RET_SLOT) {
             inv = r_msg_retained_return(NSInvocation, r_sel("invocationWithMethodSignature:"),
                                         sig, 0, 0, 0);
-            if (r_is_objc_ptr(inv)) {
+            if (r_is_objc_ptr(inv) && r_last_call_ok()) {
                 r_msg(inv, r_sel("setSelector:"), sel, 0, 0, 0);
+                setupOK = setupOK && r_last_call_ok();
                 // Before any target/argument is set, so every later setter and
                 // -invoke's return value are retained as they happen.
                 r_msg(inv, r_sel("retainArguments"), 0, 0, 0, 0);
+                setupOK = setupOK && r_last_call_ok();
             } else {
-                inv = 0;
+                setupOK = false;
             }
         }
     }
     if (r_is_objc_ptr(sig)) r_msg(sig, r_sel("release"), 0, 0, 0, 0);
+    if (!setupOK) {
+        if (r_is_objc_ptr(inv)) r_release_on_main_async(inv);
+        printf("[R_OBJC] invocation cache: setup reply lost — not cached, slow path this call\n");
+        return victim;   // zeroed (pid 0, inv 0): the caller falls back, nothing is remembered
+    }
 
     victim->pid = pid;
     victim->cls = cls;
@@ -1070,14 +1088,19 @@ uint64_t r_invocation_retained(uint64_t sample, const char *selName,
     uint64_t sig = r_msg(sample, r_sel("methodSignatureForSelector:"), sel, 0, 0, 0);
     if (!r_is_objc_ptr(sig)) return 0;
     uint64_t inv = r_msg(NSInvocation, r_sel("invocationWithMethodSignature:"), sig, 0, 0, 0);
-    if (!r_is_objc_ptr(inv)) return 0;
+    if (!r_is_objc_ptr(inv) || !r_last_call_ok()) return 0;
     r_msg(inv, r_sel("retain"), 0, 0, 0, 0);
+    if (!r_last_call_ok()) return 0;   // not retained: don't hand out an autoreleased pointer
     r_msg(inv, r_sel("setSelector:"), sel, 0, 0, 0);
+    bool ok = r_last_call_ok();
     // NSInvocation copies the argument bytes, so the buffer is freed here.
-    uint64_t mem = r_call_stable(R_TIMEOUT, "calloc", 1, argSize < 8 ? 8 : argSize,
-                                 0, 0, 0, 0, 0, 0);
-    bool ok = mem && remote_write(mem, arg, argSize);
-    if (ok) r_msg(inv, r_sel("setArgument:atIndex:"), mem, 2, 0, 0);
+    uint64_t mem = ok ? r_call_stable(R_TIMEOUT, "calloc", 1, argSize < 8 ? 8 : argSize,
+                                      0, 0, 0, 0, 0, 0) : 0;
+    ok = ok && mem && remote_write(mem, arg, argSize);
+    if (ok) {
+        r_msg(inv, r_sel("setArgument:atIndex:"), mem, 2, 0, 0);
+        ok = r_last_call_ok();   // a lost reply here could leave the argument unset
+    }
     if (mem) r_free(mem);
     if (!ok) {
         r_release(inv);
@@ -1086,12 +1109,16 @@ uint64_t r_invocation_retained(uint64_t sample, const char *selName,
     return inv;
 }
 
-void r_invocation_invoke_main(uint64_t inv, uint64_t target)
+bool r_invocation_invoke_main(uint64_t inv, uint64_t target)
 {
-    if (!r_is_objc_ptr(inv) || !r_is_objc_ptr(target)) return;
+    if (!r_is_objc_ptr(inv) || !r_is_objc_ptr(target)) return false;
     r_msg(inv, r_sel("setTarget:"), target, 0, 0, 0);
+    // A lost setTarget: reply may mean the target is still the PREVIOUS one;
+    // invoking now could re-run the call on that object. Don't.
+    if (!r_last_call_ok()) return false;
     r_invoke_on_main_wait(inv, r_sel("performSelectorOnMainThread:withObject:waitUntilDone:"),
                           r_sel("invoke"));
+    return r_last_call_ok();
 }
 
 bool r_read_nsstring(uint64_t str, char *out, size_t outLen)

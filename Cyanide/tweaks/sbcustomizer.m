@@ -496,7 +496,8 @@ static int set_icon_views_label_hidden(uint64_t listView, uint64_t wantHidden,
             *invHidden = r_invocation_retained(v, "setLabelHidden:", &arg, sizeof(arg));
             if (!*invHidden) break;
         }
-        r_invocation_invoke_main(*invHidden, v);
+        // Count (and refresh) only views whose setLabelHidden: verifiably ran.
+        if (!r_invocation_invoke_main(*invHidden, v)) continue;
         r_perform_main(v, selUpdate, 0, true);
         (*changed)++;
     }
