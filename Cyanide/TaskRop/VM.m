@@ -242,7 +242,18 @@ struct VMShmem vm_create_shmem_with_object(struct VMObject *object)
     }
  
     struct vm_map_entry entry = {0};
+    // A failed read zero-fills, and zeros pass the submap/kernel-object check
+    // below -- then the patched copy would be written back over the real
+    // entry. Bail out unless every read of the entry succeeded.
+    uint64_t errorsBefore = krw_op_error_count();
     kreadbuf(nextAddr, &entry, sizeof(struct vm_map_entry));
+    if (krw_op_error_count() != errorsBefore) {
+        printf("[%s:%d] copy entry read failed at %#llx — not mapping\n", __FUNCTION__, __LINE__,
+               (unsigned long long)nextAddr);
+        mach_port_deallocate(mach_task_self_, memoryObject);
+        mach_vm_deallocate(mach_task_self_, localAddr, roundedSize);
+        return shmem;
+    }
     
  
     if (entry.vme_kernel_object || entry.is_sub_map) {
@@ -278,7 +289,17 @@ struct VMShmem vm_create_shmem_with_object(struct VMObject *object)
     entry.vme_object_or_delta = (uint32_t)packedPointer;
     entry.vme_offset = object->objectOffset;
  
-    kwrite_zone_element(nextAddr, &entry, sizeof(struct vm_map_entry));
+    if (!kwrite_zone_element(nextAddr, &entry, sizeof(struct vm_map_entry))) {
+        // Don't map it. The reference taken above is deliberately KEPT: the
+        // entry may already point at the object (partial write), and dropping
+        // the reference could free the object under it. A leaked reference
+        // is harmless; a missing one is a use-after-free.
+        printf("[%s:%d] copy entry write failed at %#llx — not mapping\n", __FUNCTION__, __LINE__,
+               (unsigned long long)nextAddr);
+        mach_port_deallocate(mach_task_self_, memoryObject);
+        mach_vm_deallocate(mach_task_self_, localAddr, roundedSize);
+        return shmem;
+    }
  
     mach_vm_address_t mappedAddr = 0;
     vm_prot_t curProt = VM_PROT_ALL | VM_PROT_IS_MASK;
