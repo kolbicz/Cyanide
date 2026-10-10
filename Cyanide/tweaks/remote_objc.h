@@ -30,6 +30,10 @@ uint64_t r_msg2_main(uint64_t obj, const char *selName,
 // false: not dispatched, or dispatch status unknown (may still run).
 bool     r_msg2_main_async(uint64_t obj, const char *selName,
                           uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3);
+// After a false from r_msg2_main_async / r_msg2_main_raw_async: true when the
+// perform itself was sent and its reply lost (the selector may run), false
+// when nothing was dispatched (safe to retry).
+bool     r_last_async_maybe_ran(void);
 // Same, with arguments passed by value from local buffers (structs too).
 bool     r_msg2_main_raw_async(uint64_t obj, const char *selName,
                                const void *a0, size_t a0Size,

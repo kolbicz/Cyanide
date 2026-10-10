@@ -248,6 +248,8 @@ static __thread bool t_r_main_ok = false;
 
 bool r_last_call_ok(void) { return t_r_last_ok; }
 bool r_last_main_ok(void) { return t_r_main_ok; }
+static __thread bool t_r_async_maybe_ran = false;
+bool r_last_async_maybe_ran(void) { return t_r_async_maybe_ran; }
 
 static uint64_t r_call_stable(int timeout, const char *fnName,
                               uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -827,6 +829,7 @@ uint64_t r_msg2_main(uint64_t obj, const char *selName,
 static bool r_msg2_main_async_args(uint64_t obj, const char *selName,
                                    const void *const argData[4], const size_t argSizes[4])
 {
+    t_r_async_maybe_ran = false;
     if (!r_is_objc_ptr(obj) || !selName) return false;
     uint64_t sel = r_sel(selName);
     if (!sel) return false;
@@ -887,6 +890,7 @@ static bool r_msg2_main_async_args(uint64_t obj, const char *selName,
 
     r_msg(inv, performSel, invokeSel, 0, 0, 0);
     bool ok = t_r_last_ok;
+    t_r_async_maybe_ran = !ok;
     if (!ok) printf("[R_OBJC] async main-thread dispatch failed (completion unknown)\n");
     // performSelectorOnMainThread: retains the receiver until it has run.
     r_msg2(inv, "release", 0, 0, 0, 0);

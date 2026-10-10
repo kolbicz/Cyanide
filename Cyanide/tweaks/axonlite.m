@@ -3045,6 +3045,14 @@ static void axn_apply_filter(uint64_t clvc, uint64_t tick)
                 e->hiddenByAxon = false;
                 inserted++;
                 fired = true;
+            } else if (r_last_async_maybe_ran()) {
+                // The insert was sent but its reply was lost: it most likely
+                // ran. Retrying could insert the request twice, which the
+                // list model doesn't expect; leaving it counts it as shown,
+                // and at worst it stays hidden until the next filter change.
+                printf("[AXONLITE] insert of %s unconfirmed — not retrying\n", e->bundle);
+                e->hiddenByAxon = false;
+                fired = true;
             }
         }
 
