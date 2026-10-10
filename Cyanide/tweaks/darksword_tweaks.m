@@ -725,8 +725,35 @@ static bool ds_set_view_frame_to_bounds(uint64_t view, uint64_t parent)
     r_msg2_main_raw(view, "setFrame:",
                     &bounds, sizeof(bounds),
                     NULL, 0, NULL, 0, NULL, 0);
-    return true; // UIView's -setFrame: has a void return value.
+    // -setFrame: returns void: only the dispatch status says it ran.
+    return r_last_main_ok();
 }
+
+// After a main-thread call whose completion is unknown: is gr attached to
+// view? 1 yes, 0 no, -1 can't tell.
+static int ds_view_has_recognizer(uint64_t view, uint64_t gr)
+{
+    uint64_t list = r_msg2_main_retained(view, "gestureRecognizers");
+    if (!list) return r_last_main_ok() ? 0 : -1;   // nil array: none attached
+    uint64_t has = r_msg2(list, "containsObject:", gr, 0, 0, 0);
+    bool ok = r_last_call_ok();
+    r_release(list);
+    return ok ? (has & 0xff ? 1 : 0) : -1;
+}
+
+// Is view a subview of parent? Same convention.
+static int ds_view_in_parent(uint64_t view, uint64_t parent)
+{
+    uint64_t superview = r_msg2_main(view, "superview", 0, 0, 0, 0);
+    if (!r_last_main_ok()) return -1;
+    return superview == parent ? 1 : 0;
+}
+
+// Failed installs below leave their unattached recognizer / catcher alive
+// on purpose: releasing it would deallocate a UIKit object, and no release
+// path here is sure to do that on SpringBoard's main thread (the cached
+// main-thread invocation keeps its own retain of the target until it is
+// retargeted from the RemoteCall thread). A rare failure leaks one object.
 
 static DTLockOutcome ds_install_double_tap_on_view(uint64_t view, uint64_t sb, uint64_t selLock, uint64_t assocKey, const char *tag, bool verbose)
 {
@@ -754,8 +781,24 @@ static DTLockOutcome ds_install_double_tap_on_view(uint64_t view, uint64_t sb, u
         r_msg2(gr, "setDelaysTouchesBegan:", 0, 0, 0, 0);
 
     r_msg2_main(view, "addGestureRecognizer:", gr, 0, 0, 0);
+    if (!r_last_main_ok()) {
+        // It may or may not have run: look before recording anything, so a
+        // retry neither misses the install nor adds a second recognizer.
+        int attached = ds_view_has_recognizer(view, gr);
+        if (attached == 0) {
+            printf("[DST:LOCK] %s addGestureRecognizer: did not run\n", tag);
+            return DTLockOutcomeFailed;
+        }
+        if (attached < 0) {
+            // Can't tell: leave gr (it may be attached) and record nothing;
+            // the next apply looks again.
+            printf("[DST:LOCK] %s addGestureRecognizer: outcome unknown\n", tag);
+            return DTLockOutcomeFailed;
+        }
+    }
     r_dlsym_call(R_TIMEOUT, "objc_setAssociatedObject",
                  view, assocKey, gr, 1, 0, 0, 0, 0);
+    r_release(gr);   // the view and the association hold it now
     if (verbose) printf("[DST:LOCK] installed on %s view=0x%llx\n", tag, view);
     return DTLockOutcomeInstalled;
 }
@@ -780,6 +823,10 @@ static DTLockOutcome ds_install_double_tap_catcher(uint64_t parent,
         if (superview != parent) {
             ds_set_view_frame_to_bounds(existing, parent);
             r_msg2_main(parent, "insertSubview:atIndex:", existing, 0, 0, 0);
+            if (!r_last_main_ok() && ds_view_in_parent(existing, parent) != 1) {
+                printf("[DST:LOCK] %s catcher reattach not confirmed\n", tag);
+                return DTLockOutcomeFailed;
+            }
             if (verbose) printf("[DST:LOCK] %s catcher reattached\n", tag);
             return DTLockOutcomeInstalled;
         }
@@ -798,6 +845,15 @@ static DTLockOutcome ds_install_double_tap_catcher(uint64_t parent,
     r_msg2_main(catcher, "setAutoresizingMask:", (1u << 1) | (1u << 4), 0, 0, 0);
     r_msg2_main(catcher, "setUserInteractionEnabled:", 1, 0, 0, 0);
     r_msg2_main(parent, "insertSubview:atIndex:", catcher, 0, 0, 0);
+    if (!r_last_main_ok()) {
+        int inParent = ds_view_in_parent(catcher, parent);
+        if (inParent != 1) {
+            printf("[DST:LOCK] %s catcher insert %s\n", tag,
+                   inParent == 0 ? "did not run" : "not confirmed");
+            if (inParent < 0) r_msg2_main(catcher, "removeFromSuperview", 0, 0, 0, 0);
+            return DTLockOutcomeFailed;
+        }
+    }
 
     DTLockOutcome outcome = ds_install_double_tap_on_view(catcher, sb, selLock,
                                                           gestureAssocKey, tag, verbose);
@@ -808,6 +864,7 @@ static DTLockOutcome ds_install_double_tap_catcher(uint64_t parent,
 
     r_dlsym_call(R_TIMEOUT, "objc_setAssociatedObject",
                  parent, catcherAssocKey, catcher, 1, 0, 0, 0, 0);
+    r_release(catcher);   // the parent and the association hold it now
     return outcome;
 }
 
