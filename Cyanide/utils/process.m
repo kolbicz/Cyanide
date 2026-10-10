@@ -1068,6 +1068,10 @@ next_thread:;
     return true;
 }
 
+// A bounded, real syscall workload is declared before the calibration checks
+// that use it. A commpage-served libc call is not a system-time perturbation.
+static bool pm_burn_system_ns(uint64_t ns);
+
 // Two-phase perturbation verify for a thread user/system offset pair:
 // phase 1 — a pure-userspace burn must move ONLY oU (by roughly the burn);
 // phase 2 — a pure-syscall burn must move ONLY oS. Look-alike time fields
@@ -1084,7 +1088,10 @@ static bool pm_thread_pair_verify(uint64_t th, uint32_t oU, uint32_t oS, bool ab
     if (!(u1 - u0 >= burnU / 2 && u1 - u0 <= burnU * 4 && s1 - s0 <= m)) return false;
 
     uint64_t s2 = kread64(th + oS), u2 = kread64(th + oU);
-    for (int i = 0; i < 40000; i++) (void)getpid();     // pure system burn
+    // getpid() is served from the commpage on Darwin and is not a syscall.
+    // Use a bounded /dev/zero read workload so this really perturbs system
+    // time before accepting the candidate offsets.
+    if (!pm_burn_system_ns(15000000)) return false;
     usleep(2000);                                       // flush timers
     uint64_t s3 = kread64(th + oS), u3 = kread64(th + oU);
     if (s3 < s2 || u3 < u2) return false;
@@ -1131,18 +1138,20 @@ static void pm_recount_read_sums(uint64_t th, uint32_t off, uint32_t ts,
 }
 
 // Definite-trap system burn: read() on /dev/zero. getpid() is served from the
-// commpage on Darwin arm64 and never enters the kernel, so a getpid loop bills
-// almost no system time (that is why the old adaptive burn stayed weak).
-static void pm_burn_system_ns(uint64_t ns) {
+// commpage on Darwin arm64 and never enters the kernel, so it is deliberately
+// not a fallback. If the device cannot be opened, calibration rejects the
+// candidate instead of claiming that a non-syscall perturbation was measured.
+static bool pm_burn_system_ns(uint64_t ns) {
     static int zfd = -2;
     if (zfd == -2) zfd = open("/dev/zero", O_RDONLY);
+    if (zfd < 0) return false;
     uint64_t start = mach_absolute_time();
     uint64_t limit = pm_ns_to_abs(ns);
     char buf[64];
     while (mach_absolute_time() - start < limit) {
-        if (zfd >= 0) for (int i = 0; i < 64; i++) (void)read(zfd, buf, sizeof(buf));
-        else          for (int i = 0; i < 256; i++) (void)getpid();
+        for (int i = 0; i < 64; i++) (void)read(zfd, buf, sizeof(buf));
     }
+    return true;
 }
 
 // Discover the recount layout on our own thread: value-match the track sums
@@ -1202,7 +1211,7 @@ static bool pm_calibrate_thread_recount(uint64_t th, uint32_t scanLen) {
                 if (!(u1 - u0 >= duMin && u1 - u0 <= duMax && s1 - s0 <= quiet)) continue;
 
                 // ...system burn moves only the system sum.
-                pm_burn_system_ns(15000000);
+                if (!pm_burn_system_ns(15000000)) continue;
                 usleep(3000);
                 pm_recount_read_sums(th, off, ts, ls, cnt, &u2, &s2);
                 uint64_t dsMin = pm_ns_to_abs(8000000ULL), dsMax = pm_ns_to_abs(90000000ULL);
