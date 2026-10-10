@@ -366,12 +366,23 @@ static bool rc_icon_is_resizable_cached(RCResizeCtx *ctx, uint64_t icon)
     return resizable;
 }
 
-// Returns true when the view was resized (a resizable app icon).
-static bool rc_resize_icon_view(RCResizeCtx *ctx, uint64_t iconView)
+// Resize outcome for one icon view. Skipped = not a resizable app icon
+// (folder/widget/pod) — deliberately untouched and NOT counted, so a dock
+// that holds only folders doesn't read as a failure. Failed = resizable, but
+// the calls didn't verifiably complete (a lost reply means the setter may
+// never have run; counting it as resized anyway would let the step report
+// success for icons that never changed).
+typedef enum {
+    RCResizeSkipped = 0,
+    RCResizeFailed,
+    RCResizeDone,
+} RCResizeResult;
+
+static RCResizeResult rc_resize_icon_view(RCResizeCtx *ctx, uint64_t iconView)
 {
-    if (!iconView) return false;
+    if (!iconView) return RCResizeSkipped;
     uint64_t icon = r_msg(iconView, ctx->selIcon, 0, 0, 0, 0);
-    if (!rc_icon_is_resizable_cached(ctx, icon)) return false;
+    if (!rc_icon_is_resizable_cached(ctx, icon)) return RCResizeSkipped;
 
     if (!ctx->built) {
         ctx->built = true;
@@ -382,15 +393,19 @@ static bool rc_resize_icon_view(RCResizeCtx *ctx, uint64_t iconView)
                                                "_updateAfterManualIconImageInfoChangeInvalidatingLayout:",
                                                &yes, sizeof(yes));
     }
-    if (ctx->invInfo) {
-        r_msg(ctx->invInfo, ctx->selSetTgt, iconView, 0, 0, 0);
-        r_msg(ctx->invInfo, ctx->selPerform, ctx->selInvoke, 0, 1, 0);
-    }
+    if (!ctx->invInfo) return RCResizeFailed;   // no invocation: nothing was sent
+    r_msg(ctx->invInfo, ctx->selSetTgt, iconView, 0, 0, 0);
+    if (!r_last_call_ok()) return RCResizeFailed;
+    r_msg(ctx->invInfo, ctx->selPerform, ctx->selInvoke, 0, 1, 0);
+    if (!r_last_call_ok()) return RCResizeFailed;
     if (ctx->invUpdate) {
+        // The layout-refresh follow-up is best-effort: the resize itself is
+        // already applied, so a lost reply here doesn't uncount the icon.
         r_msg(ctx->invUpdate, ctx->selSetTgt, iconView, 0, 0, 0);
-        r_msg(ctx->invUpdate, ctx->selPerform, ctx->selInvoke, 0, 1, 0);
+        if (r_last_call_ok())
+            r_msg(ctx->invUpdate, ctx->selPerform, ctx->selInvoke, 0, 1, 0);
     }
-    return ctx->invInfo != 0;
+    return RCResizeDone;
 }
 
 // The SBIconViews of one SBIconListView. The subviews snapshot is fetched and
@@ -409,18 +424,24 @@ static int rc_list_view_icon_views(uint64_t listView, uint64_t *out, int cap,
     return r_array_items_of_class(subs, clsIconView, out, cap);
 }
 
-// Resize every icon view of one list view. Returns how many were resized.
+// Resize every RESIZABLE icon view of one list view; folders/widgets/pods are
+// skipped and not counted. *outTotal grows by the number of resizable icons,
+// so a list view with only folders reads as 0 of 0 (a no-op), not a failure.
+// Returns how many were verifiably resized.
 static int rc_refresh_list_view(RCResizeCtx *ctx, uint64_t listView, int *outTotal)
 {
     enum { ICON_CAP = 256 };
     uint64_t views[ICON_CAP];
     uint64_t subs = 0;
     int n = rc_list_view_icon_views(listView, views, ICON_CAP, &subs);
-    if (outTotal) *outTotal += n;
-    int resized = 0;
+    int resized = 0, resizable = 0;
     for (int i = 0; i < n; i++) {
-        if (rc_resize_icon_view(ctx, views[i])) resized++;
+        RCResizeResult r = rc_resize_icon_view(ctx, views[i]);
+        if (r == RCResizeSkipped) continue;
+        resizable++;
+        if (r == RCResizeDone) resized++;
     }
+    if (outTotal) *outTotal += resizable;
     if (subs) r_msg(subs, r_sel("release"), 0, 0, 0, 0);
     return resized;
 }
@@ -628,13 +649,17 @@ bool darksword_layout_home_scale_in_session(double scale)
     pageFirst[npages] = nviews;
     rc_report_progress(0, npages, 0, nviews);
 
-    // Pass 2: resize, reporting after each page.
+    // Pass 2: resize, reporting after each page. Folders/widgets/pods are
+    // skipped and not counted, so their presence never reads as a failure.
     RCResizeCtx ctx;
     rc_resize_ctx_init(&ctx, clsInv, &info);
-    int resized = 0;
+    int resized = 0, resizable = 0;
     for (int p = 0; p < npages; p++) {
         for (int i = pageFirst[p]; i < pageFirst[p + 1]; i++) {
-            if (rc_resize_icon_view(&ctx, views[i])) resized++;
+            RCResizeResult r = rc_resize_icon_view(&ctx, views[i]);
+            if (r == RCResizeSkipped) continue;
+            resizable++;
+            if (r == RCResizeDone) resized++;
         }
         rc_report_progress(p + 1, npages, pageFirst[p + 1], nviews);
     }
@@ -642,8 +667,11 @@ bool darksword_layout_home_scale_in_session(double scale)
     uint64_t selRel = r_sel("release");
     for (int p = 0; p < npages; p++) r_msg(subsHeld[p], selRel, 0, 0, 0, 0);
 
-    printf("[HSSCALE] resized %d of %d live icon view(s) on %d page(s)\n", resized, nviews, npages);
-    return resized > 0 || nviews == 0;
+    printf("[HSSCALE] resized %d of %d resizable icon view(s) on %d page(s)\n",
+           resized, resizable, npages);
+    // Success means every resizable icon verifiably resized (0 of 0 is a
+    // no-op, not a failure); a single lost reply fails the step honestly.
+    return resized == resizable;
 }
 
 bool darksword_layout_dock_scale_in_session(double scale)
@@ -675,7 +703,10 @@ bool darksword_layout_dock_scale_in_session(double scale)
     rc_resize_ctx_init(&ctx, clsInv, &info);
     int total = 0;
     int touched = rc_refresh_list_view(&ctx, dock, &total);
-    if (touched == 0) {
+    if (touched == 0 && total == 0) {
+        // The dock list view yielded nothing resizable — either the dock
+        // holds only folders (a legitimate no-op) or we resolved the wrong
+        // view; scan the windows for another dock list view once.
         uint64_t clsListView = r_class("SBIconListView");
         enum { LV_CAP = 64 };
         uint64_t lvs[LV_CAP];
@@ -686,8 +717,10 @@ bool darksword_layout_dock_scale_in_session(double scale)
         }
     }
     rc_resize_ctx_destroy(&ctx);
-    printf("[DOCKSCALE] resized %d of %d live dock icon view(s)\n", touched, total);
-    return touched > 0 || total == 0;
+    printf("[DOCKSCALE] resized %d of %d resizable dock icon view(s)\n", touched, total);
+    // 0 of 0 (e.g. a dock holding only folders) is a no-op, not a failure;
+    // otherwise every resizable icon must have verifiably resized.
+    return touched == total;
 }
 
 // iOS 26: the (now-immutable) AMUIInfographIconListLayout doesn't have a

@@ -363,16 +363,15 @@ static bool auto_add_app_to_dock(uint64_t iconCtrl, int dockIcons, const char *b
     }
 
     uint64_t sourceCountBefore = icon_array_count(sourceModel);
-    if (!remove_icon_from_model(sourceModel, sourceIndex, icon)) {
-        printf("[SBC:DOCKAPP] source removal failed\n");
-        release_remote_object(sourceModel);
-        release_remote_object(icon);
-        return false;
-    }
+    bool removalConfirmed = remove_icon_from_model(sourceModel, sourceIndex, icon);
     release_remote_object(sourceModel);
 
     // Removing an icon can rebuild every list model. Reacquire the Dock
     // model before inserting instead of messaging the pre-removal pointer.
+    // The removal's own reply proves nothing — a lost reply can mean the
+    // removal still ran, and treating that as "nothing moved" would leave
+    // the icon detached from every page until the next respring. The page
+    // count is authoritative.
     mgr = try_msg0(iconCtrl, "iconManager");
     rootFolder = try_msg0(mgr, "rootFolderController");
     uint64_t sourceCountAfter = UINT64_MAX;
@@ -381,18 +380,30 @@ static bool auto_add_app_to_dock(uint64_t iconCtrl, int dockIcons, const char *b
             rootFolder, "iconListViewAtIndex:", sourcePage, 0, 0, 0);
         sourceCountAfter = icon_array_count(list_view_model(sourceView));
         if (sourceCountBefore != UINT64_MAX &&
-            sourceCountAfter + 1 == sourceCountBefore) break;
+            (sourceCountAfter + 1 == sourceCountBefore ||
+             (!removalConfirmed && sourceCountAfter == sourceCountBefore))) break;
         usleep(5000);
         mgr = try_msg0(iconCtrl, "iconManager");
         rootFolder = try_msg0(mgr, "rootFolderController");
     }
-    if (sourceCountBefore == UINT64_MAX ||
-        sourceCountAfter + 1 != sourceCountBefore) {
+    if (sourceCountBefore == UINT64_MAX || sourceCountAfter == UINT64_MAX ||
+        (sourceCountAfter + 1 != sourceCountBefore && sourceCountAfter != sourceCountBefore)) {
         printf("[SBC:DOCKAPP] page[%llu] removal count mismatch %llu -> %llu; aborting Dock insert\n",
                sourcePage, sourceCountBefore, sourceCountAfter);
         release_remote_object(icon);
         return false;
     }
+    if (sourceCountAfter == sourceCountBefore) {
+        // The removal verifiably did not run: nothing moved, clean stop.
+        printf("[SBC:DOCKAPP] source removal %s — not moving bundle=%s\n",
+               removalConfirmed ? "confirmed but the count never dropped"
+                                : "reply lost and the removal did not run",
+               bundleID);
+        release_remote_object(icon);
+        return false;
+    }
+    if (!removalConfirmed)
+        printf("[SBC:DOCKAPP] removal reply lost but the removal ran; continuing\n");
 
     dockView = try_msg0(mgr, "dockListView");
     if (!dockView) dockView = try_msg0(iconCtrl, "dockListView");
@@ -411,10 +422,35 @@ static bool auto_add_app_to_dock(uint64_t iconCtrl, int dockIcons, const char *b
     release_remote_object(verifyIcons);
     if (!inserted) {
         printf("[SBC:DOCKAPP] insertion failed; restoring page[%llu]\n", sourcePage);
-        rootFolder = try_msg0(mgr, "rootFolderController");
-        uint64_t restoreView = r_msg2_main(
-            rootFolder, "iconListViewAtIndex:", sourcePage, 0, 0, 0);
-        insert_icon_into_model(list_view_model(restoreView), sourceIndex, icon);
+        // The restore insert's reply proves nothing either (a lost reply can
+        // mean it ran), so the page count is authoritative: retry only while
+        // the icon is verifiably absent — never a blind re-insert that could
+        // duplicate it. Without this, one lost reply here strands the icon
+        // outside every model until the next respring.
+        bool restored = false;
+        for (int attempt = 0; attempt < 3 && !restored; attempt++) {
+            rootFolder = try_msg0(mgr, "rootFolderController");
+            uint64_t restoreView = r_msg2_main(
+                rootFolder, "iconListViewAtIndex:", sourcePage, 0, 0, 0);
+            insert_icon_into_model(list_view_model(restoreView), sourceIndex, icon);
+            uint64_t restoreCount = UINT64_MAX;
+            for (int settle = 0; settle < 5; settle++) {
+                mgr = try_msg0(iconCtrl, "iconManager");
+                rootFolder = try_msg0(mgr, "rootFolderController");
+                restoreView = r_msg2_main(
+                    rootFolder, "iconListViewAtIndex:", sourcePage, 0, 0, 0);
+                restoreCount = icon_array_count(list_view_model(restoreView));
+                if (restoreCount == sourceCountBefore) { restored = true; break; }
+                usleep(5000);
+            }
+            if (restored) break;
+            if (restoreCount == UINT64_MAX) break;   // can't verify: a blind retry could duplicate
+            printf("[SBC:DOCKAPP] restore attempt %d unconfirmed (count %llu != %llu); retrying\n",
+                   attempt + 1, restoreCount, sourceCountBefore);
+        }
+        if (!restored)
+            printf("[SBC:DOCKAPP] RESTORE FAILED bundle=%s — the icon may be missing until the next respring\n",
+                   bundleID);
         release_remote_object(icon);
         return false;
     }
@@ -1057,6 +1093,46 @@ static uint64_t wait_for_page_count(uint64_t rootFolder, uint64_t page,
     return count;
 }
 
+// After a mutation whose reply was lost, the page count is the only
+// authority: the mutation either ran or it didn't, so wait for the count to
+// settle at either candidate. Returns the last count read (UINT64_MAX if the
+// count itself is unreadable).
+static uint64_t settle_count_either(uint64_t rootFolder, uint64_t page,
+                                    uint64_t valueIfRan, uint64_t valueIfNot)
+{
+    uint64_t count = UINT64_MAX;
+    for (int attempt = 0; attempt < 5; attempt++) {
+        count = icon_array_count_transient(page_model_at(rootFolder, page));
+        if (count == valueIfRan || count == valueIfNot) break;
+        usleep(5000);
+    }
+    return count;
+}
+
+// Re-insert an icon that was verifiably removed from this page. An insert's
+// own reply proves nothing (a lost reply can mean it ran), so the count is
+// authoritative: retry only while the icon is verifiably absent, stop once it
+// is back — never a blind re-insert that could duplicate it. Without the
+// verification, one lost reply here strands the icon outside every model
+// until the next respring.
+static bool restore_icon_to_page(uint64_t rootFolder, uint64_t page,
+                                 uint64_t index, uint64_t icon,
+                                 uint64_t expectedCount, const char *tag)
+{
+    for (int attempt = 0; attempt < 3; attempt++) {
+        uint64_t model = page_model_at(rootFolder, page);
+        if (!r_is_objc_ptr(model)) break;
+        insert_icon_into_model(model, index, icon);
+        uint64_t count = wait_for_page_count(rootFolder, page, expectedCount);
+        if (count == expectedCount) return true;
+        if (count == UINT64_MAX) break;   // can't verify: a blind retry could duplicate
+        printf("[SBC:MOVE] %s restore attempt %d unconfirmed (count %llu != %llu); retrying\n",
+               tag, attempt + 1, count, expectedCount);
+    }
+    printf("[SBC:MOVE] %s RESTORE FAILED — the icon may be missing until the next respring\n", tag);
+    return false;
+}
+
 static bool move_icon_between_pages(uint64_t rootFolder,
                                     uint64_t sourcePage, uint64_t sourceIndex,
                                     uint64_t destinationPage, uint64_t destinationIndex,
@@ -1078,7 +1154,23 @@ static bool move_icon_between_pages(uint64_t rootFolder,
                destinationCountBefore, destinationIndex);
         return false;
     }
-    if (!remove_icon_from_model(sourceModel, sourceIndex, icon)) return false;
+    if (!remove_icon_from_model(sourceModel, sourceIndex, icon)) {
+        // The reply was lost: the removal may still have run. Bailing blind
+        // here would leave a removed icon detached from every page until the
+        // next respring — the count is authoritative.
+        uint64_t settled = settle_count_either(rootFolder, sourcePage,
+                                               sourceCountBefore - 1, sourceCountBefore);
+        if (settled == sourceCountBefore) {
+            printf("[SBC:MOVE] %s removal reply lost; the removal did not run\n", tag);
+            return false;
+        }
+        if (settled != sourceCountBefore - 1) {
+            printf("[SBC:MOVE] %s removal outcome unreadable %llu -> %llu\n",
+                   tag, sourceCountBefore, settled);
+            return false;
+        }
+        printf("[SBC:MOVE] %s removal reply lost but the removal ran; continuing\n", tag);
+    }
     uint64_t sourceCountAfter = wait_for_page_count(
         rootFolder, sourcePage, sourceCountBefore - 1);
     if (sourceCountAfter != sourceCountBefore - 1) {
@@ -1101,8 +1193,8 @@ static bool move_icon_between_pages(uint64_t rootFolder,
     }
 
     printf("[SBC:MOVE] %s insertion failed; restoring source page\n", tag);
-    sourceModel = page_model_at(rootFolder, sourcePage);
-    insert_icon_into_model(sourceModel, sourceIndex, icon);
+    restore_icon_to_page(rootFolder, sourcePage, sourceIndex, icon,
+                         sourceCountBefore, tag);
     return false;
 }
 
@@ -1112,37 +1204,69 @@ static bool move_icon_between_pages(uint64_t rootFolder,
 // already tracks; the arrange verifies each page's final count once instead (see
 // rebalance_impl) and falls back to the settling path if that check ever fails.
 // The destination re-resolve is kept -- removal can rebuild the destination page
-// model. A failed removal moved nothing. A failed insert is NOT restored here: the
-// call may still have run, and a blind re-insert could duplicate the icon. It
-// sets *needsVerify instead, and the caller re-runs with the slow, count-verified
-// path. sourceModel is the model the caller just read `icon` from: nothing mutates
-// between that read and the removal, so re-resolving it would only repeat a
-// ~6 round-trip main-thread lookup per move.
+// model. A mutation whose reply is lost is settled by count on the spot: a
+// blind bail would leave a removed-but-not-reinserted icon detached from every
+// page until the next respring, and a blind re-insert could duplicate one that
+// did land. Only an unreadable count defers (*needsVerify) to the slow,
+// count-verified re-run. sourceModel is the model the caller just read `icon`
+// from: nothing mutates between that read and the removal, so re-resolving it
+// would only repeat a ~6 round-trip main-thread lookup per move.
+// sourceCountBefore/destinationCountBefore are the caller-tracked page counts.
 static bool move_icon_fast(uint64_t rootFolder, uint64_t sourceModel,
                            uint64_t sourcePage, uint64_t sourceIndex,
                            uint64_t destinationPage, uint64_t destinationIndex,
+                           uint64_t sourceCountBefore, uint64_t destinationCountBefore,
                            uint64_t icon, const char *tag, bool *needsVerify)
 {
     *needsVerify = false;
-    if (!r_is_objc_ptr(sourceModel) || !r_is_objc_ptr(icon)) {
+    if (!r_is_objc_ptr(sourceModel) || !r_is_objc_ptr(icon) ||
+        sourceCountBefore == UINT64_MAX || destinationCountBefore == UINT64_MAX) {
         printf("[SBC:MOVE] %s unsupported page mutation\n", tag);
         return false;
     }
     if (!remove_icon_from_model(sourceModel, sourceIndex, icon)) {
-        printf("[SBC:MOVE] %s removal failed\n", tag);
-        return false;
+        // The reply was lost: the removal may still have run.
+        uint64_t settled = settle_count_either(rootFolder, sourcePage,
+                                               sourceCountBefore - 1, sourceCountBefore);
+        if (settled == sourceCountBefore) {
+            printf("[SBC:MOVE] %s removal reply lost; the removal did not run\n", tag);
+            return false;
+        }
+        if (settled != sourceCountBefore - 1) {
+            printf("[SBC:MOVE] %s removal outcome unreadable %llu -> %llu\n",
+                   tag, sourceCountBefore, settled);
+            *needsVerify = true;   // re-read live counts before moving anything else
+            return false;
+        }
+        printf("[SBC:MOVE] %s removal reply lost but the removal ran; continuing\n", tag);
     }
     uint64_t destinationModel = page_model_at(rootFolder, destinationPage);
     if (!r_is_objc_ptr(destinationModel)) {
         // Nothing was sent to the destination: the icon is certainly detached,
-        // so putting it back can't duplicate it.
+        // so putting it back can't duplicate it — but the restore itself is
+        // verified, because its own reply can be lost too.
         printf("[SBC:MOVE] %s destination unavailable; restoring source page\n", tag);
-        sourceModel = page_model_at(rootFolder, sourcePage);
-        insert_icon_into_model(sourceModel, sourceIndex, icon);
+        restore_icon_to_page(rootFolder, sourcePage, sourceIndex, icon,
+                             sourceCountBefore, tag);
         return false;
     }
     if (!insert_icon_into_model(destinationModel, destinationIndex, icon)) {
-        printf("[SBC:MOVE] %s insertion status unknown; deferring to verified path\n", tag);
+        // The reply was lost: the insert may still have run. If it verifiably
+        // did not, the icon is detached NOW — put it back before it is lost
+        // until the next respring.
+        uint64_t settled = settle_count_either(rootFolder, destinationPage,
+                                               destinationCountBefore + 1, destinationCountBefore);
+        if (settled == destinationCountBefore + 1) {
+            printf("[SBC:MOVE] %s insertion reply lost but the insert ran\n", tag);
+            return true;
+        }
+        if (settled == destinationCountBefore) {
+            printf("[SBC:MOVE] %s insertion reply lost and the insert did not run; restoring source page\n", tag);
+            restore_icon_to_page(rootFolder, sourcePage, sourceIndex, icon,
+                                 sourceCountBefore, tag);
+            return false;
+        }
+        printf("[SBC:MOVE] %s insertion outcome unreadable; deferring to verified path\n", tag);
         *needsVerify = true;
         return false;
     }
@@ -1189,9 +1313,23 @@ static int rebalance_impl(uint64_t rootFolder, uint64_t count,
             bool didMove;
             bool needsVerify = false;
             if (fast) {
+                // move_icon_fast settles a lost reply by count, so the
+                // destination count must be known even in fast mode (once
+                // per page, carried across iterations). If it can't be read,
+                // the slow path re-reads live counts instead.
+                if (destinationCount == UINT64_MAX) {
+                    destinationCount = icon_array_count_transient(
+                        page_model_at(rootFolder, page + 1));
+                    if (destinationCount == UINT64_MAX) {
+                        return rebalance_impl(rootFolder, count, firstPageIcons,
+                                              otherPageIcons, false);
+                    }
+                }
                 didMove = r_is_objc_ptr(icon) &&
                     move_icon_fast(rootFolder, model, page, iconIndex, page + 1, 0,
+                                   current, destinationCount,
                                    icon, "page overflow", &needsVerify);
+                if (didMove) destinationCount++;
             } else {
                 if (destinationCount == UINT64_MAX) {
                     destinationCount = icon_array_count_transient(
@@ -1249,6 +1387,7 @@ static int rebalance_impl(uint64_t rootFolder, uint64_t count,
             if (fast) {
                 didMove = r_is_objc_ptr(icon) &&
                     move_icon_fast(rootFolder, donorModel, donorPage, 0, page, current,
+                                   donorCount, current,
                                    icon, "page fill", &needsVerify);
             } else {
                 didMove = r_is_objc_ptr(icon) &&
