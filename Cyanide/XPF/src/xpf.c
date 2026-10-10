@@ -288,6 +288,12 @@ int xpf_start_with_kernel_path(const char *kernelPath)
 		}
 	}
 
+	// A kernelcache that couldn't be decompressed leaves no stream; ChOma
+	// would dereference the NULL stream instead of failing.
+	if (!stream) {
+		xpf_set_error("Failed to decompress kernelcache");
+		return -1;
+	}
 	Fat *candidate = fat_init_from_memory_stream(stream);
 	if (!candidate) {
 		xpf_set_error("Failed to load kernel macho");

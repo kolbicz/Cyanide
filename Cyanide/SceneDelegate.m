@@ -8,11 +8,15 @@
 #import "SceneDelegate.h"
 #import "AppDelegate.h"            // round 31: cyanide_launch_trace
 #import "SettingsViewController.h"
+#import "installer/InstallProgressViewController.h"
 #import "UpdateChecker.h"
 #import "TaskRop/Exception.h"   // round 30: excport lifecycle gate (early close)
 
 @interface SceneDelegate ()
 @property (nonatomic, assign) BOOL didSelectInitialTab;
+// A shortcut URL waiting for the scene to become active: kernel access is
+// gated off until then (excport gate), so actions can't run any earlier.
+@property (nonatomic, strong) NSURL *pendingActionURL;
 
 @end
 
@@ -37,7 +41,77 @@
             [inv invoke];
         }
     }
+    // Cold launch from a shortcut URL; handled once the scene is active.
+    self.pendingActionURL = connectionOptions.URLContexts.anyObject.URL;
     cyanide_launch_trace("scene willConnect: exit");
+}
+
+- (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts {
+    NSURL *url = URLContexts.anyObject.URL;
+    if (!url) return;
+    if (scene.activationState == UISceneActivationStateForegroundActive) {
+        [self handleActionURL:url];
+    } else {
+        self.pendingActionURL = url;   // sceneDidBecomeActive runs it
+    }
+}
+
+// cyanide://location-services/toggle | /on | /off  (also under the
+// com.zeroxjf.ios-cyanide1 scheme). Opens the activity log and runs only that
+// action; the log shows progress and ends in Complete/Failed with the reason.
+// On success the app returns to the Home Screen shortly after, on failure it
+// stays on the log.
+- (void)handleActionURL:(NSURL *)url {
+    if (![url.host isEqualToString:@"location-services"]) {
+        NSLog(@"[URL] unhandled %@", url);
+        return;
+    }
+    NSString *verb = url.path.lastPathComponent.lowercaseString;
+    int desired = [verb isEqualToString:@"on"] ? 1 : [verb isEqualToString:@"off"] ? 0 : -1;
+    [self presentActivityLogThen:^{
+        // Leave no switcher card behind unless ?keepInSwitcher=1 is given.
+        BOOL keepCard = [url.query containsString:@"keepInSwitcher=1"];
+        settings_location_services_set_async(desired, !keepCard, ^(BOOL ok, NSString *message,
+                                                       NSTimeInterval resultAge) {
+            if (!ok) return;
+            // The result has been on screen for resultAge already (the
+            // SpringBoard teardown ran meanwhile); leave it up for at least
+            // 0.75 s in total, long enough to read the result line.
+            NSTimeInterval wait = MAX(0.0, 0.75 - resultAge);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                // Private but long-stable: what the Home gesture does.
+                SEL suspend = NSSelectorFromString(@"suspend");
+                if ([UIApplication.sharedApplication respondsToSelector:suspend]) {
+                    ((void (*)(id, SEL))[UIApplication.sharedApplication methodForSelector:suspend])(
+                        UIApplication.sharedApplication, suspend);
+                }
+            });
+        });
+    }];
+}
+
+// Shows a fresh activity log on top of whatever is up (its completion state
+// is per instance, so an old one from an earlier action is replaced).
+- (void)presentActivityLogThen:(dispatch_block_t)then {
+    UIViewController *root = self.window.rootViewController;
+    InstallProgressViewController *vc = [[InstallProgressViewController alloc] init];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+    nav.modalPresentationStyle = UIModalPresentationAutomatic;
+    void (^present)(void) = ^{
+        UIViewController *top = root;
+        while (top.presentedViewController) top = top.presentedViewController;
+        [top presentViewController:nav animated:YES completion:then];
+    };
+    UINavigationController *shown = (UINavigationController *)root.presentedViewController;
+    if ([shown isKindOfClass:UINavigationController.class] &&
+        [shown.viewControllers.firstObject isKindOfClass:InstallProgressViewController.class]) {
+        [root dismissViewControllerAnimated:NO completion:present];
+    } else if (!root) {
+        if (then) then();
+    } else {
+        present();
+    }
 }
 
 - (void)selectInitialTabIfNeeded {
@@ -69,6 +143,11 @@
     cyanide_launch_trace("sceneDidBecomeActive: entry");
     [self selectInitialTabIfNeeded];
     settings_application_did_become_active();
+    if (self.pendingActionURL) {
+        NSURL *url = self.pendingActionURL;
+        self.pendingActionURL = nil;
+        [self handleActionURL:url];
+    }
     // Runs every foreground; UpdateChecker enforces a per-process + 24-hour
     // persisted throttle so the API isn't hammered.
     [self runUpdateCheck];

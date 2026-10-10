@@ -487,7 +487,9 @@ void _pfsec_run_string_metric(PFSection *section, uint64_t startAddr, uint64_t e
         }
         searchOffset += strlen(str)+1;
         free(str);
+        str = NULL;
     }
+    free(str);   // a match that stopped the search
 }
 
 PFStringMetric *pfmetric_string_init(const char *string)

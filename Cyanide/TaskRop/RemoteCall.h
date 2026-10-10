@@ -116,6 +116,13 @@ int destroy_remote_call(void);
 void abandon_remote_call(void);
 bool remote_call_has_local_state(void);
 bool remote_call_current_success(void);
+// Per-call status for the calling thread: true only if the most recent
+// do_remote_call_temp/_stable/_stable_addr on this thread got its return value
+// back from the target. Unlike remote_call_current_success() (sticky for the
+// whole session), this distinguishes a failed call from a legitimate 0 return.
+bool remote_call_last_call_ok(void);
+// Running count of temp/stable/stable_addr calls, for timing reports.
+uint64_t remote_call_total_calls(void);
 int remote_call_current_pid(void);
 bool remote_call_uses_vphone_bridge(void);
 int remote_call_set_stable_timeout_floor_ms(int timeoutMS);

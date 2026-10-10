@@ -4,12 +4,18 @@
 //
 
 #import "SettingsViewController.h"
+#import "FileBrowserViewController.h"
+#import <dirent.h>
+#import <fcntl.h>
+#import <sys/stat.h>
 #import "AppDelegate.h"   // round 31: cyanide_launch_trace
 #import "VPhoneDebug.h"
 #import "kexploit/kexploit_opa334.h"
 #import "kexploit/offsets.h"
 #import "kexploit/krw.h"
 #import "tweaks/sbcustomizer.h"
+#import "tweaks/location_services.h"
+#import "tweaks/app_switcher.h"
 #import "tweaks/powercuff.h"
 #import "tweaks/statbar.h"
 #import "tweaks/experimental_tweaks.h"
@@ -1116,6 +1122,11 @@ static volatile BOOL g_settings_actions_last_pending_only = NO;
 // Counts consecutive auto-retries within one user-initiated run chain. Reset
 // by every fresh public entry point and whenever a final outcome is posted.
 static volatile int g_settings_actions_auto_retry_attempt = 0;
+// Main-thread only. The idle-timer value from before the first attempt of a
+// run group; auto-retries and queued follow-ups re-enter without restoring,
+// so they must not re-capture the (now forced) YES as the original.
+static BOOL g_settings_actions_idle_held = NO;
+static BOOL g_settings_actions_idle_was_disabled = NO;
 static volatile int g_springboard_rc_ready = 0;
 static volatile int g_springboard_sandbox_escaped = 0;
 static volatile int g_statbar_live_running = 0;
@@ -1597,6 +1608,10 @@ static const useconds_t kThemerRepairIntervalUS = 450000;
 static NSString * const kSettingsRemoteCallStateDidChangeNotification = @"SettingsRemoteCallStateDidChangeNotification";
 NSString * const kSettingsActionsDidCompleteNotification = @"SettingsActionsDidCompleteNotification";
 NSString * const kSettingsActionsDidCompleteSuccessKey = @"success";
+NSString * const kSettingsActionsDidCompletePartialKey = @"partial";
+NSString * const kSettingsFileBrowserShowHidden = @"FileBrowserShowHidden";
+NSString * const kSettingsFileBrowserShowInaccessible = @"FileBrowserShowInaccessible";
+NSString * const kSettingsFileBrowserRootAccess = @"FileBrowserRootAccess";
 NSString * const kSettingsActionsDidCompleteMessageKey = @"message";
 static NSString * const kSettingsCleanupStateDidChangeNotification = @"SettingsCleanupStateDidChangeNotification";
 
@@ -2944,9 +2959,46 @@ static NSString *settings_unsupported_message(void)
     return [NSString stringWithFormat:@"Not supported on iOS %@. Supported: iOS/iPadOS 17.0-18.7.1 or 26.0-26.0.1.", version];
 }
 
+// Stage timing for the apply log. Each settings_progress() closes the previous
+// stage and logs its wall time, RemoteCalls (all callers), synchronous
+// main-thread dispatches with the time blocked in them, and settle sleep.
+// Only the actions thread uses these (one run at a time).
+static uint64_t g_stage_t0_ns = 0;
+static RPerfSnapshot g_stage_perf0;
+static char g_stage_name[96];
+
+static void settings_log_perf_delta(const char *label, uint64_t t0Ns, const RPerfSnapshot *p0)
+{
+    uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    RPerfSnapshot p1;
+    r_perf_snapshot(&p1);
+    log_user("      [TIME] %s: %.2fs, %llu remote calls, %llu main-thread (%.2fs blocked), %.2fs settle sleep\n",
+             label, (double)(now - t0Ns) / 1e9,
+             (unsigned long long)(p1.rcCalls - p0->rcCalls),
+             (unsigned long long)(p1.mainCalls - p0->mainCalls),
+             (double)(p1.mainWaitUS - p0->mainWaitUS) / 1e6,
+             (double)(p1.settleSleptUS - p0->settleSleptUS) / 1e6);
+}
+
+static void settings_stage_close(void)
+{
+    if (!g_stage_t0_ns) return;
+    settings_log_perf_delta(g_stage_name, g_stage_t0_ns, &g_stage_perf0);
+    g_stage_t0_ns = 0;
+}
+
+static void settings_stage_open(const char *name)
+{
+    settings_stage_close();
+    strlcpy(g_stage_name, name ?: "", sizeof(g_stage_name));
+    r_perf_snapshot(&g_stage_perf0);
+    g_stage_t0_ns = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+}
+
 static void settings_progress(NSUInteger *step, NSUInteger total, const char *message)
 {
     if (!step || !message) return;
+    settings_stage_open(message);
     (*step)++;
     log_user("[RUN %lu/%lu] %s\n",
              (unsigned long)*step,
@@ -6276,6 +6328,163 @@ void settings_application_will_enter_foreground(void)
     settings_resume_livewp_after_wake_async("will enter foreground");
 }
 
+// Set system-wide Location Services: desired 1 = on, 0 = off, -1 = toggle.
+// Sent from SpringBoard (instant over the usual channel); if locationd ignores
+// it there, retried from Preferences, which owns the real switch. Success is
+// judged by the state this app reads back, not by the call returning.
+// The result is posted (activity log turns Complete) as soon as the state is
+// confirmed; closing the SpringBoard channel happens after that. `completion`
+// runs on the main queue once everything, teardown included, is finished;
+// `resultAge` is how long ago the result was posted. With removeFromSwitcher,
+// a successful SpringBoard run also has SpringBoard delete Cyanide's App
+// Switcher card a little later (after the caller has gone to the Home Screen).
+void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
+                                          void (^completion)(BOOL ok, NSString *message,
+                                                             NSTimeInterval resultAge))
+{
+    if (!settings_device_supported()) {
+        NSString *message = settings_unsupported_message();
+        if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, message, 0); });
+        return;
+    }
+    BOOL enable = desired < 0 ? (locationservices_enabled_local() != 1) : (desired != 0);
+    dispatch_async(dispatch_get_global_queue(0, 0), ^{
+        if (!settings_try_claim_actions_lock("Location Services",
+                                             "[LOCSVC] Another action is already running.")) {
+            if (completion) dispatch_async(dispatch_get_main_queue(), ^{
+                completion(NO, @"Another action is already running.", 0);
+            });
+            return;
+        }
+        __block BOOL ok = NO;
+        __block NSString *message = nil;
+        __block uint64_t resultPostedNs = 0;
+        void (^postResult)(void) = ^{
+            if (resultPostedNs) return;
+            resultPostedNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+            if (message) log_user("%s %s\n", ok ? "[OK]" : "[WARN]", message.UTF8String);
+            settings_post_actions_complete_async(ok, message ?: @"");
+        };
+        @try {
+            if (locationservices_enabled_local() == (enable ? 1 : 0)) {
+                ok = YES;
+                message = [NSString stringWithFormat:@"Location Services already %@.", enable ? @"on" : @"off"];
+                return;
+            }
+            log_user("[LOCSVC] Turning Location Services %s…\n", enable ? "on" : "off");
+            if (!settings_ensure_kexploit()) {
+                message = @"Failed: kernel primitives were not acquired. Run the chain, then try again.";
+                return;
+            }
+            @synchronized (settings_rc_lock()) {
+                if (settings_ensure_springboard_remote_call_locked()) {
+                    locationservices_set_enabled_in_session(enable);
+                    ok = locationservices_wait_for_state(enable, 3000);
+                    if (ok) {
+                        // Report now; the teardown below runs while the
+                        // result is already on screen.
+                        message = [NSString stringWithFormat:@"Location Services %@.", enable ? @"on" : @"off"];
+                        postResult();
+                        // Fires inside SpringBoard ~2 s from now: after the
+                        // teardown below and the caller's return to Home.
+                        if (removeFromSwitcher)
+                            appswitcher_schedule_remove_in_session(NSBundle.mainBundle.bundleIdentifier.UTF8String, 2.0);
+                    }
+                    if (!settings_has_persistent_springboard_remote_call_user() && g_springboard_rc_ready) {
+                        settings_destroy_springboard_remote_call_locked_internal_ex("location services toggle",
+                                                                                   YES, YES);
+                    }
+                } else {
+                    log_user("[LOCSVC] SpringBoard not reachable.\n");
+                }
+            }
+            if (!ok) {
+                if (settings_any_registered_live_loop_running()) {
+                    message = @"SpringBoard didn't change it, and the Preferences fallback needs the "
+                              @"SpringBoard channel closed while live tweaks are running. Stop them and try again.";
+                    return;
+                }
+                log_user("[LOCSVC] No change from SpringBoard; retrying from Preferences…\n");
+                @synchronized (settings_rc_lock()) {
+                    settings_destroy_springboard_remote_call_locked_internal("switching to Preferences", NO);
+                    locationservices_set_enabled_via_preferences(enable);
+                }
+                ok = locationservices_wait_for_state(enable, 3000);
+            }
+            message = ok
+                ? [NSString stringWithFormat:@"Location Services %@.", enable ? @"on" : @"off"]
+                : @"Location Services did not change. Check the log.";
+        } @finally {
+            settings_release_actions_lock();
+            postResult();   // no-op if already reported
+            NSString *finalMessage = message ?: @"";
+            NSTimeInterval resultAge =
+                (double)(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - resultPostedNs) / 1e9;
+            if (completion) dispatch_async(dispatch_get_main_queue(), ^{
+                completion(ok, finalMessage, resultAge);
+            });
+        }
+    });
+}
+
+// File Browser access. The sandbox extension for "/" that SpringBoard issues
+// (escape_sbx_demo2_in_session) is consumed into THIS process and lasts until
+// it exits, independent of the SpringBoard channel. A path the app sandbox
+// always denies is the cheapest proof that it is in effect.
+BOOL settings_filesystem_access_available(void)
+{
+    DIR *dir = opendir("/private/var/mobile/Library");
+    if (!dir) return NO;
+    closedir(dir);
+    return YES;
+}
+
+// Lifts the sandbox for the File Browser if it isn't already. `completion`
+// runs on the main queue.
+void settings_unlock_filesystem_async(void (^completion)(BOOL ok, NSString *message))
+{
+    void (^finish)(BOOL, NSString *) = ^(BOOL ok, NSString *message) {
+        if (message) log_user("%s %s\n", ok ? "[OK]" : "[WARN]", message.UTF8String);
+        if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(ok, message); });
+    };
+    if (settings_filesystem_access_available()) { finish(YES, nil); return; }
+    if (!settings_device_supported()) { finish(NO, settings_unsupported_message()); return; }
+    dispatch_async(dispatch_get_global_queue(0, 0), ^{
+        if (!settings_try_claim_actions_lock("File Browser",
+                                             "[FILES] Another action is already running.")) {
+            finish(NO, @"Another action is already running. Try again when it has finished.");
+            return;
+        }
+        BOOL ok = NO;
+        NSString *message = nil;
+        @try {
+            log_user("[FILES] Lifting the filesystem sandbox…\n");
+            if (!settings_ensure_kexploit()) {
+                message = @"Kernel access could not be acquired. Run the chain, then try again.";
+                return;
+            }
+            @synchronized (settings_rc_lock()) {
+                if (!settings_ensure_springboard_remote_call_locked()) {
+                    message = @"SpringBoard could not be reached.";
+                    return;
+                }
+                int sbx = escape_sbx_demo2_in_session();
+                g_springboard_sandbox_escaped = (sbx == 0);
+                if (!settings_has_persistent_springboard_remote_call_user() && g_springboard_rc_ready) {
+                    settings_destroy_springboard_remote_call_locked_internal_ex("file browser unlock",
+                                                                               YES, YES);
+                }
+            }
+            ok = settings_filesystem_access_available();
+            message = ok ? @"Filesystem sandbox lifted — File Browser ready."
+                         : @"The sandbox could not be lifted. Check the log.";
+        } @finally {
+            settings_release_actions_lock();
+            finish(ok, message);
+        }
+    });
+}
+
 void settings_application_did_become_active(void)
 {
     // Round 31: same reorder as will_enter_foreground — the gate re-open must
@@ -7624,9 +7833,11 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             log_user("[RUN] Already running. Queued one follow-up run for the latest package state.\n");
             return;
         }
-        __block BOOL idleTimerWasDisabled = NO;
         dispatch_sync(dispatch_get_main_queue(), ^{
-            idleTimerWasDisabled = UIApplication.sharedApplication.idleTimerDisabled;
+            if (!g_settings_actions_idle_held) {
+                g_settings_actions_idle_was_disabled = UIApplication.sharedApplication.idleTimerDisabled;
+                g_settings_actions_idle_held = YES;
+            }
             UIApplication.sharedApplication.idleTimerDisabled = YES;
         });
         if (!pendingOnly && settings_any_registered_live_loop_running()) {
@@ -7638,6 +7849,14 @@ static void settings_run_actions_internal(BOOL pendingOnly)
         BOOL runSucceeded = NO;
         BOOL runHadBlockingFailure = NO;
         NSString *runCompletionMessage = @"Run failed. Check the log for details.";
+        // Stages that ran but did not apply. They keep their pending marker
+        // (settings_mark_tweak_applied(..., NO)), so the next run retries them;
+        // this only makes the final status say so instead of "All finished".
+        NSMutableArray<NSString *> *runWarnings = [NSMutableArray array];
+        BOOL runPartial = NO;
+        uint64_t runStartNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        RPerfSnapshot runPerf0;
+        r_perf_snapshot(&runPerf0);
         @try {
             BOOL patchSandboxExt = [d boolForKey:kSettingsRunPatchSandboxExt];
             BOOL runPowercuff = settings_enabled_tweak_should_run(d, kSettingsPowercuffEnabled, pendingOnly);
@@ -7805,6 +8024,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                              ok ? "[OK]" : "[WARN]",
                              ok ? "applied" : "did not apply cleanly");
                     cyanide_upload_log_milestone(ok ? @"powercuff-applied" : @"powercuff-failed");
+                    if (!ok) [runWarnings addObject:@"Powercuff"];
                 }
             }
 
@@ -7881,6 +8101,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                  ok ? "[OK]" : "[WARN]",
                                  ok ? "applied" : "may need a refresh");
                         cyanide_upload_log_milestone(ok ? @"darksword-tweaks-applied" : @"darksword-tweaks-warning");
+                        if (!ok) [runWarnings addObject:@"DarkSword tweaks"];
                     }
 
                     if (runThemer) {
@@ -7892,6 +8113,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                  ok ? "[OK]" : "[WARN]",
                                  ok ? "applied" : "did not apply cleanly");
                         cyanide_upload_log_milestone(ok ? @"themer-applied" : @"themer-warning");
+                        if (!ok) [runWarnings addObject:@"Icon Theme Engine"];
                         if (ok) {
                             settings_start_themer_live_loop();
                         }
@@ -7907,6 +8129,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                  ok ? "[OK]" : "[WARN]",
                                  ok ? "theme applied" : "did not apply cleanly");
                         cyanide_upload_log_milestone(ok ? @"snowboard-lite-applied" : @"snowboard-lite-warning");
+                        if (!ok) [runWarnings addObject:@"SnowBoard Lite"];
                         if (ok && !settings_themer_live_repair_enabled(d)) {
                             log_user("[SBL] Live repair is enabled; Cyanide will keep the SpringBoard channel open so repair ticks reuse it.\n");
                             settings_start_themer_live_loop();
@@ -7956,6 +8179,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                  ok ? "[OK]" : "[WARN]",
                                  ok ? "showing thermal + memory overlay" : "did not start cleanly");
                         cyanide_upload_log_milestone(ok ? @"statbar-initial-applied" : @"statbar-initial-failed");
+                        if (!ok) [runWarnings addObject:@"StatBar"];
                     }
 
                     if (runNSBar) {
@@ -7968,6 +8192,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                  ok ? "[OK]" : "[WARN]",
                                  ok ? "showing network speed" : "did not start cleanly");
                         cyanide_upload_log_milestone(ok ? @"nsbar-initial-applied" : @"nsbar-initial-failed");
+                        if (!ok) [runWarnings addObject:@"NSBar"];
                     }
 
                     if (runNiceBarLite) {
@@ -7981,6 +8206,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                  ok ? "[OK]" : "[WARN]",
                                  ok ? "labels active" : "did not start cleanly");
                         cyanide_upload_log_milestone(ok ? @"nicebar-lite-initial-applied" : @"nicebar-lite-initial-failed");
+                        if (!ok) [runWarnings addObject:@"NiceBar Lite"];
                     }
 
 
@@ -7994,18 +8220,21 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                  ok ? "[OK]" : "[WARN]",
                                  ok ? "video wallpaper active" : "did not start cleanly");
                         cyanide_upload_log_milestone(ok ? @"livewp-initial-applied" : @"livewp-initial-failed");
+                        if (!ok) [runWarnings addObject:@"LiveWP"];
                     }
 
                     if (runQuickLoader) {
                         settings_progress(&step, total, "Applying QuickLoader...");
                         bool ok = quickloader_apply_in_session();
                         settings_mark_tweak_applied(kSettingsQuickLoaderEnabled, ok);
+                        if (!ok) [runWarnings addObject:@"QuickLoader"];
                     }
 
                     if (runRepoTweaks) {
                         settings_progress(&step, total, "Applying RepoTweaks...");
                         bool ok = repotweaks_apply_in_session();
                         settings_mark_tweak_applied(kSettingsRepoTweaksEnabled, ok);
+                        if (!ok) [runWarnings addObject:@"RepoTweaks"];
                     }
 
 
@@ -8030,6 +8259,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                  (deferred ? "standing by — fires when notifications appear" : "did not start cleanly"));
                         cyanide_upload_log_milestone(ok ? @"axon-lite-initial-applied" :
                                                      (deferred ? @"axon-lite-initial-deferred" : @"axon-lite-initial-failed"));
+                        if (!ok && !deferred) [runWarnings addObject:@"Axon Lite"];
                     }
 
 
@@ -8043,6 +8273,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                  ok ? "[OK]" : "[WARN]",
                                  ok ? "enabled" : "did not apply cleanly");
                         cyanide_upload_log_milestone(ok ? @"app-switcher-grid-applied" : @"app-switcher-grid-failed");
+                        if (!ok) [runWarnings addObject:@"App Switcher Grid"];
                     } else if (!appSwitcherGridEnabled) {
                         appswitchergrid_stop_in_session();
                     }
@@ -8074,6 +8305,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                  ok ? "enabled" : "did not install cleanly");
                         cyanide_upload_log_milestone(ok ? @"fastlockx-lite-applied" :
                                                          @"fastlockx-lite-failed");
+                        if (!ok) [runWarnings addObject:@"FastLockX Lite"];
                     }
 
                     if (runStageStrip) {
@@ -8094,6 +8326,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                  ok ? "[OK]" : "[WARN]",
                                  ok ? "overlay active" : "did not install cleanly");
                         cyanide_upload_log_milestone(ok ? @"stagestrip-initial-applied" : @"stagestrip-initial-failed");
+                        if (!ok) [runWarnings addObject:@"Dynamic Stage Lite"];
                     } else if (!stageStripEnabled) {
                         // Uninstall path: tear down the overlay if one survived
                         // from a prior Run. No-op when the strip was never up.
@@ -8116,6 +8349,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                  (long)[d integerForKey:kSettingsSBCCols],
                                  (long)[d integerForKey:kSettingsSBCRows]);
                         cyanide_upload_log_milestone(ok ? @"sbc-applied" : @"sbc-warning");
+                        if (!ok) [runWarnings addObject:@"Home screen layout"];
                     }
 
                     // Layout Extras derives spacing and icon frames from the
@@ -8147,6 +8381,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                  ok ? "[OK]" : "[WARN]",
                                  ok ? "applied to final layout" : "did not apply cleanly");
                         cyanide_upload_log_milestone(ok ? @"layout-extras-applied" : @"layout-extras-warning");
+                        if (!ok) [runWarnings addObject:@"Home Layout Extras"];
                     }
 
                     // Hide labels LAST — after HSSCALE's relayout — so our own
@@ -8250,6 +8485,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
 
             if (!settings_has_persistent_springboard_remote_call_user()) {
                 BOOL closedNonLiveRemoteCall = NO;
+                settings_stage_open("SpringBoard channel teardown");
                 @synchronized (settings_rc_lock()) {
                     if (!settings_has_persistent_springboard_remote_call_user() &&
                         g_springboard_rc_ready) {
@@ -8278,7 +8514,13 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                 return;
             }
 
-            log_user("[DONE] All requested changes finished — active until respring.\n");
+            if (runWarnings.count) {
+                log_user("[DONE] Finished with warnings — did not apply: %s. They stay "
+                         "pending and are retried on the next run.\n",
+                         [runWarnings componentsJoinedByString:@", "].UTF8String);
+            } else {
+                log_user("[DONE] All requested changes finished — active until respring.\n");
+            }
             // Synchronous park + verify at session end. The idle parker and
             // the background hook are eventually-consistent; the post-success
             // panics fire while the device sits idle minutes after this line.
@@ -8286,9 +8528,18 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             // re-arms the primitive, and the idle parker re-parks after quiet.
             kexploit_krw_session_end_park();
             runSucceeded = YES;
-            runCompletionMessage = @"Done. All requested changes finished.";
-            cyanide_upload_log_milestone(@"run-complete");
+            if (runWarnings.count) {
+                runPartial = YES;
+                runCompletionMessage = [NSString stringWithFormat:@"Finished with warnings. Did not apply: %@.",
+                                        [runWarnings componentsJoinedByString:@", "]];
+                cyanide_upload_log_milestone(@"run-complete-warnings");
+            } else {
+                runCompletionMessage = @"Done. All requested changes finished.";
+                cyanide_upload_log_milestone(@"run-complete");
+            }
         } @finally {
+            settings_stage_close();
+            settings_log_perf_delta("Whole run", runStartNs, &runPerf0);
             // Close any legacy uploader state before the final snapshot.
             cyanide_stop_session_uploads();
             // Flush, but keep the file open so post-[DONE] background output
@@ -8326,9 +8577,15 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                 return;
             }
             dispatch_async(dispatch_get_main_queue(), ^{
-                UIApplication.sharedApplication.idleTimerDisabled = idleTimerWasDisabled;
+                // A new run that started after the release above keeps the
+                // hold and restores it when it finishes.
+                if (g_settings_actions_idle_held && !g_settings_actions_running) {
+                    UIApplication.sharedApplication.idleTimerDisabled = g_settings_actions_idle_was_disabled;
+                    g_settings_actions_idle_held = NO;
+                }
                 NSDictionary *completionInfo = @{
                     kSettingsActionsDidCompleteSuccessKey: @(runSucceeded),
+                    kSettingsActionsDidCompletePartialKey: @(runPartial),
                     kSettingsActionsDidCompleteMessageKey: runCompletionMessage ?: @""
                 };
                 [[NSNotificationCenter defaultCenter] postNotificationName:PackageQueueDidChangeNotification
@@ -8750,6 +9007,17 @@ typedef NS_ENUM(NSInteger, PMSortKey) { PMSortPID = 0, PMSortCPU, PMSortMem, PMS
 // When it changes, the old per-pid baselines are in a different basis and
 // would produce a one-refresh spike — drop them for that pass.
 @property (nonatomic, assign) BOOL prevCpuFullTotals;
+// On screen (viewWillAppear..viewWillDisappear). The auto-refresh timer only
+// runs while visible: a kill verdict landing after the user left used to
+// restart it, and the (target-retaining) timer kept the hidden viewer alive
+// and scanning KRW until the app next backgrounded. Main-queue confined.
+@property (nonatomic, assign) BOOL pmVisible;
+// Rows dropped after a confirmed kill, keyed pid -> removal epoch. A refresh
+// pass that STARTED before a removal can still have read that pid; its
+// snapshot must not resurrect the row. A pass started after the removal is
+// authoritative (the pid may legitimately be reused). Main-queue confined.
+@property (nonatomic, assign) NSUInteger pmRemovalEpoch;
+@property (nonatomic, strong) NSMutableDictionary<NSNumber *, NSNumber *> *pmRemovedPids;
 @end
 
 static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeconds";
@@ -8765,6 +9033,7 @@ static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeco
     self.filter = @"";
     self.prevCpu = [NSMutableDictionary dictionary];
     self.terminatingPids = [NSMutableSet set];
+    self.pmRemovedPids = [NSMutableDictionary dictionary];
     UIBarButtonItem *refreshItem =
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
                                                       target:self
@@ -9081,6 +9350,7 @@ static NSString *pm_chip_name(NSString *machine) {
     if ([tbc isKindOfClass:MainTabBarController.class]) {
         [(MainTabBarController *)tbc setPopupBarSuppressed:YES];
     }
+    self.pmVisible = YES;
     [self startAutoRefreshTimerIfNeeded];
 
     // Auto-arm on open: armKRW tries the parked-primitive restore first (safe,
@@ -9106,6 +9376,7 @@ static NSString *pm_chip_name(NSString *machine) {
     if ([tbc isKindOfClass:MainTabBarController.class]) {
         [(MainTabBarController *)tbc setPopupBarSuppressed:NO];
     }
+    self.pmVisible = NO;
     [self stopAutoRefreshTimer];
 }
 
@@ -9126,13 +9397,18 @@ static NSString *pm_chip_name(NSString *machine) {
 {
     [self stopAutoRefreshTimer];   // never stack timers
     if (self.killsInFlight > 0) return;   // the last kill verdict restarts it
+    if (!self.pmVisible) return;          // off screen: viewWillAppear restarts it
     double interval = [self autoRefreshInterval];
     if (interval <= 0) return;
+    // Weak: a scheduled target/selector timer retains the viewer.
+    __weak typeof(self) weakSelf = self;
     self.autoRefreshTimer = [NSTimer scheduledTimerWithTimeInterval:interval
-                                                             target:self
-                                                           selector:@selector(reloadProcs)
-                                                           userInfo:nil
-                                                            repeats:YES];
+                                                            repeats:YES
+                                                              block:^(NSTimer *t) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf.pmVisible) { [t invalidate]; return; }
+        [strongSelf reloadProcs];
+    }];
 }
 
 - (void)stopAutoRefreshTimer
@@ -9255,8 +9531,8 @@ static NSString *pm_chip_name(NSString *machine) {
     // ksafe so an unmapped/stale pointer degrades instead of panicking. libproc is
     // the fallback for our own (and permitted) pids. %CPU is a delta between
     // refreshes; done on a background queue so the UI never blocks on KRW.
-    uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-    double dWall = (self.prevWall > 0 && nowNs > self.prevWall) ? (double)(nowNs - self.prevWall) : 0;
+    uint64_t prevWall = self.prevWall;
+    NSUInteger passEpoch = self.pmRemovalEpoch;
     NSDictionary<NSNumber *, NSNumber *> *prevCpu = self.prevCpu;
     BOOL prevCpuFullTotals = self.prevCpuFullTotals;
 
@@ -9289,6 +9565,12 @@ static NSString *pm_chip_name(NSString *machine) {
         BOOL cpuFullTotals = procmgr_cpu_calibrated();
         NSDictionary<NSNumber *, NSNumber *> *basePrev =
             (cpuFullTotals == prevCpuFullTotals) ? prevCpu : @{};
+
+        // Wall clock for %CPU, taken here — after the reattach and calibration
+        // above — so the interval brackets the counter reads rather than
+        // including however long this pass waited to start.
+        uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        double dWall = (prevWall > 0 && nowNs > prevWall) ? (double)(nowNs - prevWall) : 0;
 
         int cap = 4096;
         procmgr_entry_t *buf = calloc((size_t)cap, sizeof(procmgr_entry_t));
@@ -9427,6 +9709,18 @@ static NSString *pm_chip_name(NSString *machine) {
             self.prevWall = nowNs;
             self.statsAvailable = (statCount > 0);
             [self updateSummaryHeader];
+            if (self.pmRemovedPids.count) {
+                NSDictionary<NSNumber *, NSNumber *> *removed = self.pmRemovedPids;
+                [rows filterUsingPredicate:[NSPredicate predicateWithBlock:
+                    ^BOOL(NSDictionary *r, NSDictionary *bindings) {
+                        return removed[r[@"pid"]].unsignedIntegerValue <= passEpoch;
+                    }]];
+                // Removals this pass already post-dates are reflected in it.
+                for (NSNumber *pid in removed.allKeys) {
+                    if (removed[pid].unsignedIntegerValue <= passEpoch)
+                        [self.pmRemovedPids removeObjectForKey:pid];
+                }
+            }
             self.allProcs = rows;
             [self applyFilter];   // sets the "N processes" prompt
             [self.refreshControl endRefreshing];
@@ -10016,6 +10310,7 @@ static NSString *pm_chip_name(NSString *machine) {
 // KRW rescan — the fast path after a confirmed kill.
 - (void)pmRemoveRowForPid:(int)pid
 {
+    self.pmRemovedPids[@(pid)] = @(++self.pmRemovalEpoch);
     NSIndexSet *idx = [self.allProcs indexesOfObjectsPassingTest:
         ^BOOL(NSDictionary *r, NSUInteger i, BOOL *stop) {
             return [r[@"pid"] intValue] == pid;
@@ -10057,6 +10352,13 @@ static RemoteCallSession *gPMKillSession = nil;
 // arrives while it is non-zero ATTACHES to the in-flight warm-up — waits on
 // pm_kill_lock once and uses its result — instead of stacking a second hijack.
 static volatile int gPMWarmupInFlight = 0;
+
+// A teardown that has taken the session out from under pm_kill_lock and is
+// destroying it OUTSIDE the lock. A fresh warm-up must not start until it has
+// finished: the old session's teardown restores launchd's task_exc_guard
+// flags and drains its ports while the new init is arming launchd threads
+// (live 53, 22:32:05 — restore landed 170 ms after the new injection).
+static volatile int gPMTeardownInFlight = 0;
 
 static NSLock *pm_kill_lock(void) {
     static NSLock *l = nil;
@@ -10200,6 +10502,7 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
     RemoteCallSession *session = gPMKillSession;
     gPMKillSession = nil;
     BOOL warmupInFlight = (__sync_add_and_fetch(&gPMWarmupInFlight, 0) > 0);
+    if (session) __sync_add_and_fetch(&gPMTeardownInFlight, 1);   // set while still locked
     [lock unlock];
     if (!session) {
         // Round 10: mid-init warm-up has no session object to tear down yet,
@@ -10238,6 +10541,7 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
                reason ?: "terminate");
         [session abandonRemoteCall];
     }
+    __sync_sub_and_fetch(&gPMTeardownInFlight, 1);
     excport_teardown_bypass_end("fastkill-teardown");
 }
 
@@ -10266,6 +10570,431 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
 // writable on 18.4+. The launchd RemoteCall is the ONLY privileged kill path
 // now: procmgr_kill -> on EPERM, pmForceKillViaLaunchd. procmgr_unsandbox/
 // resandbox/escalate/deescalate remain in utils/process.m, marked UNUSED.
+
+// The warm launchd session: tears down an anomalous one, and warms a fresh
+// one if needed (refusing while the activation settle window is open). Shared
+// by Force Quit and the File Browser's root reads. Caller holds pm_kill_lock
+// and the external RemoteCall guard. Returns 0, -2 (settle window) or -7
+// (init failure).
+static int pm_launchd_session_ensure_locked(const char *what)
+{
+    // Never warm while a previous session's teardown is still running outside
+    // the lock (see gPMTeardownInFlight). Waiting here, under pm_kill_lock, is
+    // deadlock-free: the teardown took the session and released the lock
+    // before its counter went up. Bounded; bail into a backgrounding.
+    if (!gPMKillSession && __sync_add_and_fetch(&gPMTeardownInFlight, 0) > 0) {
+        printf("[PROCMGR] fastkill: %s waits for the previous launchd session's "
+               "teardown to finish before warming\n", what);
+        for (int i = 0; i < 250 && __sync_add_and_fetch(&gPMTeardownInFlight, 0) > 0; i++) {
+            if (g_app_in_background || excport_gate_blocked()) return -2;
+            usleep(20000);   // 20 ms, up to 5 s
+        }
+        if (__sync_add_and_fetch(&gPMTeardownInFlight, 0) > 0) {
+            printf("[PROCMGR] fastkill: %s refused — previous teardown still "
+                   "running after 5 s\n", what);
+            return -2;
+        }
+    }
+    // Round 20 (C): never reuse or keep an ANOMALOUS warm session — its
+    // first-port responder saw a protocol park trap and exited, leaving a
+    // launchd thread parked on that port with no owner (071602: watchdogd
+    // turnstile-blocked on exactly such a parked worker → watchdog timeout).
+    if (gPMKillSession && [gPMKillSession isAnomalous]) {
+        printf("[PROCMGR] fastkill: warm session is ANOMALOUS (responder exited "
+               "on a protocol park trap — a launchd thread is parked on its "
+               "first port) — tearing it down with invariant repair and "
+               "warming a fresh session\n");
+        if (kexploit_krw_ready()) [gPMKillSession destroyRemoteCall];
+        else                      [gPMKillSession abandonRemoteCall];
+        gPMKillSession = nil;
+    }
+    if (!gPMKillSession) {
+        // Round 39 (panic-full-2026-10-04-082220 "unexpected SIGKILL of
+        // launchd"): a USER kill that has to warm a fresh launchd session must
+        // ALSO wait out the activation settle window. Arming launchd
+        // (set_exception_ports → AMFI global lock) while runningboardd /
+        // PerfPowerServices policy-set our task during the launch/foreground
+        // churn strands a launchd thread → SIGKILL of launchd (082220: user
+        // kill at 08:21:52, INSIDE the settle window, armed 5 launchd threads,
+        // hung → reboot 27 s later). Round 36 gated the automatic pre-warm; the
+        // on-demand kill warm hit the same window. The kill runs off-main (the
+        // row already shows "terminating…"), so a bounded wait is just a brief
+        // delay; bail if the app backgrounds mid-wait (never arm into a suspend).
+        //
+        // Round 41: the WAIT ITSELF moved to the unlocked entry
+        // (pmForceKillViaLaunchd) — it used to usleep here UNDER pm_kill_lock,
+        // serializing every other kill behind one kill's multi-second settle.
+        // Reaching this point with the window still pending means a fresh
+        // activation re-extended it in the last few ms — refuse rather than
+        // wait under the lock (nothing signalled; the kill can simply be
+        // retried after the window — round 44 removed the automatic pre-warm
+        // that used to re-warm it).
+        uint64_t settleUntil = g_activation_settle_until_ns;
+        uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        if (settleUntil > nowNs) {
+            printf("[PROCMGR] fastkill: REFUSING %s warm — activation "
+                   "settle window re-extended (%llu ms left) after the "
+                   "pre-lock wait; not arming launchd under pm_kill_lock\n",
+                   what, (unsigned long long)((settleUntil - nowNs) / 1000000ULL));
+            return -2;
+        }
+    }
+    if (!gPMKillSession) {
+        printf("[PROCMGR] fastkill: warming launchd RemoteCall session "
+               "(one-time hijack)…\n");
+        __sync_add_and_fetch(&gPMWarmupInFlight, 1);
+        uint64_t w0 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        // Round 10: 10 s first-trap cap (was the 120 s session default).
+        // Historical traps arrive in 0.5-2.5 s; a trap that takes longer is
+        // never coming (armed candidate died mid-walk or is unparkable), and
+        // every extra second is time an orphaned armed thread can detonate
+        // against our dead ports if the app leaves the foreground
+        // (17:45:56: silence 145 ms into the 120 s wait, panic <60 s).
+        // Round 46: arm 4 candidates (was round-41's 2). With 2, the
+        // first-trap wait measured 1–4.8 s on-device; the min over 4
+        // injected threads should land in ~0.5–1 s. Strand surface stays
+        // bounded (anchoring keeps 6; we stay under it).
+        remote_call_set_next_init_target_threads("launchd", 4);
+        gPMKillSession = [[RemoteCallSession alloc] initWithProcess:@"launchd"
+                                                 useMigFilterBypass:NO
+                                            firstExceptionTimeoutMS:10000];
+        uint64_t warmMs = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - w0) / 1000000ULL;
+        __sync_sub_and_fetch(&gPMWarmupInFlight, 1);
+        if (!gPMKillSession) {
+            printf("[PROCMGR] fastkill: could not open remote-call session "
+                   "(init failure=%s)\n",
+                   remote_call_init_failure_description(remote_call_last_init_failure()));
+            return -7;
+        }
+        printf("[PROCMGR] fastkill: warm session ready (launchd pid=%d) — warm-up "
+               "took %llu ms (injected=%d, trap at %llu ms)\n",
+               gPMKillSession.pid, (unsigned long long)warmMs,
+               remote_call_last_init_injected(),
+               (unsigned long long)remote_call_last_init_trap_ms());
+    }
+    return 0;
+}
+
+// --- File Browser root reads ------------------------------------------------
+//
+// Cyanide can't become root (proc_ro/ucred are read-only on SPTM, see
+// procmgr_escalate), but launchd is root and unsandboxed. These run plain
+// read-only libc calls INSIDE launchd over the same warm session Force Quit
+// uses, under the same lock, guard, settle window and idle disarm. Nothing is
+// written; only directories and regular files are opened, so the hijacked
+// launchd thread can never block on a FIFO/device/socket (a blocked launchd
+// thread is a watchdog panic).
+
+static NSString *pm_root_errno_text(RemoteCallSession *session, const char *what)
+{
+    uint64_t errPtr = [session doRemoteCallStableWithTimeout:100 functionName:"__error"
+                                                          x0:0 x1:0 x2:0 x3:0 x4:0 x5:0 x6:0 x7:0];
+    int err = errPtr ? (int)[session remoteRead64:errPtr] : 0;
+    return err > 0 ? [NSString stringWithFormat:@"%s: %s", what, strerror(err)]
+                   : [NSString stringWithFormat:@"%s failed", what];
+}
+
+// A root listing/read in progress stops as soon as the app starts leaving the
+// foreground, so it never holds launchd (and the RemoteCall guard) into the
+// background detach.
+static BOOL pm_root_should_stop(void)
+{
+    return g_app_in_background || excport_gate_blocked() || remote_call_stop_requested();
+}
+
+// Runs `block` with the warm launchd session held, reusing the kill path's
+// lock, guard, settle-window wait and idle-disarm scheduling. Off-main only.
+static BOOL pm_with_launchd_session(const char *what, NSString **errorOut,
+                                    void (^block)(RemoteCallSession *session))
+{
+    NSString *error = nil;
+    if (!kexploit_krw_ready()) error = @"Kernel access is not active. Run the chain first.";
+    else if (excport_gate_blocked()) error = @"Cyanide is not in the foreground.";
+    else if (remote_call_helper_unaccounted_count() > 0)
+        error = @"A kernel call is stuck from an earlier backgrounding. Restart Cyanide.";
+    if (error) { if (errorOut) *errorOut = error; return NO; }
+
+    pm_idle_disarm_cancel(what);
+    uint64_t settleUntil = g_activation_settle_until_ns;   // wait OUTSIDE the lock
+    while (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) < settleUntil) {
+        if (g_app_in_background || excport_gate_blocked()) {
+            if (errorOut) *errorOut = @"Cyanide left the foreground.";
+            return NO;
+        }
+        usleep(100000);
+    }
+    NSLock *lock = pm_kill_lock();
+    [lock lock];
+    BOOL ran = NO;
+    if (!remote_call_guard_acquire_external(what)) {
+        error = @"Cyanide is going to the background.";
+    } else {
+        int rc = pm_launchd_session_ensure_locked(what);
+        if (rc == 0 && gPMKillSession) {
+            block(gPMKillSession);
+            ran = YES;
+            if (kexploit_krw_session_active() && !kexploit_krw_sockets_detached())
+                kexploit_krw_park_filter_safe();
+            if ([gPMKillSession isAnomalous]) {
+                printf("[FILES] root: launchd session ANOMALOUS — tearing it down\n");
+                if (kexploit_krw_ready()) [gPMKillSession destroyRemoteCall];
+                else                      [gPMKillSession abandonRemoteCall];
+                gPMKillSession = nil;
+            }
+        } else {
+            error = rc == -2 ? @"Cyanide was just activated. Try again in a moment."
+                             : @"Root access through launchd could not be opened.";
+        }
+        remote_call_guard_release_external(what);
+    }
+    BOOL keepWarm = (gPMKillSession != nil);
+    [lock unlock];
+    if (keepWarm) pm_idle_disarm_schedule();   // shed the session after 10 idle s
+    if (!ran && errorOut) *errorOut = error;
+    return ran;
+}
+
+// struct dirent (64-bit inode): d_namlen (u16) at 18, d_name at 21.
+enum { PM_DIRENT_NAMLEN_OFF = 18, PM_DIRENT_NAME_OFF = 21 };
+static const NSUInteger kPMRootMaxEntries = 4000;
+
+// launchd scratch layout shared by list/read: [path | stat | link | data].
+// Every region has a fixed capacity; a path must fit its region BEFORE it is
+// copied into launchd (the copy itself knows nothing about the allocation).
+enum {
+    PM_ROOT_PATH_CAP = PATH_MAX,              // path incl. NUL
+    PM_ROOT_STAT_OFF = PM_ROOT_PATH_CAP,
+    PM_ROOT_STAT_CAP = 512,                   // >= sizeof(struct stat)
+    PM_ROOT_LINK_OFF = PM_ROOT_STAT_OFF + PM_ROOT_STAT_CAP,
+    PM_ROOT_LINK_CAP = PATH_MAX,
+    PM_ROOT_DATA_OFF = PM_ROOT_LINK_OFF + PM_ROOT_LINK_CAP,
+};
+_Static_assert(sizeof(struct stat) <= PM_ROOT_STAT_CAP, "stat region too small");
+
+// Absolute, NUL-free, and short enough for the launchd path region.
+static BOOL pm_root_path_ok(NSString *path)
+{
+    const char *p = path.fileSystemRepresentation;
+    if (!p || p[0] != '/') return NO;
+    return strlen(p) < PM_ROOT_PATH_CAP;
+}
+
+// One libc call inside launchd. *ok reports whether the call actually
+// completed — a transport failure also returns 0, which would otherwise read
+// as a valid fd 0, EOF, end of directory or a successful lstat.
+static uint64_t pm_root_call(RemoteCallSession *s, int timeoutMS, const char *fn,
+                             uint64_t a0, uint64_t a1, uint64_t a2, BOOL *ok)
+{
+    uint64_t r = [s doRemoteCallStableWithTimeout:timeoutMS functionName:fn
+                                               x0:a0 x1:a1 x2:a2 x3:0 x4:0 x5:0 x6:0 x7:0];
+    *ok = remote_call_last_call_ok();
+    if (!*ok) printf("[FILES] root: launchd call %s did not complete (transport)\n", fn);
+    return r;
+}
+
+static NSString *const kPMRootTransportError = @"A call into launchd did not complete. Try again.";
+
+// lstat `path` inside launchd (plus stat + readlink for a symlink).
+// Returns 1 ok, 0 libc failure (errno in launchd), -1 transport/copy failure.
+static int pm_root_stat(RemoteCallSession *s, uint64_t buf, NSString *path,
+                        struct stat *lst, struct stat *st, BOOL *haveSt, NSString **link)
+{
+    if (!pm_root_path_ok(path)) return 0;
+    BOOL ok;
+    uint64_t statBuf = buf + PM_ROOT_STAT_OFF;
+    if (![s remoteWriteString:buf value:path.fileSystemRepresentation]) return -1;
+    int rc = (int)pm_root_call(s, 1000, "lstat", buf, statBuf, 0, &ok);
+    if (!ok) return -1;
+    if (rc != 0) return 0;
+    if (![s remoteRead:statBuf to:lst size:sizeof(*lst)]) return -1;
+    *haveSt = NO;
+    if (S_ISLNK(lst->st_mode)) {
+        rc = (int)pm_root_call(s, 1000, "stat", buf, statBuf, 0, &ok);
+        if (!ok) return -1;
+        if (rc == 0) *haveSt = [s remoteRead:statBuf to:st size:sizeof(*st)];
+        uint64_t linkBuf = buf + PM_ROOT_LINK_OFF;
+        int64_t n = (int64_t)pm_root_call(s, 1000, "readlink", buf, linkBuf, PM_ROOT_LINK_CAP - 1, &ok);
+        if (!ok) return -1;
+        if (n > 0 && n < PM_ROOT_LINK_CAP && link) {
+            char tmp[PM_ROOT_LINK_CAP];
+            if ([s remoteRead:linkBuf to:tmp size:(uint64_t)n]) { tmp[n] = 0; *link = @(tmp); }
+        }
+    }
+    return 1;
+}
+
+static NSDictionary *pm_root_entry_dict(NSString *name, const struct stat *lst,
+                                        const struct stat *st, BOOL haveSt, NSString *link)
+{
+    BOOL isLink = S_ISLNK(lst->st_mode);
+    NSMutableDictionary *d = [@{
+        @"name": name, @"mode": @(lst->st_mode), @"uid": @(lst->st_uid), @"gid": @(lst->st_gid),
+        @"size": @(lst->st_size), @"mtime": @(lst->st_mtimespec.tv_sec),
+        @"isDirectory": @(isLink ? (haveSt && S_ISDIR(st->st_mode)) : S_ISDIR(lst->st_mode)),
+    } mutableCopy];
+    if (link) d[@"linkTarget"] = link;
+    return d;
+}
+
+NSArray<NSDictionary *> *settings_root_list_directory(NSString *path, BOOL *incompleteOut, NSString **errorOut)
+{
+    if (incompleteOut) *incompleteOut = NO;
+    if (!pm_root_path_ok(path)) {
+        if (errorOut) *errorOut = @"Path is not absolute or too long.";
+        return nil;
+    }
+    __block NSArray *out = nil;
+    __block NSString *error = nil;
+    __block BOOL incomplete = NO;
+    pm_with_launchd_session("file browser root list", &error, ^(RemoteCallSession *s) {
+        BOOL ok;
+        uint64_t buf = pm_root_call(s, 1000, "malloc", PM_ROOT_DATA_OFF, 0, 0, &ok);
+        if (!ok || !buf) { error = ok ? @"launchd could not allocate a buffer." : kPMRootTransportError; return; }
+        struct stat lst, st; BOOL haveSt = NO;
+        int src = pm_root_stat(s, buf, path, &lst, &st, &haveSt, NULL);
+        if (src < 0) {
+            error = kPMRootTransportError;
+        } else if (src == 0) {
+            error = pm_root_errno_text(s, "stat");
+        } else if (!(S_ISDIR(lst.st_mode) || (S_ISLNK(lst.st_mode) && haveSt && S_ISDIR(st.st_mode)))) {
+            error = @"Not a folder.";
+        } else if (![s remoteWriteString:buf value:path.fileSystemRepresentation]) {
+            error = kPMRootTransportError;
+        } else {
+            uint64_t dir = pm_root_call(s, 1000, "opendir", buf, 0, 0, &ok);
+            if (!ok) {
+                error = kPMRootTransportError;
+            } else if (!dir) {
+                error = pm_root_errno_text(s, "opendir");
+            } else {
+                NSMutableArray<NSString *> *names = [NSMutableArray array];
+                BOOL stopped = NO, failed = NO;
+                // Clear errno so a readdir error is distinguishable from EOF.
+                uint64_t errPtr = pm_root_call(s, 100, "__error", 0, 0, 0, &ok);
+                if (!ok) failed = YES;
+                while (!failed) {
+                    if (pm_root_should_stop()) { stopped = YES; break; }
+                    if (names.count >= kPMRootMaxEntries) { incomplete = YES; break; }
+                    if (errPtr) [s remoteWrite64:errPtr value:0];
+                    uint64_t ent = pm_root_call(s, 1000, "readdir", dir, 0, 0, &ok);
+                    if (!ok) { failed = YES; break; }
+                    if (!ent) {
+                        // NULL is EOF only if errno stayed 0.
+                        if (errPtr && (int)[s remoteRead64:errPtr] != 0) incomplete = YES;
+                        break;
+                    }
+                    uint8_t head[PM_DIRENT_NAME_OFF];
+                    if (![s remoteRead:ent to:head size:sizeof(head)]) { failed = YES; break; }
+                    uint16_t namlen = (uint16_t)(head[PM_DIRENT_NAMLEN_OFF] | (head[PM_DIRENT_NAMLEN_OFF + 1] << 8));
+                    if (namlen == 0 || namlen > 255) continue;
+                    char name[256];
+                    if (![s remoteRead:ent + PM_DIRENT_NAME_OFF to:name size:namlen]) { failed = YES; break; }
+                    name[namlen] = 0;
+                    if (!strcmp(name, ".") || !strcmp(name, "..")) continue;
+                    NSString *n = [[NSString alloc] initWithBytes:name length:namlen encoding:NSUTF8StringEncoding];
+                    if (n) [names addObject:n];
+                }
+                pm_root_call(s, 1000, "closedir", dir, 0, 0, &ok);
+                NSMutableArray *entries = [NSMutableArray arrayWithCapacity:names.count];
+                for (NSString *n in names) {
+                    if (failed || stopped) break;
+                    if (pm_root_should_stop()) { stopped = YES; break; }
+                    NSString *full = [path stringByAppendingPathComponent:n];
+                    struct stat el, es; BOOL eHave = NO; NSString *link = nil;
+                    int r = pm_root_stat(s, buf, full, &el, &es, &eHave, &link);
+                    if (r < 0) { failed = YES; break; }
+                    if (r > 0) [entries addObject:pm_root_entry_dict(n, &el, &es, eHave, link)];
+                    else       [entries addObject:@{ @"name": n, @"statFailed": @YES }];
+                }
+                if (stopped)     error = @"Stopped: Cyanide left the foreground.";
+                else if (failed) error = kPMRootTransportError;
+                else             out = entries;
+            }
+        }
+        pm_root_call(s, 1000, "free", buf, 0, 0, &ok);
+    });
+    if (!out && errorOut) *errorOut = error ?: @"The folder could not be read.";
+    if (incompleteOut) *incompleteOut = incomplete;
+    printf("[FILES] root list %s: %s (%lu entries%s)\n", path.fileSystemRepresentation,
+           out ? "ok" : "failed", (unsigned long)out.count, incomplete ? ", INCOMPLETE" : "");
+    return out;
+}
+
+NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *truncatedOut, NSString **errorOut)
+{
+    if (truncatedOut) *truncatedOut = NO;
+    if (!pm_root_path_ok(path)) {
+        if (errorOut) *errorOut = @"Path is not absolute or too long.";
+        return nil;
+    }
+    __block NSMutableData *out = nil;
+    __block NSString *error = nil;
+    __block BOOL truncated = NO;
+    pm_with_launchd_session("file browser root read", &error, ^(RemoteCallSession *s) {
+        const size_t chunk = 64 * 1024;
+        BOOL ok;
+        uint64_t buf = pm_root_call(s, 1000, "malloc", PM_ROOT_DATA_OFF + chunk, 0, 0, &ok);
+        if (!ok || !buf) { error = ok ? @"launchd could not allocate a buffer." : kPMRootTransportError; return; }
+        uint64_t data = buf + PM_ROOT_DATA_OFF;
+        struct stat lst, st; BOOL haveSt = NO;
+        int src = pm_root_stat(s, buf, path, &lst, &st, &haveSt, NULL);
+        if (src < 0) {
+            error = kPMRootTransportError;
+        } else if (src == 0) {
+            error = pm_root_errno_text(s, "stat");
+        } else if (!(S_ISREG(lst.st_mode) || (S_ISLNK(lst.st_mode) && haveSt && S_ISREG(st.st_mode)))) {
+            error = @"Only regular files can be read as root.";   // never open FIFO/device/socket in launchd
+        } else if (![s remoteWriteString:buf value:path.fileSystemRepresentation]) {
+            error = kPMRootTransportError;
+        } else {
+            int fd = (int)pm_root_call(s, 1000, "open", buf, O_RDONLY | O_NONBLOCK | O_CLOEXEC, 0, &ok);
+            if (!ok) {
+                error = kPMRootTransportError;   // no fd was established: nothing to close
+            } else if (fd < 0) {
+                error = pm_root_errno_text(s, "open");
+            } else {
+                // The path could have been swapped between stat and open:
+                // validate the opened object itself before reading.
+                int frc = (int)pm_root_call(s, 1000, "fstat", (uint64_t)fd, buf + PM_ROOT_STAT_OFF, 0, &ok);
+                struct stat fst;
+                BOOL regular = ok && frc == 0 &&
+                    [s remoteRead:buf + PM_ROOT_STAT_OFF to:&fst size:sizeof(fst)] && S_ISREG(fst.st_mode);
+                if (!ok) error = kPMRootTransportError;
+                else if (!regular) error = @"Only regular files can be read as root.";
+                NSMutableData *acc = regular ? [NSMutableData data] : nil;
+                BOOL readOK = regular;
+                while (readOK && acc.length < maxBytes) {
+                    if (pm_root_should_stop()) {
+                        error = @"Stopped: Cyanide left the foreground."; readOK = NO; break;
+                    }
+                    size_t want = MIN(chunk, maxBytes - acc.length);
+                    int64_t n = (int64_t)pm_root_call(s, 2000, "read", (uint64_t)fd, data, want, &ok);
+                    if (!ok) { error = kPMRootTransportError; readOK = NO; break; }
+                    if (n < 0) { error = pm_root_errno_text(s, "read"); readOK = NO; break; }
+                    if ((uint64_t)n > want) { error = @"launchd returned an invalid read size."; readOK = NO; break; }
+                    if (n == 0) break;
+                    NSUInteger at = acc.length;
+                    acc.length = at + (NSUInteger)n;
+                    if (![s remoteRead:data to:(uint8_t *)acc.mutableBytes + at size:(uint64_t)n]) {
+                        error = kPMRootTransportError; readOK = NO; break;
+                    }
+                }
+                if (readOK) {
+                    if (acc.length >= maxBytes) {
+                        int64_t more = (int64_t)pm_root_call(s, 2000, "read", (uint64_t)fd, data, 1, &ok);
+                        truncated = !ok || more != 0;   // unknown counts as truncated
+                    }
+                    out = acc;
+                }
+                pm_root_call(s, 1000, "close", (uint64_t)fd, 0, 0, &ok);
+            }
+        }
+        pm_root_call(s, 1000, "free", buf, 0, 0, &ok);
+    });
+    if (!out && errorOut) *errorOut = error ?: @"The file could not be read.";
+    if (truncatedOut) *truncatedOut = truncated;
+    return out;
+}
 
 - (int)pmForceKillViaLaunchdLocked:(int)pid allowRebuild:(BOOL)allowRebuild
 {
@@ -10338,84 +11067,9 @@ static void pm_teardown_fastkill_session_for_terminate(const char *reason)
         return -1;
     }
     uint64_t t0 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-    // Round 20 (C): never reuse or keep an ANOMALOUS warm session — its
-    // first-port responder saw a protocol park trap and exited, leaving a
-    // launchd thread parked on that port with no owner (071602: watchdogd
-    // turnstile-blocked on exactly such a parked worker → watchdog timeout).
-    if (gPMKillSession && [gPMKillSession isAnomalous]) {
-        printf("[PROCMGR] fastkill: warm session is ANOMALOUS (responder exited "
-               "on a protocol park trap — a launchd thread is parked on its "
-               "first port) — tearing it down with invariant repair and "
-               "warming a fresh session\n");
-        if (kexploit_krw_ready()) [gPMKillSession destroyRemoteCall];
-        else                      [gPMKillSession abandonRemoteCall];
-        gPMKillSession = nil;
-    }
-    if (!gPMKillSession) {
-        // Round 39 (panic-full-2026-10-04-082220 "unexpected SIGKILL of
-        // launchd"): a USER kill that has to warm a fresh launchd session must
-        // ALSO wait out the activation settle window. Arming launchd
-        // (set_exception_ports → AMFI global lock) while runningboardd /
-        // PerfPowerServices policy-set our task during the launch/foreground
-        // churn strands a launchd thread → SIGKILL of launchd (082220: user
-        // kill at 08:21:52, INSIDE the settle window, armed 5 launchd threads,
-        // hung → reboot 27 s later). Round 36 gated the automatic pre-warm; the
-        // on-demand kill warm hit the same window. The kill runs off-main (the
-        // row already shows "terminating…"), so a bounded wait is just a brief
-        // delay; bail if the app backgrounds mid-wait (never arm into a suspend).
-        //
-        // Round 41: the WAIT ITSELF moved to the unlocked entry
-        // (pmForceKillViaLaunchd) — it used to usleep here UNDER pm_kill_lock,
-        // serializing every other kill behind one kill's multi-second settle.
-        // Reaching this point with the window still pending means a fresh
-        // activation re-extended it in the last few ms — refuse rather than
-        // wait under the lock (nothing signalled; the kill can simply be
-        // retried after the window — round 44 removed the automatic pre-warm
-        // that used to re-warm it).
-        uint64_t settleUntil = g_activation_settle_until_ns;
-        uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-        if (settleUntil > nowNs) {
-            printf("[PROCMGR] fastkill: REFUSING kill(%d) warm — activation "
-                   "settle window re-extended (%llu ms left) after the "
-                   "pre-lock wait; not arming launchd under pm_kill_lock\n",
-                   pid, (unsigned long long)((settleUntil - nowNs) / 1000000ULL));
-            return -2;
-        }
-    }
-    BOOL warmed = (gPMKillSession != nil);
-    if (!gPMKillSession) {
-        printf("[PROCMGR] fastkill: warming launchd RemoteCall session "
-               "(one-time hijack)…\n");
-        __sync_add_and_fetch(&gPMWarmupInFlight, 1);
-        uint64_t w0 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-        // Round 10: 10 s first-trap cap (was the 120 s session default).
-        // Historical traps arrive in 0.5-2.5 s; a trap that takes longer is
-        // never coming (armed candidate died mid-walk or is unparkable), and
-        // every extra second is time an orphaned armed thread can detonate
-        // against our dead ports if the app leaves the foreground
-        // (17:45:56: silence 145 ms into the 120 s wait, panic <60 s).
-        // Round 46: arm 4 candidates (was round-41's 2). With 2, the
-        // first-trap wait measured 1–4.8 s on-device; the min over 4
-        // injected threads should land in ~0.5–1 s. Strand surface stays
-        // bounded (anchoring keeps 6; we stay under it).
-        remote_call_set_next_init_target_threads("launchd", 4);
-        gPMKillSession = [[RemoteCallSession alloc] initWithProcess:@"launchd"
-                                                 useMigFilterBypass:NO
-                                            firstExceptionTimeoutMS:10000];
-        uint64_t warmMs = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - w0) / 1000000ULL;
-        __sync_sub_and_fetch(&gPMWarmupInFlight, 1);
-        if (!gPMKillSession) {
-            printf("[PROCMGR] fastkill: could not open remote-call session "
-                   "(init failure=%s)\n",
-                   remote_call_init_failure_description(remote_call_last_init_failure()));
-            return -7;
-        }
-        printf("[PROCMGR] fastkill: warm session ready (launchd pid=%d) — warm-up "
-               "took %llu ms (injected=%d, trap at %llu ms)\n",
-               gPMKillSession.pid, (unsigned long long)warmMs,
-               remote_call_last_init_injected(),
-               (unsigned long long)remote_call_last_init_trap_ms());
-    }
+    BOOL warmed = (gPMKillSession != nil && ![gPMKillSession isAnomalous]);
+    int warmRC = pm_launchd_session_ensure_locked("kill");
+    if (warmRC != 0) return warmRC;
     uint64_t r = [gPMKillSession doRemoteCallStableWithTimeout:2000
                                                   functionName:"kill"
                                                             x0:(uint64_t)pid
@@ -11760,7 +12414,18 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
 - (NSArray<NSDictionary *> *)locationSimRows
 {
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    BOOL locationOn = locationservices_enabled_local() == 1;
     return @[
+        @{ @"kind": @"info",
+           @"title": @"Location Services",
+           @"subtitle": locationOn ? @"On" : @"Off" },
+
+        @{ @"kind": @"button",
+           @"title": locationOn ? @"Turn Location Services Off" : @"Turn Location Services On",
+           @"subtitle": @"The same system-wide switch as Settings → Privacy & Security → Location Services.",
+           @"action": @"locsvc-toggle",
+           @"destructive": @(locationOn) },
+
         @{ @"kind": @"info",
            @"title": @"Mode",
            @"subtitle": settings_location_sim_mode_summary(d) },
@@ -12243,6 +12908,7 @@ static const NSInteger kPasscodePreviewRow = 1;
         // (launchd-hijack ABBA avoidance, tro-dance helper liveness, safe-detach
         // drains) — no longer WIP.
         @{ @"title": @"Process Viewer",    @"icon": @"list.bullet.rectangle.fill", @"color": [UIColor systemGrayColor], @"section": @(-1), @"custom": @"procmgr" },
+        @{ @"title": @"File Browser",      @"icon": @"folder.fill", @"color": [UIColor systemBlueColor], @"section": @(-1), @"custom": @"filebrowser" },
     ];
 }
 
@@ -15721,6 +16387,16 @@ void cyanide_present_contact(UIViewController *host)
     settings_present_controller(ac, self);
 }
 
+- (void)runLocationServicesToggle
+{
+    if (!settings_device_supported()) return;
+    [self presentActivityLog];
+    __weak typeof(self) weakSelf = self;
+    settings_location_services_set_async(-1, NO, ^(BOOL ok, NSString *message, NSTimeInterval resultAge) {
+        [weakSelf reloadLocationSimUI];
+    });
+}
+
 - (void)reloadLocationSimUI
 {
     [self.tableView reloadData];
@@ -16233,6 +16909,11 @@ void cyanide_present_contact(UIViewController *host)
                     [self.navigationController pushViewController:pm animated:YES];
                     return;
                 }
+                if ([bundle[@"custom"] isEqualToString:@"filebrowser"]) {
+                    FileBrowserViewController *fb = [[FileBrowserViewController alloc] initWithPath:@"/"];
+                    [self.navigationController pushViewController:fb animated:YES];
+                    return;
+                }
                 NSInteger underlying = [bundle[@"section"] integerValue];
                 NSString *pushTitle = bundle[@"title"];
                 SettingsViewController *detail = [[SettingsViewController alloc] initWithUnderlyingSection:underlying
@@ -16507,6 +17188,11 @@ void cyanide_present_contact(UIViewController *host)
 
         if ([action isEqualToString:@"locsim-major-cities"]) {
             [self presentLocationSimCityPicker];
+            return;
+        }
+
+        if ([action isEqualToString:@"locsvc-toggle"]) {
+            [self runLocationServicesToggle];
             return;
         }
 

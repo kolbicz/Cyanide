@@ -163,9 +163,10 @@ int macho_replace_code_signature(MachO *macho, CS_SuperBlob *superblob)
 int macho_extract_cs_to_file(MachO *macho, CS_SuperBlob *superblob)
 {
     FILE *csDataFile = fopen("Code_Signature-Data", "wb+");
-    fwrite(superblob, BIG_TO_HOST(superblob->length), 1, csDataFile);
+    if (!csDataFile) return -1;
+    size_t written = fwrite(superblob, BIG_TO_HOST(superblob->length), 1, csDataFile);
     fclose(csDataFile);
-    return 0;
+    return written == 1 ? 0 : -1;
 }
 
 CS_DecodedBlob *csd_blob_init(uint32_t type, CS_GenericBlob *blobData)
@@ -274,6 +275,10 @@ CS_DecodedSuperBlob *csd_superblob_decode(CS_SuperBlob *superblob)
         CS_GenericBlob *curBlobData = (CS_GenericBlob *)(((uint8_t*)superblob) + curIndex.offset);
 
         *nextBlob = csd_blob_init(curIndex.type, curBlobData);
+        if (!*nextBlob) {
+            csd_superblob_free(decodedSuperblob);
+            return NULL;
+        }
         nextBlob = &(*nextBlob)->next;
     }
     return decodedSuperblob;

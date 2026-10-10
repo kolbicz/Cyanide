@@ -53,6 +53,21 @@ BOOL settings_krw_idle_detach_allowed(void);
 BOOL settings_krw_reattach_suppressed(void);
 void settings_reattach_krw_for_foreground(void);
 
+// File Browser listing options (both off by default; set from the browser's
+// options button).
+extern NSString * const kSettingsFileBrowserShowHidden;
+extern NSString * const kSettingsFileBrowserShowInaccessible;
+// Root access (read-only) for the File Browser, through launchd. Off by
+// default; enabled from the browser's options menu.
+extern NSString * const kSettingsFileBrowserRootAccess;
+
+// Read-only root access for the File Browser, run inside launchd (pid 1).
+// Both return nil and set *errorOut (if given) on failure. Call off-main;
+// each may take a moment (it may warm a launchd session first).
+// *incompleteOut: the listing was cut short (entry cap or a readdir error);
+// the entries returned are a prefix, not the whole folder.
+NSArray<NSDictionary *> *settings_root_list_directory(NSString *path, BOOL *incompleteOut, NSString **errorOut);
+NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *truncatedOut, NSString **errorOut);
 extern NSString * const kSettingsA18ExploitPath;
 extern NSString * const kSettingsA18Interleave;
 extern NSString * const kSettingsA18MemoryShaping;
@@ -159,6 +174,8 @@ extern NSString * const kSettingsActionsDidCompleteNotification;
 extern NSString * const kSettingsApplyStatusDidChangeNotification;
 extern NSString * const kSettingsApplyStatusTextKey;
 extern NSString * const kSettingsActionsDidCompleteSuccessKey;
+// YES when the run succeeded but some requested stages did not apply.
+extern NSString * const kSettingsActionsDidCompletePartialKey;
 extern NSString * const kSettingsActionsDidCompleteMessageKey;
 
 // Completion message of the main chain run when the exploit stage fails to
@@ -220,6 +237,18 @@ void settings_best_effort_termination_cleanup(const char *reason);
 void settings_application_did_enter_background(void);
 void settings_application_will_enter_foreground(void);
 void settings_application_did_become_active(void);
+// File Browser: whether this process can read outside its sandbox, and lifting
+// it through SpringBoard if not (`completion` on the main queue).
+BOOL settings_filesystem_access_available(void);
+void settings_unlock_filesystem_async(void (^completion)(BOOL ok, NSString *message));
+// System-wide Location Services: desired 1 = on, 0 = off, -1 = toggle.
+// The result is posted as soon as it is confirmed; `completion` (optional)
+// runs on the main queue after cleanup, with how long ago that was.
+// removeFromSwitcher: on success, SpringBoard deletes Cyanide's App Switcher
+// card ~2 s later (meant for shortcut runs that return to the Home Screen).
+void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
+                                          void (^completion)(BOOL ok, NSString *message,
+                                                             NSTimeInterval resultAge));
 
 @interface SettingsViewController : UITableViewController
 

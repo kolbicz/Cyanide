@@ -832,6 +832,16 @@ static void *rc_current_owner(void)
 #define g_RC_pacKeyB                 (remote_call_current_state()->pacKeyB)
 #define g_RC_pacKeysCached           (remote_call_current_state()->pacKeysCached)
 
+// Per-thread status of the last call; cleared on entry to every public call
+// and set only where a return value actually came back from the target.
+static __thread bool t_rc_last_call_ok = false;
+static uint64_t g_rc_total_calls = 0;
+
+uint64_t remote_call_total_calls(void)
+{
+    return __atomic_load_n(&g_rc_total_calls, __ATOMIC_RELAXED);
+}
+
 // Round 17: session PAC-key cache. remote_pac() used to re-read the signing
 // keys from g_RC_trojanThreadAddr on EVERY sign — but after session setup that
 // thread is restored to launchd duty and can exit at any time. The 12:31:23
@@ -1181,6 +1191,7 @@ static uint64_t rc_vphone_bridge_call(uint32_t op, uint64_t pcAddr, const char *
         g_RC_success = false;
         return 0;
     }
+    t_rc_last_call_ok = true;
     return resp.result;
 }
 
@@ -1591,9 +1602,14 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
         return false;
     }
 
-    for (int i = 0; i < 10; i++)
+    // Poll the helper's kernel stack every 20 ms (was one probe per 200 ms,
+    // which made every SpringBoard arm cost >= 200 ms). Same 2 s budget; a
+    // probe that comes too early just misses and retries, as before. Miss
+    // lines are logged at the old 200 ms cadence so the log doesn't grow.
+    for (int i = 0; i < 100; i++)
     {
-        usleep(200000);
+        usleep(20000);
+        const bool logMiss = (i % 10) == 9;
 
         // Round 30: a backgrounding can land during the tro-dance (184716 —
         // deadlocked rbd in this window). Bail BEFORE the direct clearing
@@ -1608,14 +1624,14 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
 
         uint64_t kstack = thread_get_kstackptr(machThreadAddr);
         if (!is_kaddr_valid(kstack)) {
-            printf("[%s:%d] Failed to get valid kstack (%#llx). Retry...\n",
+            if (logMiss) printf("[%s:%d] Failed to get valid kstack (%#llx). Retry...\n",
                    __FUNCTION__, __LINE__, kstack);
             continue;
         }
 
         uint64_t kernelSP = kread64(kstack + off_arm_kernel_saved_state_sp);
         if (!is_kaddr_valid(kernelSP)) {
-            printf("[%s:%d] Failed to get valid SP (%#llx). Retry...\n",
+            if (logMiss) printf("[%s:%d] Failed to get valid SP (%#llx). Retry...\n",
                    __FUNCTION__, __LINE__, kernelSP);
             continue;
         }
@@ -1623,7 +1639,7 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
 
         uint64_t pageBase = trunc_page(kernelSP) + 0x3000ULL;
         if (!is_kaddr_valid(pageBase)) {
-            printf("[%s:%d] invalid helper stack probe page %#llx\n",
+            if (logMiss) printf("[%s:%d] invalid helper stack probe page %#llx\n",
                    __FUNCTION__, __LINE__, pageBase);
             continue;
         }
@@ -1634,7 +1650,7 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
         uint64_t needleVal = g_RC_dummyThreadTro;
         void *match = memmem(dataBuff, 0x1000, &needleVal, sizeof(needleVal));
         if (!match) {
-            printf("[%s:%d] Couldn't find g_RC_dummyThreadTro\n", __FUNCTION__, __LINE__);
+            if (logMiss) printf("[%s:%d] Couldn't find g_RC_dummyThreadTro\n", __FUNCTION__, __LINE__);
             continue;
         }
         size_t foundOffset = (size_t)((uint8_t *)match - (uint8_t *)dataBuff);
@@ -1651,7 +1667,7 @@ static bool set_exception_port_on_thread_gated(mach_port_t exceptionPort, uint64
         if (checkVal == exceptionMask || checkVal2 == exceptionMask) {
             correctTro = true;
         } else {
-            printf("[%s:%d] Wrong tro (%#llx/%#llx != %#llx). Retry...\n",
+            if (logMiss) printf("[%s:%d] Wrong tro (%#llx/%#llx != %#llx). Retry...\n",
                    __FUNCTION__, __LINE__, checkVal, checkVal2, exceptionMask);
 //            printf("[%s:%d] Wrong tro = 0x%llx (kread64 from 0x%llx, trunc_page(kernelSP) = 0x%llx), Retry...\n", __FUNCTION__, __LINE__, checkVal, checkAddr, trunc_page(kernelSP));
 //            khexdump(trunc_page(kernelSP), 0x4000);
@@ -1958,6 +1974,11 @@ bool remote_call_current_success(void)
     return g_RC_success;
 }
 
+bool remote_call_last_call_ok(void)
+{
+    return t_rc_last_call_ok;
+}
+
 int remote_call_current_pid(void)
 {
     return g_RC_pid;
@@ -1979,6 +2000,8 @@ uint64_t do_remote_call_temp(int timeout, const char *name,
     uint64_t x0, uint64_t x1, uint64_t x2, uint64_t x3,
     uint64_t x4, uint64_t x5, uint64_t x6, uint64_t x7)
 {
+    t_rc_last_call_ok = false;
+    __atomic_fetch_add(&g_rc_total_calls, 1, __ATOMIC_RELAXED);
     if (!remote_call_kill_args_sane(name, x0, "call-temp")) {
         g_RC_success = false;
         return (uint64_t)-1;
@@ -2088,6 +2111,8 @@ uint64_t do_remote_call_temp_internal(int timeout, const char *name,
     if(strcmp(name, "getpid") == 0 && retValue == 0) {
         printf("[%s:%d] getpid failed\n", __FUNCTION__, __LINE__);
         g_RC_success = false;
+    } else {
+        t_rc_last_call_ok = true;
     }
     return retValue;
 }
@@ -2096,6 +2121,8 @@ uint64_t do_remote_call_stable(int timeout, const char *name,
     uint64_t x0, uint64_t x1, uint64_t x2, uint64_t x3,
     uint64_t x4, uint64_t x5, uint64_t x6, uint64_t x7)
 {
+    t_rc_last_call_ok = false;
+    __atomic_fetch_add(&g_rc_total_calls, 1, __ATOMIC_RELAXED);
     if (!remote_call_kill_args_sane(name, x0, "call-stable")) {
         g_RC_success = false;
         return (uint64_t)-1;
@@ -2141,6 +2168,8 @@ uint64_t do_remote_call_stable_addr(int timeout, uint64_t pcAddr, const char *na
     uint64_t x4, uint64_t x5, uint64_t x6, uint64_t x7)
 {
     // Round 22-regression: the addr path must not bypass the kill() hard-stop.
+    t_rc_last_call_ok = false;
+    __atomic_fetch_add(&g_rc_total_calls, 1, __ATOMIC_RELAXED);
     if (!remote_call_kill_args_sane(name, x0, "call-stable-addr")) {
         g_RC_success = false;
         return (uint64_t)-1;
@@ -2301,6 +2330,7 @@ uint64_t do_remote_call_stable_addr_internal(int timeout, uint64_t pcAddr, const
     reply_with_state(&exc2, &exc2.threadState);
     if (remote_call_should_log_result(name, true))
         printf("[%s:%d] %s func's retValue = 0x%llx(%llu)\n", __FUNCTION__, __LINE__, name ?: "(addr-call)", retValue, retValue);
+    t_rc_last_call_ok = true;
     return retValue;
 }
 

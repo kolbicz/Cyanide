@@ -189,6 +189,8 @@ MemoryStream *buffered_stream_init_from_buffer(void *buffer, size_t bufferSize, 
     MemoryStream *stream = buffered_stream_init_from_buffer_nocopy(copy, bufferSize, flags);
     if (stream) {
         stream->flags |= MEMORY_STREAM_FLAG_OWNS_DATA;
+    } else {
+        free(copy);   // not handed over to a stream
     }
     return stream;
 }

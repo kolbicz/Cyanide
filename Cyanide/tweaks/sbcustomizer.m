@@ -156,18 +156,23 @@ static uint64_t find_icon_in_array_by_bundle(uint64_t icons, uint64_t listView,
         !r_responds(icons, "objectAtIndex:")) return 0;
     uint64_t count = r_msg2_main(icons, "count", 0, 0, 0, 0);
     uint64_t limit = count < 256 ? count : 256;
+    const char *viewSels[] = {
+        "displayedIconViewForIcon:",
+        "iconViewForIcon:",
+        "_iconViewForIcon:",
+        NULL,
+    };
+    // Whether listView implements each selector is the same for every icon;
+    // probe each one at most once per search (-1 = not probed yet).
+    int viewSelOK[3] = { -1, -1, -1 };
     for (uint64_t i = 0; i < limit; i++) {
         uint64_t candidate = r_msg2_main(icons, "objectAtIndex:", i, 0, 0, 0);
         bool matched = icon_matches_bundle(candidate, bundleID);
         if (!matched && r_is_objc_ptr(listView)) {
-            const char *viewSels[] = {
-                "displayedIconViewForIcon:",
-                "iconViewForIcon:",
-                "_iconViewForIcon:",
-                NULL,
-            };
             for (int s = 0; viewSels[s] && !matched; s++) {
-                if (!r_responds_main(listView, viewSels[s])) continue;
+                if (viewSelOK[s] < 0)
+                    viewSelOK[s] = r_responds_main(listView, viewSels[s]) ? 1 : 0;
+                if (!viewSelOK[s]) continue;
                 uint64_t iconView = r_msg2_main(
                     listView, viewSels[s], candidate, 0, 0, 0);
                 uint64_t displayedIcon = try_msg0(iconView, "icon");
@@ -1100,12 +1105,14 @@ static bool move_icon_between_pages(uint64_t rootFolder,
 // rebalance_impl) and falls back to the settling path if that check ever fails.
 // The destination re-resolve is kept -- removal can rebuild the destination page
 // model -- and a failed insert still restores the icon to the source page.
-static bool move_icon_fast(uint64_t rootFolder,
+// sourceModel is the model the caller just read `icon` from: nothing mutates
+// between that read and the removal, so re-resolving it would only repeat a
+// ~6 round-trip main-thread lookup per move.
+static bool move_icon_fast(uint64_t rootFolder, uint64_t sourceModel,
                            uint64_t sourcePage, uint64_t sourceIndex,
                            uint64_t destinationPage, uint64_t destinationIndex,
                            uint64_t icon, const char *tag)
 {
-    uint64_t sourceModel = page_model_at(rootFolder, sourcePage);
     if (!r_is_objc_ptr(sourceModel) || !r_is_objc_ptr(icon)) {
         printf("[SBC:MOVE] %s unsupported page mutation\n", tag);
         return false;
@@ -1162,7 +1169,7 @@ static int rebalance_impl(uint64_t rootFolder, uint64_t count,
             bool didMove;
             if (fast) {
                 didMove = r_is_objc_ptr(icon) &&
-                    move_icon_fast(rootFolder, page, iconIndex, page + 1, 0,
+                    move_icon_fast(rootFolder, model, page, iconIndex, page + 1, 0,
                                    icon, "page overflow");
             } else {
                 if (destinationCount == UINT64_MAX) {
@@ -1213,7 +1220,7 @@ static int rebalance_impl(uint64_t rootFolder, uint64_t count,
             bool didMove;
             if (fast) {
                 didMove = r_is_objc_ptr(icon) &&
-                    move_icon_fast(rootFolder, donorPage, 0, page, current,
+                    move_icon_fast(rootFolder, donorModel, donorPage, 0, page, current,
                                    icon, "page fill");
             } else {
                 didMove = r_is_objc_ptr(icon) &&
@@ -1343,12 +1350,15 @@ static bool arrange_homescreen_pages(uint64_t iconCtrl, int preferredCols,
         uint64_t refreshedCount = r_msg2_main(
             rootFolder, "iconListViewCount", 0, 0, 0, 0);
         uint64_t refreshedLimit = refreshedCount < 64 ? refreshedCount : 64;
+        int canLayout = -1;   // every page's list view is the same class: probe once
         for (uint64_t i = 0; i < refreshedLimit; i++) {
             uint64_t listView = r_msg2_main(
                 rootFolder, "iconListViewAtIndex:", i, 0, 0, 0);
+            if (!r_is_objc_ptr(listView)) continue;
+            if (canLayout < 0) canLayout = r_responds(listView, "setNeedsLayout") ? 1 : 0;
             // Fire-and-forget, as in patch_dock: one round trip instead of
             // an NSInvocation build per page.
-            if (r_is_objc_ptr(listView) && r_responds(listView, "setNeedsLayout")) {
+            if (canLayout) {
                 r_perform_main(listView, r_sel("setNeedsLayout"), 0, false);
             }
         }

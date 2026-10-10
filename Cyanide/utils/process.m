@@ -826,6 +826,12 @@ static bool     g_pm_cpu_abstime = false;   // task counters are mach-abstime (n
 static int      g_pm_cpu_fail_passes = 0;
 static bool     g_pm_cpu_gaveup = false;
 #define PM_CPU_GIVEUP_PASSES 5
+// Same give-up for the thread-timer and memory stages: each failing pass burns
+// CPU (thread) or touches 32 MB and scans candidates (memory).
+static int      g_pm_thr_fail_passes = 0;
+static bool     g_pm_thr_gaveup = false;
+static int      g_pm_mem_fail_passes = 0;
+static bool     g_pm_mem_gaveup = false;
 
 static bool     g_pm_thr_cal = false;
 static uint32_t g_pm_off_thread_utime = 0;  // thread -> user_timer.t_sum
@@ -1917,6 +1923,24 @@ static bool pm_validate_cache(void) {
     uint64_t task = proc_task(proc_self());
     if (!procmgr_is_kern_ptr(task)) return false;
 
+    // An inconclusive check (stats read came back without a value) is retried
+    // on the next poll; after a few, whatever is still unverified is dropped
+    // and recalibrated rather than trusted.
+    static int sInconclusive = 0;
+    bool inconclusive = false;
+
+    // Once only: on a retry the flags may come from this session's own
+    // (self-verified) discovery rather than the cache.
+    static bool sThrOnlyChecked = false;
+    if (!sThrOnlyChecked && g_pm_thr_cal && !g_pm_cpu_cal) {
+        // Live-thread-only: without the dead-thread totals there is no own-task
+        // ground truth to compare the sum against, so the cached thread offsets
+        // can't be validated. Rediscover them (discovery verifies itself).
+        printf("[PROCMGR] cached thread offsets without task totals — recalibrating\n");
+        g_pm_thr_cal = false;
+        g_pm_rc_cal = false;
+    }
+    sThrOnlyChecked = true;
     if (g_pm_thr_cal && g_pm_cpu_cal) {
         uint64_t mem = 0, cpu = 0;
         if (pm_kernel_stats(task, &mem, &cpu) & 2) {
@@ -1936,6 +1960,13 @@ static bool pm_validate_cache(void) {
                 // rewritten by whichever discovery succeeds next.
                 g_pm_rc_cal = false;
             }
+        } else if (sInconclusive >= 2) {
+            printf("[PROCMGR] cache cpu validation inconclusive — recalibrating\n");
+            g_pm_cpu_cal = false;
+            g_pm_thr_cal = false;
+            g_pm_rc_cal = false;
+        } else {
+            inconclusive = true;
         }
     }
     if (g_pm_mem_cal && ksafe_available()) {
@@ -1949,8 +1980,14 @@ static bool pm_validate_cache(void) {
                        mem >> 20, ref >> 20);
                 g_pm_mem_cal = false;
             }
+        } else if (sInconclusive >= 2) {
+            printf("[PROCMGR] cache mem validation inconclusive — recalibrating\n");
+            g_pm_mem_cal = false;
+        } else {
+            inconclusive = true;
         }
     }
+    if (inconclusive) { sInconclusive++; return false; }
     return true;
 }
 
@@ -2018,8 +2055,11 @@ int procmgr_calibrate(void) {
     // stat reads (thread walk included) per poll. Retried until validation
     // actually ran (it bails when KRW isn't ready).
     static bool sCacheChecked = false;
+    static bool sCacheLoaded = false;
     if (!sCacheChecked) {
-        if (pm_load_cache())
+        // Load once; only the validation is retried. Reloading would clobber
+        // offsets that the stages below rediscovered in the meantime.
+        if (!sCacheLoaded && (sCacheLoaded = true) && pm_load_cache())
             printf("[PROCMGR] calibration loaded from cache (thr=%d cpu=%d mem=%d)\n",
                    g_pm_thr_cal, g_pm_cpu_cal, g_pm_mem_cal);
         // Don't trust the cache blindly: replay it against our own process and
@@ -2029,8 +2069,12 @@ int procmgr_calibrate(void) {
     }
 
     bool memPossible = ksafe_available();
-    bool cpuDone = g_pm_cpu_cal || g_pm_cpu_gaveup;   // "settled", success or not
-    if (g_pm_thr_cal && cpuDone && (g_pm_mem_cal || !memPossible)) {
+    // "Settled" = succeeded or given up. CPU calibration needs the thread walk,
+    // so a given-up thread stage settles CPU too.
+    bool thrDone = g_pm_thr_cal || g_pm_thr_gaveup;
+    bool cpuDone = g_pm_cpu_cal || g_pm_cpu_gaveup || g_pm_thr_gaveup;
+    bool memDone = g_pm_mem_cal || g_pm_mem_gaveup || !memPossible;
+    if (thrDone && cpuDone && memDone) {
         krw_set_nonfatal(false);
         return 1;
     }
@@ -2041,9 +2085,15 @@ int procmgr_calibrate(void) {
 
     // 1) Thread timers FIRST: the task-total match subtracts the live-thread
     //    sum, and per-process CPU stats need the same walk.
-    for (int attempt = 0; attempt < 3 && !g_pm_thr_cal; attempt++) {
+    for (int attempt = 0; attempt < 3 && !g_pm_thr_cal && !g_pm_thr_gaveup; attempt++) {
         if (pm_calibrate_thread_timers()) break;
         if (attempt < 2) usleep(50000);
+    }
+    if (!g_pm_thr_cal && !g_pm_thr_gaveup &&
+        ++g_pm_thr_fail_passes >= PM_CPU_GIVEUP_PASSES) {
+        g_pm_thr_gaveup = true;
+        printf("[PROCMGR] thread calibration given up after %d passes — CPU column "
+               "unavailable this session\n", g_pm_thr_fail_passes);
     }
 
     // 2) Task totals (terminated-thread counters) matched against
@@ -2062,14 +2112,28 @@ int procmgr_calibrate(void) {
     }
 
     // 3) Memory (ledger physical footprint) — only with the mapped-check up.
-    if (!g_pm_mem_cal && memPossible)
+    if (!g_pm_mem_cal && !g_pm_mem_gaveup && memPossible) {
         pm_calibrate_mem(task);
-    else if (!g_pm_mem_cal && !memPossible)
-        printf("[PROCMGR] mem calibration deferred: ksafe unavailable\n");
+        if (!g_pm_mem_cal && ++g_pm_mem_fail_passes >= PM_CPU_GIVEUP_PASSES) {
+            g_pm_mem_gaveup = true;
+            printf("[PROCMGR] mem calibration given up after %d passes — memory "
+                   "column falls back to libproc this session\n", g_pm_mem_fail_passes);
+        }
+    }
 
     pm_save_cache();
-    printf("[PROCMGR] calibration state: thr=%d cpu=%d mem=%d\n",
-           g_pm_thr_cal, g_pm_cpu_cal, g_pm_mem_cal);
+    // Log only on change: an unsettled stage reaches here every poll, and a
+    // per-poll line is the F_FULLFSYNC disk-write pattern described above.
+    static int sLoggedState = -1;
+    int state = (g_pm_thr_cal ? 1 : 0) | (g_pm_cpu_cal ? 2 : 0) | (g_pm_mem_cal ? 4 : 0) |
+                (memPossible ? 8 : 0);
+    if (state != sLoggedState) {
+        sLoggedState = state;
+        if (!g_pm_mem_cal && !memPossible)
+            printf("[PROCMGR] mem calibration deferred: ksafe unavailable\n");
+        printf("[PROCMGR] calibration state: thr=%d cpu=%d mem=%d\n",
+               g_pm_thr_cal, g_pm_cpu_cal, g_pm_mem_cal);
+    }
     krw_set_nonfatal(false);
     return (g_pm_mem_cal || g_pm_cpu_cal) ? 1 : 0;
 }
@@ -2079,7 +2143,7 @@ int procmgr_stats(int pid, uint64_t *residentBytes, uint64_t *cpuNs) {
     struct pm_proc_taskinfo ti;
     bool havePI = proc_pidinfo(pid, PM_PROC_PIDTASKINFO, 0, &ti, sizeof(ti)) >= (int)sizeof(ti);
     uint64_t mem = havePI ? ti.pti_resident_size : 0;
-    uint64_t cpu = havePI ? (ti.pti_total_user + ti.pti_total_system) : 0;
+    uint64_t cpu = havePI ? pm_abs_to_ns(ti.pti_total_user + ti.pti_total_system) : 0;   // ticks → ns
 
     // Kernel reads (any pid) once calibrated — read-only, no privilege
     // needed. pm_kernel_stats double-reads every counter and only reports
@@ -2189,7 +2253,7 @@ bool procmgr_row_info(uint64_t kproc, int pid, procmgr_row_info_t *out) {
     struct pm_proc_taskinfo ti;
     bool havePI = proc_pidinfo(pid, PM_PROC_PIDTASKINFO, 0, &ti, sizeof(ti)) >= (int)sizeof(ti);
     uint64_t mem = havePI ? ti.pti_resident_size : 0;
-    uint64_t cpu = havePI ? (ti.pti_total_user + ti.pti_total_system) : 0;
+    uint64_t cpu = havePI ? pm_abs_to_ns(ti.pti_total_user + ti.pti_total_system) : 0;   // ticks → ns
     if (kv & 1) mem = kMem;
     if ((kv & 2) && kCpu) cpu = kCpu;
     // A failed CPU read leaves cpu 0 (libproc is sandboxed for other pids).

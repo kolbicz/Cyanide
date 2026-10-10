@@ -75,6 +75,7 @@ bool csd_code_directory_verify_code_slot(CS_DecodedBlob *codeDirBlob, MachO *mac
     CS_CodeDirectory codeDir;
     csd_blob_read(codeDirBlob, 0, sizeof(codeDir), &codeDir);
     CODE_DIRECTORY_APPLY_BYTE_ORDER(&codeDir, BIG_TO_HOST_APPLIER);
+    if (codeDir.hashSize == 0 || codeDir.hashSize > 64) return false;   // no valid hash type
 
     uint8_t slotHash[codeDir.hashSize];
     csd_code_directory_read_slot_hash(codeDirBlob, macho, slot, slotHash);
@@ -425,6 +426,10 @@ int csd_code_directory_print_content(CS_DecodedBlob *codeDirBlob, MachO *macho, 
     }
 
     printf("\n");
+    if (codeDir.hashSize == 0 || codeDir.hashSize > 64) {
+        printf("Error: invalid hash size (%u)\n", codeDir.hashSize);
+        return -1;
+    }
     bool codeSlotsCorrect = true;
     bool needsNewline = false;
 
@@ -531,6 +536,7 @@ int csd_code_directory_update_special_slots(CS_DecodedBlob *codeDirBlob, CS_Deco
     }
     if (!hashLen) {
         printf("Error: unknown hash type (%d)\n", codeDir.hashType);
+        return -1;
     }
 
     for (int i = 1; i <= codeDir.nSpecialSlots; i++) {

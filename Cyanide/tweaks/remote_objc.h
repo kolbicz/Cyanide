@@ -29,6 +29,12 @@ uint64_t r_msg2_main(uint64_t obj, const char *selName,
                      uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3);
 void     r_msg2_main_async(uint64_t obj, const char *selName,
                            uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3);
+// Status of the calling thread's last r_msg / r_call (r_last_call_ok) or
+// r_msg_main* (r_last_main_ok): false when the call didn't complete, so a 0
+// return can be told apart from a failure. A failed main-thread call may or
+// may not have run; never blindly retry a mutator on false.
+bool     r_last_call_ok(void);
+bool     r_last_main_ok(void);
 uint64_t r_msg_main_raw(uint64_t obj, uint64_t sel,
                         const void *a0, size_t a0Size,
                         const void *a1, size_t a1Size,
@@ -60,6 +66,14 @@ void r_perf_reset(void);
 // Running total of RemoteCall round trips made through remote_objc; take the
 // difference across a step to measure it.
 uint64_t r_perf_round_trips(void);
+// Cumulative counters for stage timing; take the difference across a stage.
+typedef struct {
+    uint64_t rcCalls;        // every RemoteCall, including direct callers
+    uint64_t mainCalls;      // synchronous main-thread dispatches
+    uint64_t mainWaitUS;     // time blocked in those dispatches
+    uint64_t settleSleptUS;  // time slept in settles
+} RPerfSnapshot;
+void r_perf_snapshot(RPerfSnapshot *out);
 uint64_t r_perform_main(uint64_t obj, uint64_t sel, uint64_t object, bool wait);
 uint64_t r_cfstr(const char *s);
 uint64_t r_nsstr_retained(const char *s);

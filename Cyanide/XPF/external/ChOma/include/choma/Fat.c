@@ -83,8 +83,8 @@ int fat_parse_slices(Fat *fat)
         // Not Fat? Parse single slice
 
         fat->slicesCount = 1;
-        fat->slices = malloc(sizeof(MachO) * fat->slicesCount);
-        memset(fat->slices, 0, sizeof(MachO) * fat->slicesCount);
+        fat->slices = calloc(fat->slicesCount, sizeof(MachO *));
+        if (!fat->slices) return -1;
 
         MemoryStream *machOStream = memory_stream_softclone(fat->stream);
 

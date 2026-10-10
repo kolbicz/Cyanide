@@ -34,6 +34,7 @@ DEREncodedItem *der_encode_length(uint32_t length) {
 
         DEREncodedItem *item = malloc(sizeof(DEREncodedItem));
         if (item == NULL) {
+            free(data);
             return NULL;
         }
 
@@ -74,7 +75,8 @@ DEREncodedItem *der_encode_length(uint32_t length) {
 
 DEREncodedItem *der_encode_item(DERItem *item) {
     DEREncodedItem *length = der_encode_length(item->length);
-    if (length->data == NULL) {
+    if (length == NULL || length->data == NULL) {
+        if (length) der_free_encoded_item(length);
         return NULL;
     }
 
@@ -115,7 +117,9 @@ DEREncodedItem *der_encode_boolean(bool value) {
     item.data[0] = value;
     item.length = 1;
 
-    return der_encode_item(&item);
+    DEREncodedItem *encoded = der_encode_item(&item);   // copies item.data
+    free(item.data);
+    return encoded;
 }
 
 DEREncodedItem *der_encode_integer(uint32_t value) {
@@ -131,7 +135,9 @@ DEREncodedItem *der_encode_integer(uint32_t value) {
     memcpy(item.data, &value, sizeof(uint32_t));
     item.length = 4;
 
-    return der_encode_item(&item);
+    DEREncodedItem *encoded = der_encode_item(&item);   // copies item.data
+    free(item.data);
+    return encoded;
 }
 
 DEREncodedItem *der_encode_utf8_string(const char *string) {

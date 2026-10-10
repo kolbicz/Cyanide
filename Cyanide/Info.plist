@@ -40,6 +40,7 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>com.zeroxjf.ios-cyanide1</string>
+				<string>cyanide</string>
 			</array>
 		</dict>
 	</array>

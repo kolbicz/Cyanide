@@ -178,10 +178,13 @@
         ? message
         : (success ? @"All tweaks applied in-session." : @"Failed — check the log above.");
     self.statusLabel.font = [UIFont systemFontOfSize:13.5 weight:UIFontWeightSemibold];
-    self.statusLabel.textColor = success
+    BOOL partial = success && [note.userInfo[kSettingsActionsDidCompletePartialKey] boolValue];
+    self.statusLabel.textColor = partial
+        ? [UIColor colorWithRed:1.0 green:0.72 blue:0.28 alpha:1.0]
+        : success
         ? [UIColor colorWithRed:0.38 green:0.90 blue:0.55 alpha:1.0]
         : [UIColor colorWithRed:1.0 green:0.38 blue:0.32 alpha:1.0];
-    self.title = success ? @"Complete" : @"Failed";
+    self.title = partial ? @"Done with Warnings" : (success ? @"Complete" : @"Failed");
     self.hideOrDoneButton.title = @"Done";
     // Offer a one-tap retry only for the main chain run's KRW-acquire
     // failure — a clean miss that is fully re-entrant in the same boot

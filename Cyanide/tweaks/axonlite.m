@@ -1165,7 +1165,7 @@ static bool axn_cache_request_object(uint64_t req, uint64_t tick)
 
     char bundle[128];
     char title[64];
-    char identifier[192];
+    char identifier[192] = {0};
     if (!axn_request_bundle_and_title(req, bundle, sizeof(bundle), title, sizeof(title))) {
         if (gAxonRequestFailLogBudget > 0) {
             char cls[96];
@@ -1194,7 +1194,7 @@ static bool axn_cache_request_object_fast(uint64_t req, uint64_t cell, uint64_t 
 
     char bundle[128];
     char title[64];
-    char identifier[192];
+    char identifier[192] = {0};
     if (!axn_request_bundle_and_title(req, bundle, sizeof(bundle), title, sizeof(title))) {
         return false;
     }

@@ -41,6 +41,20 @@ static uint64_t gSettleSleptUS = 0;
 // Every RemoteCall made through this file (r_msg, r_msg_main's internals,
 // malloc/free, ...), not just the settled messages counted above.
 static uint64_t gRoundTripCount = 0;
+// Synchronous main-thread dispatches and the time spent blocked in them
+// (round trip + SpringBoard main-queue wait + the selector itself).
+static uint64_t gMainCallCount = 0;
+static uint64_t gMainWaitUS = 0;
+
+// Sends a prepared invocation to SpringBoard's main thread and waits.
+static void r_invoke_on_main_wait(uint64_t inv, uint64_t performSel, uint64_t invokeSel)
+{
+    uint64_t t0 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    r_msg(inv, performSel, invokeSel, 0, 1, 0);
+    uint64_t t1 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    __atomic_fetch_add(&gMainCallCount, 1, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&gMainWaitUS, (t1 - t0) / 1000, __ATOMIC_RELAXED);
+}
 
 #define R_OBJC_CACHE_CAP 192
 #define R_OBJC_CACHE_NAME_MAX 96
@@ -212,12 +226,28 @@ uint64_t r_perf_round_trips(void)
     return gRoundTripCount;
 }
 
+void r_perf_snapshot(RPerfSnapshot *out)
+{
+    if (!out) return;
+    out->rcCalls = remote_call_total_calls();
+    out->mainCalls = __atomic_load_n(&gMainCallCount, __ATOMIC_RELAXED);
+    out->mainWaitUS = __atomic_load_n(&gMainWaitUS, __ATOMIC_RELAXED);
+    out->settleSleptUS = gSettleSleptUS;
+}
+
 void r_perf_reset(void)
 {
     gRemoteMsgCount = 0;
     gSettleCount = 0;
     gSettleSleptUS = 0;
 }
+
+// Per-thread call status (see r_last_call_ok / r_last_main_ok).
+static __thread bool t_r_last_ok = false;
+static __thread bool t_r_main_ok = false;
+
+bool r_last_call_ok(void) { return t_r_last_ok; }
+bool r_last_main_ok(void) { return t_r_main_ok; }
 
 static uint64_t r_call_stable(int timeout, const char *fnName,
                               uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -228,6 +258,7 @@ static uint64_t r_call_stable(int timeout, const char *fnName,
     uint64_t ret = do_remote_call_stable(timeout, fnName,
                                          a0, a1, a2, a3,
                                          a4, a5, a6, a7);
+    t_r_last_ok = remote_call_last_call_ok();
     pthread_mutex_unlock(&gRemoteCallLock);
     return ret;
 }
@@ -297,7 +328,7 @@ uint64_t r_class(const char *name)
 uint64_t r_msg(uint64_t obj, uint64_t sel,
                uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3)
 {
-    if (!obj || !sel) return 0;
+    if (!obj || !sel) { t_r_last_ok = false; return 0; }
     return r_call_stable(R_TIMEOUT, "objc_msgSend",
                          obj, sel, a0, a1, a2, a3, 0, 0);
 }
@@ -521,16 +552,25 @@ static RemoteInvocationEntry *r_inv_entry(int pid, uint64_t obj, uint64_t cls, u
     return victim;
 }
 
-static bool r_msg_main_cached(uint64_t obj, uint64_t sel,
-                              const void *const args[4], const size_t sizes[4],
-                              uint64_t *retOut)
+// Outcome of the cached fast path. Only NOT_DISPATCHED may fall back to the
+// slow path: once the invoke has been sent, the selector may already have run,
+// and replaying a mutator would run it twice.
+typedef enum {
+    R_CACHED_NOT_DISPATCHED = 0,   // nothing ran; caller may use the slow path
+    R_CACHED_OK,                   // ran, *retOut is its return value
+    R_CACHED_FAILED,               // dispatch or result failed; *retOut = 0
+} RCachedResult;
+
+static RCachedResult r_msg_main_cached(uint64_t obj, uint64_t sel,
+                                       const void *const args[4], const size_t sizes[4],
+                                       uint64_t *retOut)
 {
     int pid = remote_call_current_pid();
-    if (pid <= 0) return false;
-    for (int i = 0; i < 4; i++) if (sizes[i] > R_INV_ARG_SLOT) return false;
+    if (pid <= 0) return R_CACHED_NOT_DISPATCHED;
+    for (int i = 0; i < 4; i++) if (sizes[i] > R_INV_ARG_SLOT) return R_CACHED_NOT_DISPATCHED;
 
     pthread_mutex_lock(&gInvLock);
-    bool done = false;
+    RCachedResult result = R_CACHED_NOT_DISPATCHED;
     do {
         if (gInvScratchPid != pid || !gInvScratch) {
             gInvScratch = r_call_stable(R_TIMEOUT, "calloc", 1, R_INV_SCRATCH, 0, 0, 0, 0, 0, 0);
@@ -553,17 +593,37 @@ static bool r_msg_main_cached(uint64_t obj, uint64_t sel,
         uint64_t retSlot = gInvScratch + 4 * R_INV_ARG_SLOT;
         if (e->retLen && !remote_write64(retSlot, 0)) break;
 
+        // The invocation is reused: a target or argument that failed to set
+        // would leave the previous call's in place, and invoking would hit
+        // the wrong object. Every setter must land before the invoke.
         r_msg(e->inv, r_sel("setTarget:"), obj, 0, 0, 0);
+        if (!t_r_last_ok) break;
         uint64_t selSetArg = r_sel("setArgument:atIndex:");
-        for (uint64_t i = 0; i < e->numUserArgs; i++) {
+        bool argsSet = true;
+        for (uint64_t i = 0; i < e->numUserArgs && argsSet; i++) {
             r_msg(e->inv, selSetArg, gInvScratch + i * R_INV_ARG_SLOT, i + 2, 0, 0);
+            argsSet = t_r_last_ok;
         }
-        r_msg(e->inv, r_sel("performSelectorOnMainThread:withObject:waitUntilDone:"),
-              r_sel("invoke"), 0, 1, 0);
+        if (!argsSet) break;
+
+        uint64_t performSel = r_sel("performSelectorOnMainThread:withObject:waitUntilDone:");
+        uint64_t invokeSel = r_sel("invoke");
+        if (!performSel || !invokeSel) break;
+        // From here on the selector may have run: never fall back.
+        result = R_CACHED_FAILED;
+        *retOut = 0;
+        r_invoke_on_main_wait(e->inv, performSel, invokeSel);
+        if (!t_r_last_ok) {
+            printf("[R_OBJC] main-thread dispatch failed (completion unknown)\n");
+            break;
+        }
 
         uint64_t ret = 0;
         if (e->retLen) {
+            // Without a confirmed getReturnValue:, the invocation's buffer
+            // (or the zeroed slot) says nothing about this call.
             r_msg(e->inv, r_sel("getReturnValue:"), retSlot, 0, 0, 0);
+            if (!t_r_last_ok) break;
             ret = remote_read64(retSlot);
             // The invocation already holds it (retainArguments); this keeps it
             // alive past the next call on the same invocation, as the slow
@@ -571,10 +631,10 @@ static bool r_msg_main_cached(uint64_t obj, uint64_t sel,
             if (e->retIsObject && ret) r_inv_keep(pid, ret);
         }
         *retOut = ret;
-        done = true;
+        result = R_CACHED_OK;
     } while (0);
     pthread_mutex_unlock(&gInvLock);
-    return done;
+    return result;
 }
 
 uint64_t r_msg_main_raw(uint64_t obj, uint64_t sel,
@@ -583,12 +643,17 @@ uint64_t r_msg_main_raw(uint64_t obj, uint64_t sel,
                         const void *a2, size_t a2Size,
                         const void *a3, size_t a3Size)
 {
-    if (!r_is_objc_ptr(obj) || !sel) return 0;
+    if (!r_is_objc_ptr(obj) || !sel) { t_r_main_ok = false; return 0; }
 
     const void *const cachedArgs[4] = { a0, a1, a2, a3 };
     const size_t cachedSizes[4] = { a0Size, a1Size, a2Size, a3Size };
     uint64_t cachedRet = 0;
-    if (r_msg_main_cached(obj, sel, cachedArgs, cachedSizes, &cachedRet)) return cachedRet;
+    RCachedResult cached = r_msg_main_cached(obj, sel, cachedArgs, cachedSizes, &cachedRet);
+    if (cached != R_CACHED_NOT_DISPATCHED) {
+        t_r_main_ok = (cached == R_CACHED_OK);
+        return cachedRet;
+    }
+    t_r_main_ok = false;
 
     uint64_t sig = r_method_signature(obj, sel);
     if (!r_is_objc_ptr(sig)) return 0;
@@ -606,9 +671,10 @@ uint64_t r_msg_main_raw(uint64_t obj, uint64_t sel,
     if (maxUserArgs > 4) maxUserArgs = 4;
 
     r_msg2(inv, "setTarget:", obj, 0, 0, 0);
+    bool argsOK = t_r_last_ok;
     r_msg2(inv, "setSelector:", sel, 0, 0, 0);
+    argsOK = argsOK && t_r_last_ok;
 
-    bool argsOK = true;
     const void *argData[4] = { a0, a1, a2, a3 };
     size_t argSizes[4] = { a0Size, a1Size, a2Size, a3Size };
     for (uint64_t i = 0; i < maxUserArgs; i++) {
@@ -621,6 +687,7 @@ uint64_t r_msg_main_raw(uint64_t obj, uint64_t sel,
         }
         if (r_write_remote_arg(argBuf, argData[i], argSizes[i], argBufLen)) {
             r_msg2(inv, "setArgument:atIndex:", argBuf, i + 2, 0, 0);
+            if (!t_r_last_ok) argsOK = false;
         } else {
             argsOK = false;
         }
@@ -640,23 +707,33 @@ uint64_t r_msg_main_raw(uint64_t obj, uint64_t sel,
         r_msg2(inv, "release", 0, 0, 0, 0);
         return 0;
     }
-    r_msg(inv, performSel, invokeSel, 0, 1, 0);
+    r_invoke_on_main_wait(inv, performSel, invokeSel);
+    if (!t_r_last_ok) {
+        // The selector may or may not have run; report failure, don't retry.
+        printf("[R_OBJC] main-thread dispatch failed (completion unknown)\n");
+        r_msg2(inv, "release", 0, 0, 0, 0);
+        return 0;
+    }
 
     uint64_t ret = 0;
+    bool retOK = true;
     uint64_t retLen = r_msg2(sig, "methodReturnLength", 0, 0, 0, 0);
+    if (!t_r_last_ok) retOK = false;
     if (retLen > 0) {
         uint64_t retBufLen = (retLen > 8) ? retLen : 8;
         uint64_t retBuf = r_call_stable(R_TIMEOUT, "malloc",
                                         retBufLen, 0, 0, 0, 0, 0, 0, 0);
-        if (retBuf) {
-            remote_write64(retBuf, 0);
+        retOK = retOK && retBuf && remote_write64(retBuf, 0);
+        if (retOK) {
             r_msg2(inv, "getReturnValue:", retBuf, 0, 0, 0);
-            ret = remote_read64(retBuf);
-            r_free(retBuf);
+            retOK = t_r_last_ok;
+            if (retOK) ret = remote_read64(retBuf);
         }
+        if (retBuf) r_free(retBuf);
     }
 
     r_msg2(inv, "release", 0, 0, 0, 0);
+    t_r_main_ok = retOK;
     return ret;
 }
 
@@ -664,8 +741,10 @@ uint64_t r_msg_main(uint64_t obj, uint64_t sel,
                     uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3)
 {
     if (remote_call_uses_vphone_bridge()) {
-        return r_call_stable(R_TIMEOUT, "objc_msgSend_main",
-                             obj, sel, a0, a1, a2, a3, 0, 0);
+        uint64_t ret = r_call_stable(R_TIMEOUT, "objc_msgSend_main",
+                                     obj, sel, a0, a1, a2, a3, 0, 0);
+        t_r_main_ok = t_r_last_ok;
+        return ret;
     }
 
     uint64_t args[4] = { a0, a1, a2, a3 };
@@ -679,9 +758,9 @@ uint64_t r_msg_main(uint64_t obj, uint64_t sel,
 uint64_t r_msg2_main(uint64_t obj, const char *selName,
                      uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3)
 {
-    if (!obj || !selName) return 0;
+    if (!obj || !selName) { t_r_main_ok = false; return 0; }
     uint64_t sel = r_sel(selName);
-    if (!sel) return 0;
+    if (!sel) { t_r_main_ok = false; return 0; }
     r_settle_for(selName);
     return r_msg_main(obj, sel, a0, a1, a2, a3);
 }
@@ -736,13 +815,18 @@ void r_msg2_main_async(uint64_t obj, const char *selName,
         r_free(argBuf);
     }
 
-    if (!argsOK) return;
+    if (!argsOK) {
+        r_msg2(inv, "release", 0, 0, 0, 0);
+        return;
+    }
 
     r_msg2(inv, "retainArguments", 0, 0, 0, 0);
 
     uint64_t performSel = r_sel("performSelectorOnMainThread:withObject:waitUntilDone:");
     uint64_t invokeSel = r_sel("invoke");
     if (performSel && invokeSel) r_msg(inv, performSel, invokeSel, 0, 0, 0);
+    // performSelectorOnMainThread: retains the receiver until it has run.
+    r_msg2(inv, "release", 0, 0, 0, 0);
 
     // Fire-and-forget: the main thread may still be running this when we
     // return, so the next remote interaction owes a settle.
@@ -755,9 +839,9 @@ uint64_t r_msg2_main_raw(uint64_t obj, const char *selName,
                          const void *a2, size_t a2Size,
                          const void *a3, size_t a3Size)
 {
-    if (!obj || !selName) return 0;
+    if (!obj || !selName) { t_r_main_ok = false; return 0; }
     uint64_t sel = r_sel(selName);
-    if (!sel) return 0;
+    if (!sel) { t_r_main_ok = false; return 0; }
     r_settle_for(selName);
     return r_msg_main_raw(obj, sel, a0, a0Size, a1, a1Size, a2, a2Size, a3, a3Size);
 }
@@ -827,7 +911,7 @@ bool r_msg2_main_struct_ret(uint64_t obj, const char *selName,
         r_msg2(inv, "release", 0, 0, 0, 0);
         return false;
     }
-    r_msg(inv, performSel, invokeSel, 0, 1, 0);
+    r_invoke_on_main_wait(inv, performSel, invokeSel);
 
     bool ok = false;
     uint64_t retLen = r_msg2(sig, "methodReturnLength", 0, 0, 0, 0);
@@ -927,7 +1011,9 @@ uint64_t r_msg2_main_retained(uint64_t obj, const char *selName)
 {
     uint64_t value = r_msg2_main(obj, selName, 0, 0, 0, 0);
     if (!r_is_objc_ptr(value)) return 0;
-    r_msg_main(value, r_sel("retain"), 0, 0, 0, 0);
+    // retain is an atomic refcount bump, safe from any thread (r_release is
+    // already off-main); a second main-thread hop only added ~5 round trips.
+    r_msg(value, r_sel("retain"), 0, 0, 0, 0);
     return value;
 }
 
@@ -983,8 +1069,8 @@ void r_invocation_invoke_main(uint64_t inv, uint64_t target)
 {
     if (!r_is_objc_ptr(inv) || !r_is_objc_ptr(target)) return;
     r_msg(inv, r_sel("setTarget:"), target, 0, 0, 0);
-    r_msg(inv, r_sel("performSelectorOnMainThread:withObject:waitUntilDone:"),
-          r_sel("invoke"), 0, 1, 0);
+    r_invoke_on_main_wait(inv, r_sel("performSelectorOnMainThread:withObject:waitUntilDone:"),
+                          r_sel("invoke"));
 }
 
 bool r_read_nsstring(uint64_t str, char *out, size_t outLen)

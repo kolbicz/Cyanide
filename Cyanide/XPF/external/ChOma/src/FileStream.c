@@ -103,10 +103,15 @@ static int file_stream_expand(MemoryStream *stream, size_t expandAtStart, size_t
     // If this buffer is trimmed, expanding is also not supported
     if (_file_stream_context_is_trimmed(context)) return -1;
 
-    lseek(context->fd, 0, SEEK_END);
-    for (size_t i = expandAtEnd; i < 0; i--) {
-        char buf = 0;
-        write(context->fd, &buf, 1);
+    // Append expandAtEnd zero bytes. (The old loop counted a size_t down
+    // while "i < 0", which never ran, so nothing was ever appended.)
+    if (lseek(context->fd, 0, SEEK_END) < 0) return -1;
+    char zeros[0x1000] = {0};
+    for (size_t left = expandAtEnd; left > 0; ) {
+        size_t n = left < sizeof(zeros) ? left : sizeof(zeros);
+        ssize_t w = write(context->fd, zeros, n);
+        if (w <= 0) return -1;
+        left -= (size_t)w;
     }
     return 0;
 }
@@ -128,6 +133,7 @@ static void file_stream_free(MemoryStream *stream)
 
 MemoryStream *file_stream_init_from_file_descriptor_nodup(int fd, uint32_t bufferStart, size_t bufferSize, uint32_t flags)
 {
+    if (fd < 0) return NULL;   // e.g. a failed dup()
     MemoryStream *stream = malloc(sizeof(MemoryStream));
     if (!stream) return NULL;
     memset(stream, 0, sizeof(MemoryStream));
@@ -174,15 +180,21 @@ MemoryStream *file_stream_init_from_file_descriptor_nodup(int fd, uint32_t buffe
     return stream;
 
 fail:
+    // file_stream_free releases the context only; the stream struct itself
+    // is freed by memory_stream_free, which isn't the path taken here.
     file_stream_free(stream);
+    free(stream);
     return NULL;
 }
 
 MemoryStream *file_stream_init_from_file_descriptor(int fd, uint32_t bufferStart, size_t bufferSize, uint32_t flags)
 {
-    MemoryStream *stream = file_stream_init_from_file_descriptor_nodup(dup(fd), bufferStart, bufferSize, flags);
+    int dupFd = dup(fd);
+    MemoryStream *stream = file_stream_init_from_file_descriptor_nodup(dupFd, bufferStart, bufferSize, flags);
     if (stream) {
         stream->flags |= MEMORY_STREAM_FLAG_OWNS_DATA;
+    } else if (dupFd >= 0) {
+        close(dupFd);   // not handed over to a stream
     }
     return stream;
 }
@@ -196,7 +208,7 @@ MemoryStream *file_stream_init_from_path(const char *path, uint32_t bufferStart,
     else {
         openFlags = O_RDONLY;
     }
-    int fd = open(path, openFlags);
+    int fd = open(path, openFlags, 0644);
     if (fd < 0) {
         printf("Failed to open %s: %s\n", path, strerror(errno));
         return NULL;

@@ -179,7 +179,8 @@ DyldSharedCache *dsc_init_from_path_premapped(const char *path, uint32_t premapS
 {
     if (!path) return NULL;
 
-    DyldSharedCache *sharedCache = malloc(sizeof(DyldSharedCache));
+    DyldSharedCache *sharedCache = calloc(1, sizeof(DyldSharedCache));
+    if (!sharedCache) return NULL;
     sharedCache->mappings = NULL;
     sharedCache->mappingCount = 0;
     sharedCache->symbolFile.index = 0;
@@ -209,6 +210,7 @@ DyldSharedCache *dsc_init_from_path_premapped(const char *path, uint32_t premapS
     else {
         // Only arm supported for now
         printf("Error: DSC has unsupported architecture\n");
+        dsc_free(sharedCache);
         return NULL;
     }
 
@@ -217,7 +219,16 @@ DyldSharedCache *dsc_init_from_path_premapped(const char *path, uint32_t premapS
 
     sharedCache->fileCount = 1 + subCacheArrayCount + symbolFileExists;
 
-    sharedCache->files = malloc(sizeof(struct DyldSharedCacheFile *) * sharedCache->fileCount);
+    // Zeroed: if a sub-cache fails to load, dsc_free must not walk unset slots.
+    sharedCache->files = calloc(sharedCache->fileCount, sizeof(struct DyldSharedCacheFile *));
+    if (!sharedCache->files) {
+        close(mainFile->fd);
+        free(mainFile->filepath);
+        free(mainFile);
+        sharedCache->fileCount = 0;
+        dsc_free(sharedCache);
+        return NULL;
+    }
     sharedCache->files[0] = mainFile;
 
     if (subCacheArrayCount > 0) {
@@ -958,6 +969,7 @@ void dsc_free(DyldSharedCache *sharedCache)
 {
     if (sharedCache->fileCount > 0) {
         for (unsigned i = 0; i < sharedCache->fileCount; i++) {
+            if (!sharedCache->files || !sharedCache->files[i]) continue;
             close(sharedCache->files[i]->fd);
             free(sharedCache->files[i]->filepath);
             free(sharedCache->files[i]);

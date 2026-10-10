@@ -273,11 +273,16 @@ int macho_read_trie_node_at_offset(MachO *macho, uint64_t offset, uint64_t maxOf
     offset += sizeof(numberOfBranches);
 
     *trieNodesCountOut = numberOfBranches;
-    *trieNodesOut = malloc(sizeof(struct trie_node) * *trieNodesCountOut);
+    *trieNodesOut = calloc(numberOfBranches ? numberOfBranches : 1, sizeof(struct trie_node));
+    if (!*trieNodesOut) { *trieNodesCountOut = 0; return -1; }
 
     for (uint8_t i = 0; i < numberOfBranches; i++) {
         struct trie_node *node = &(*trieNodesOut)[i];
-        macho_read_string_at_offset(macho, offset, &node->string);
+        if (macho_read_string_at_offset(macho, offset, &node->string) != 0 || !node->string) {
+            // Stop at the nodes read so far; the rest stay zeroed.
+            *trieNodesCountOut = i;
+            return -1;
+        }
         offset += strlen(node->string)+1;
         macho_read_uleb128_at_offset(macho, offset, maxOffset, &offset, &node->value);
     }
@@ -753,24 +758,36 @@ fail:
 }
 
 MachO **macho_array_create_for_paths(char **inputPaths, int inputPathsCount) {
-    Fat **fatArray = malloc(sizeof(Fat *) * inputPathsCount);
+    Fat **fatArray = calloc(inputPathsCount, sizeof(Fat *));
+    if (!fatArray) return NULL;
     MachO **machoArray;
     int sliceCount = 0;
     for (int i = 0; i < inputPathsCount; i++) {
         Fat *fat = fat_init_from_path(inputPaths[i]);
         if (!fat) {
             printf("Error: failed to create Fat from file: %s\n", inputPaths[i]);
+            for (int k = 0; k < i; k++) fat_free(fatArray[k]);
+            free(fatArray);
             return NULL;
         }
         sliceCount += fat->slicesCount;
         fatArray[i] = fat;
     }
-    machoArray = malloc(sizeof(MachO *) * sliceCount);
+    machoArray = malloc(sizeof(MachO *) * (sliceCount ? sliceCount : 1));
+    if (!machoArray) {
+        for (int k = 0; k < inputPathsCount; k++) fat_free(fatArray[k]);
+        free(fatArray);
+        return NULL;
+    }
+    // Every slice gets its own slot (this used to write all of a file's
+    // slices to index i). The Fat objects stay alive: they own the slices.
+    int n = 0;
     for (int i = 0; i < inputPathsCount; i++) {
         for (int j = 0; j < fatArray[i]->slicesCount; j++) {
-            machoArray[i] = fatArray[i]->slices[j];
+            machoArray[n++] = fatArray[i]->slices[j];
         }
     }
+    free(fatArray);
     return machoArray;
 }
 
