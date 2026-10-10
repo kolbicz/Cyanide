@@ -9465,6 +9465,16 @@ static NSString * const kProcMgrAutoRefreshSecondsKey = @"procmgrAutoRefreshSeco
     self.killShield = nil;
 }
 
+// Kill-target identity check: the comm read right before signalling must name
+// the same process the user tapped. The row name is p_name truncated to
+// procmgr_entry_t.name, so compare that many bytes. A mismatch means the pid
+// exited and was recycled since the list pass — refuse (fail closed).
+static BOOL pm_comm_matches_row(const char *comm, NSString *rowName) {
+    const char *expected = rowName.UTF8String;
+    if (!comm || !comm[0] || !expected || !expected[0]) return NO;
+    return strncmp(comm, expected, sizeof(((procmgr_entry_t *)0)->name) - 1) == 0;
+}
+
 // --- summary header: live system info above the process list -----------------
 
 static NSInteger pm_sysctl_int(const char *name) {
@@ -9879,6 +9889,18 @@ static NSString *pm_chip_name(NSString *machine) {
             printf("[PROCMGR] suspend: self-check krw=%d libproc=%d (off_p_stat=0x%x)%s\n",
                    selfKrw, selfLib, off_proc_p_stat,
                    (selfKrw == selfLib) ? "" : " — MISMATCH, p_stat offset suspect");
+        }
+        // Incomplete walk (KRW down, or a read failed mid-walk and may have
+        // cut the list short): keep the previous list and %CPU baselines
+        // rather than publishing an empty / partial one; the next pass retries.
+        if (n < 0) {
+            printf("[PROCMGR] refresh: process list incomplete — keeping previous snapshot\n");
+            if (buf) free(buf);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self.refreshControl endRefreshing];
+                [self pm_reloadFinished];
+            });
+            return;
         }
         NSMutableArray<NSDictionary *> *rows = [NSMutableArray array];
         NSMutableDictionary<NSNumber *, NSNumber *> *newCpu = [NSMutableDictionary dictionary];
@@ -10407,70 +10429,84 @@ static NSString *pm_chip_name(NSString *machine) {
                                              handler:^(UIAlertAction *a) {
             // FAIL CLOSED like every other kill entry point: the pid may have
             // exited and been RECYCLED — even to SpringBoard — between the
-            // dialog and this tap. Re-verify the comm before signalling; a
-            // failed lookup refuses (comm lookup failed = cannot prove the
-            // target is not a protected process).
-            char quitComm[64];
-            if (procmgr_comm_for_pid(pid, quitComm, sizeof(quitComm)) != 0 ||
-                procmgr_comm_is_protected(quitComm)) {
-                printf("[PROCMGR] kill: REFUSING pid %d — %s\n", pid,
-                       quitComm[0]
-                           ? "protected process (pid recycled since dialog?)"
-                           : "comm lookup failed, cannot verify it is not a protected process");
-                UIAlertController *err = [UIAlertController
-                    alertControllerWithTitle:@"Couldn't Quit"
-                                     message:@"The process identity couldn't be verified (it may have exited), so nothing was signalled."
-                              preferredStyle:UIAlertControllerStyleAlert];
-                [err addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-                [self presentViewController:err animated:YES completion:nil];
-                return;
-            }
-            if (kill(pid, SIGTERM) != 0) {
-                UIAlertController *err = [UIAlertController
-                    alertControllerWithTitle:@"Couldn't Quit"
-                                     message:[NSString stringWithFormat:@"SIGTERM failed (errno %d — the process may have already exited).", errno]
-                              preferredStyle:UIAlertControllerStyleAlert];
-                [err addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-                [self presentViewController:err animated:YES completion:nil];
-                return;
-            }
-            // A suspended (SSTOP) process never runs its signal handlers, so
-            // SIGTERM just sits pending while the app keeps showing in the
-            // switcher. Nudge it with SIGCONT: the resume delivers the pending
-            // SIGTERM and the app exits cleanly. Harmless if it wasn't stopped.
-            kill(pid, SIGCONT);
-            printf("[PROCMGR] fastkill: quit(%d) sent SIGTERM + SIGCONT\n", pid);
-            [self.terminatingPids addObject:@(pid)];
-            [self applyFilter];   // dim the row immediately (cheap, no KRW)
-            // Verify just this one pid after a short moment; only fall back to
-            // a full rescan when the single-pid check says it's still alive.
-            // A zombie counts as dead — its task is gone, reap is pending.
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
-                           dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                bool krwPresent = false, krwKnown = false;
-                int krwStat = procmgr_pid_status_krw(pid, &krwPresent, &krwKnown);   // ONE walk (round 13)
-                BOOL alive = krwPresent && krwStat != PM_SZOMB;
+            // dialog and this tap. Re-verify the comm against the tapped row's
+            // name before signalling; a failed lookup refuses (comm lookup
+            // failed = cannot prove the target is not a protected process).
+            // The comm lookup is a KRW allproc walk, so it and the signals run
+            // off-main; alerts and row dimming hop back to main.
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                char quitComm[64];
+                BOOL lookupOK = (procmgr_comm_for_pid(pid, quitComm, sizeof(quitComm)) == 0);
+                if (!lookupOK || procmgr_comm_is_protected(quitComm) ||
+                    !pm_comm_matches_row(quitComm, name)) {
+                    printf("[PROCMGR] kill: REFUSING pid %d — %s\n", pid,
+                           !lookupOK
+                               ? "comm lookup failed, cannot verify it is not a protected process"
+                               : (procmgr_comm_is_protected(quitComm)
+                                      ? "protected process (pid recycled since dialog?)"
+                                      : "comm no longer matches the row (pid recycled since dialog?)"));
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        UIAlertController *err = [UIAlertController
+                            alertControllerWithTitle:@"Couldn't Quit"
+                                             message:@"The process identity couldn't be verified (it may have exited), so nothing was signalled."
+                                      preferredStyle:UIAlertControllerStyleAlert];
+                        [err addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                        [self presentViewController:err animated:YES completion:nil];
+                    });
+                    return;
+                }
+                if (kill(pid, SIGTERM) != 0) {
+                    int termErr = errno;
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        UIAlertController *err = [UIAlertController
+                            alertControllerWithTitle:@"Couldn't Quit"
+                                             message:[NSString stringWithFormat:@"SIGTERM failed (errno %d — the process may have already exited).", termErr]
+                                      preferredStyle:UIAlertControllerStyleAlert];
+                        [err addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                        [self presentViewController:err animated:YES completion:nil];
+                    });
+                    return;
+                }
+                // A suspended (SSTOP) process never runs its signal handlers, so
+                // SIGTERM just sits pending while the app keeps showing in the
+                // switcher. Nudge it with SIGCONT: the resume delivers the pending
+                // SIGTERM and the app exits cleanly. Harmless if it wasn't stopped.
+                kill(pid, SIGCONT);
+                printf("[PROCMGR] fastkill: quit(%d) sent SIGTERM + SIGCONT\n", pid);
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [self.terminatingPids removeObject:@(pid)];
-                    if (!krwKnown) {
-                        // Couldn't check (KRW down or a read failed): no verdict either
-                        // way -- neither drop the row nor claim it survived. A rescan decides.
-                        printf("[PROCMGR] fastkill: pid %d status unknown (KRW read unavailable) — rescanning\n", pid);
-                        [self reloadProcs];
-                        return;
-                    }
-                    if (!alive) {
-                        [self pmRemoveRowForPid:pid];
-                        return;
-                    }
-                    printf("[PROCMGR] fastkill: pid %d still alive after quit (SIGTERM+SIGCONT)\n", pid);
-                    UIAlertController *nope = [UIAlertController
-                        alertControllerWithTitle:@"Didn't terminate"
-                                         message:[NSString stringWithFormat:@"%@ (PID %d) is still running — it caught or ignored SIGTERM. Use Force Quit instead.", name, pid]
-                                  preferredStyle:UIAlertControllerStyleAlert];
-                    [nope addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-                    [self presentViewController:nope animated:YES completion:nil];
-                    [self reloadProcs];
+                    [self.terminatingPids addObject:@(pid)];
+                    [self applyFilter];   // dim the row immediately (cheap, no KRW)
+                    // Verify just this one pid after a short moment; only fall back to
+                    // a full rescan when the single-pid check says it's still alive.
+                    // A zombie counts as dead — its task is gone, reap is pending.
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                                   dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                        bool krwPresent = false, krwKnown = false;
+                        int krwStat = procmgr_pid_status_krw(pid, &krwPresent, &krwKnown);   // ONE walk (round 13)
+                        BOOL alive = krwPresent && krwStat != PM_SZOMB;
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [self.terminatingPids removeObject:@(pid)];
+                            if (!krwKnown) {
+                                // Couldn't check (KRW down or a read failed): no verdict either
+                                // way -- neither drop the row nor claim it survived. A rescan decides.
+                                printf("[PROCMGR] fastkill: pid %d status unknown (KRW read unavailable) — rescanning\n", pid);
+                                [self reloadProcs];
+                                return;
+                            }
+                            if (!alive) {
+                                [self pmRemoveRowForPid:pid];
+                                return;
+                            }
+                            printf("[PROCMGR] fastkill: pid %d still alive after quit (SIGTERM+SIGCONT)\n", pid);
+                            UIAlertController *nope = [UIAlertController
+                                alertControllerWithTitle:@"Didn't terminate"
+                                                 message:[NSString stringWithFormat:@"%@ (PID %d) is still running — it caught or ignored SIGTERM. Use Force Quit instead.", name, pid]
+                                          preferredStyle:UIAlertControllerStyleAlert];
+                            [nope addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                            [self presentViewController:nope animated:YES completion:nil];
+                            [self reloadProcs];
+                        });
+                    });
                 });
             });
         }]];
@@ -10511,7 +10547,7 @@ static NSString *pm_chip_name(NSString *machine) {
             // both EFAULT'd on-device on 21D61 AND 22F76. The launchd
             // RemoteCall is the only privileged kill path.
             if (rc == -6)
-                rc = [self pmForceKillViaLaunchd:pid];
+                rc = [self pmForceKillViaLaunchd:pid expectedName:name];
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (showBanner) [self pmHideKillShield];   // verdict known — paired with the cold-kill show
                 if (self.killsInFlight > 0) self.killsInFlight--;
@@ -11328,7 +11364,8 @@ NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *trunc
     return out;
 }
 
-- (int)pmForceKillViaLaunchdLocked:(int)pid allowRebuild:(BOOL)allowRebuild
+- (int)pmForceKillViaLaunchdLocked:(int)pid expectedName:(NSString *)expectedName
+                      allowRebuild:(BOOL)allowRebuild
 {
     // ONE guard hold across warm-up + kill + verdict: a pending detach waits
     // for the count to drain AND closes the gate first, but without this hold
@@ -11341,12 +11378,14 @@ NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *trunc
                "aborting kill(%d) before touching launchd\n", pid);
         return -2;
     }
-    int rc = [self pmForceKillViaLaunchdGated:pid allowRebuild:allowRebuild];
+    int rc = [self pmForceKillViaLaunchdGated:pid expectedName:expectedName
+                                 allowRebuild:allowRebuild];
     remote_call_guard_release_external("fastkill");
     return rc;
 }
 
-- (int)pmForceKillViaLaunchdGated:(int)pid allowRebuild:(BOOL)allowRebuild
+- (int)pmForceKillViaLaunchdGated:(int)pid expectedName:(NSString *)expectedName
+                     allowRebuild:(BOOL)allowRebuild
 {
     // Deepest refusal, at the layer that builds the remote-call args (round 5):
     // pid <= 1 must NEVER reach a launchd-internal kill() — kill(0, …) from
@@ -11387,21 +11426,36 @@ NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *trunc
     // Same layer, comm hard-stop — FAIL CLOSED like every other kill entry
     // point: a failed lookup refuses (SpringBoard/backboardd have ordinary
     // pids; a transient KRW read failure must not re-open the panic vector).
-    char gComm[64];
-    if (procmgr_comm_for_pid(pid, gComm, sizeof(gComm)) != 0) {
-        printf("[PROCMGR] kill: REFUSING pid %d — comm lookup failed, cannot "
-               "verify it is not a protected process\n", pid);
-        return -1;
-    }
-    if (procmgr_comm_is_protected(gComm)) {
-        printf("[PROCMGR] fastkill: REFUSING protected process pid %d (%s) "
-               "(call-layer hard-stop)\n", pid, gComm);
-        return -1;
-    }
+    // The comm must also still name the row the user tapped: a mismatch means
+    // the pid was recycled since the list pass. Checked once up front (don't
+    // warm launchd for a refused target) and AGAIN right before the remote
+    // kill — the warm-up can take ~2 s, long enough for exit + pid reuse.
+    BOOL (^commOK)(const char *) = ^BOOL(const char *when) {
+        char gComm[64];
+        if (procmgr_comm_for_pid(pid, gComm, sizeof(gComm)) != 0) {
+            printf("[PROCMGR] kill: REFUSING pid %d (%s) — comm lookup failed, "
+                   "cannot verify it is not a protected process\n", pid, when);
+            return NO;
+        }
+        if (procmgr_comm_is_protected(gComm)) {
+            printf("[PROCMGR] fastkill: REFUSING protected process pid %d (%s) "
+                   "(call-layer hard-stop, %s)\n", pid, gComm, when);
+            return NO;
+        }
+        if (!pm_comm_matches_row(gComm, expectedName)) {
+            printf("[PROCMGR] fastkill: REFUSING pid %d (%s) — comm '%s' no longer "
+                   "matches row '%s' (pid recycled?)\n", pid, when, gComm,
+                   expectedName.UTF8String ?: "(nil)");
+            return NO;
+        }
+        return YES;
+    };
+    if (!commOK("pre-warm-up")) return -1;
     uint64_t t0 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     BOOL warmed = (gPMKillSession != nil && ![gPMKillSession isAnomalous]);
     int warmRC = pm_launchd_session_ensure_locked("kill");
     if (warmRC != 0) return warmRC;
+    if (!commOK("pre-kill")) return -1;
     uint64_t r = [gPMKillSession doRemoteCallStableWithTimeout:2000
                                                   functionName:"kill"
                                                             x0:(uint64_t)pid
@@ -11529,10 +11583,11 @@ NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *trunc
     if (kexploit_krw_ready()) [gPMKillSession destroyRemoteCall];   // symmetrical
     else                     [gPMKillSession abandonRemoteCall];    // KRW down: no IPC
     gPMKillSession = nil;
-    return [self pmForceKillViaLaunchdGated:pid allowRebuild:NO];
+    return [self pmForceKillViaLaunchdGated:pid expectedName:expectedName
+                               allowRebuild:NO];
 }
 
-- (int)pmForceKillViaLaunchd:(int)pid
+- (int)pmForceKillViaLaunchd:(int)pid expectedName:(NSString *)expectedName
 {
     if (pid <= 1) {
         printf("[PROCMGR] fastkill: REFUSING protected pid %d (kernel_task/launchd)\n", pid);
@@ -11586,7 +11641,8 @@ NSData *settings_root_read_file(NSString *path, NSUInteger maxBytes, BOOL *trunc
         printf("[PROCMGR] fastkill: in-flight warm-up finished — kill(%d) uses %s\n",
                pid, gPMKillSession ? "the warmed session"
                                    : "no session (warm-up failed; warming now)");
-    int rc = [self pmForceKillViaLaunchdLocked:pid allowRebuild:YES];
+    int rc = [self pmForceKillViaLaunchdLocked:pid expectedName:expectedName
+                                  allowRebuild:YES];
     [lock unlock];
     // Round 46: whenever the session stays warm after a kill, schedule the
     // foreground idle disarm so the trapped launchd thread + armed KRW

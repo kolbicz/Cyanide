@@ -642,6 +642,7 @@ int procmgr_list(procmgr_entry_t *entries, int max) {
     // A polling UI loop must never take the app down on a transient KRW
     // hiccup: nonfatal mode zero-fills failed reads instead of crashing.
     krw_set_nonfatal(true);
+    uint64_t errorsBefore = krw_op_error_count();
 
     uint64_t self = proc_self();
     if (!procmgr_is_kern_ptr(self)) { krw_set_nonfatal(false); return -1; }
@@ -676,6 +677,10 @@ int procmgr_list(procmgr_entry_t *entries, int max) {
     if (batched) krw_batch_end();
 
     krw_set_nonfatal(false);
+    // A failed-safe read anywhere in the walk (ours or a concurrent one -- we
+    // can't tell them apart) may have zero-filled a link and ended it early:
+    // report "incomplete" so the caller keeps its previous list.
+    if (krw_op_error_count() != errorsBefore) return -1;
     return n;
 }
 
@@ -1880,19 +1885,22 @@ static int pm_kernel_stats(uint64_t task, uint64_t *memOut, uint64_t *cpuOut) {
         }
     }
     if (g_pm_cpu_cal && g_pm_thr_cal) {
-        uint64_t u1 = kread64(task + g_pm_off_task_cpu_u);
-        uint64_t s1 = kread64(task + g_pm_off_task_cpu_s);
-        uint64_t lu = 0, ls = 0;
-        bool walkOk = pm_live_thread_sums(task, &lu, &ls);
-        uint64_t u2 = kread64(task + g_pm_off_task_cpu_u);
-        uint64_t s2 = kread64(task + g_pm_off_task_cpu_s);
-        // Monotonic counters: the second read must be >= the first, and the
-        // delta is bounded by what the CPU can burn in the read window
-        // (~50ms covers a pathological scheduling delay; normally µs).
-        uint64_t maxDelta = g_pm_cpu_abstime ? pm_ns_to_abs(50000000ULL)
-                                             : 50000000ULL;
-        if (walkOk && u2 >= u1 && s2 >= s1 &&
-            u2 - u1 <= maxDelta && s2 - s1 <= maxDelta) {
+        // The task totals only move when a thread terminates (its time is
+        // folded in at exit), so any change across the bracket means a thread
+        // may be counted both in u2/s2 and in the live walk. Retry the bracket
+        // once; if it still moved, no CPU sample this pass.
+        uint64_t u1 = 0, s1 = 0, u2 = 0, s2 = 0, lu = 0, ls = 0;
+        bool walkOk = false;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            u1 = kread64(task + g_pm_off_task_cpu_u);
+            s1 = kread64(task + g_pm_off_task_cpu_s);
+            lu = 0; ls = 0;
+            walkOk = pm_live_thread_sums(task, &lu, &ls);
+            u2 = kread64(task + g_pm_off_task_cpu_u);
+            s2 = kread64(task + g_pm_off_task_cpu_s);
+            if (u2 == u1 && s2 == s1) break;
+        }
+        if (walkOk && u2 == u1 && s2 == s1) {
             uint64_t u = u2, s = s2;
             if (g_pm_cpu_abstime) { u = pm_abs_to_ns(u); s = pm_abs_to_ns(s); }
             if (g_pm_thr_abstime) { lu = pm_abs_to_ns(lu); ls = pm_abs_to_ns(ls); }
@@ -2237,10 +2245,15 @@ bool procmgr_row_info(uint64_t kproc, int pid, procmgr_row_info_t *out) {
             if (sc <= 64) out->suspend_count = (int)sc;     // >64 is implausible: torn/bad read
         }
         if ((g_pm_mem_cal && ksafe_available()) || g_pm_thr_cal) {
+            uint64_t errorsBefore = krw_op_error_count();
             kv = pm_kernel_stats(task, &kMem, &kCpu);
             // Re-verify after the reads: a death mid-read with fast task
             // reuse can tear past the double-read consistency checks.
             if (pm_task_matches_proc(task, kproc) == 0) kv = 0;
+            // A failed-safe read zero-fills silently; a zeroed word can still
+            // pass the double-read checks (e.g. 0 == 0), so any read error
+            // during the stats reads voids the kernel values for this row.
+            if (krw_op_error_count() != errorsBefore) kv = 0;
         }
     } while (0);
     if (batched) krw_batch_end();
