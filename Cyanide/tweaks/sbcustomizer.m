@@ -63,7 +63,9 @@ static bool patch_list_model_grid(uint64_t listView, const char *tag, int cols, 
     }
 
     uint64_t newGrid = (((uint64_t)rows & 0xffffULL) << 16) | ((uint64_t)cols & 0xffffULL);
-    uint64_t oldGrid = r_msg2(model, "gridSize", 0, 0, 0, 0) & 0xffffffffULL;
+    uint64_t oldGrid = r_msg2(model, "gridSize", 0, 0, 0, 0);
+    if (!r_last_call_ok()) return false;
+    oldGrid &= 0xffffffffULL;
 
     if (r_responds(model, "setGridSize:")) {
         r_msg2(model, "setGridSize:", newGrid, 0, 0, 0);
@@ -73,8 +75,11 @@ static bool patch_list_model_grid(uint64_t listView, const char *tag, int cols, 
         printf("[SBC] v3: %s model lacks grid setter\n", tag);
         return false;
     }
+    if (!r_last_call_ok()) return false;
 
-    uint64_t afterGrid = r_msg2(model, "gridSize", 0, 0, 0, 0) & 0xffffffffULL;
+    uint64_t afterGrid = r_msg2(model, "gridSize", 0, 0, 0, 0);
+    if (!r_last_call_ok()) return false;
+    afterGrid &= 0xffffffffULL;
     printf("[SBC] v3: %s model gridSize 0x%llx -> 0x%llx\n", tag, oldGrid, afterGrid);
     return afterGrid == newGrid;
 }
@@ -155,6 +160,7 @@ static uint64_t find_icon_in_array_by_bundle(uint64_t icons, uint64_t listView,
     if (!r_is_objc_ptr(icons) || !r_responds(icons, "count") ||
         !r_responds(icons, "objectAtIndex:")) return 0;
     uint64_t count = r_msg2_main(icons, "count", 0, 0, 0, 0);
+    if (!r_last_main_ok()) return 0;
     uint64_t limit = count < 256 ? count : 256;
     const char *viewSels[] = {
         "displayedIconViewForIcon:",
@@ -969,11 +975,17 @@ static void patch_homescreen_grid(uint64_t iconCtrl, int cols, int rows, bool hi
     patch_homescreen_list_models_v3(mgr, cols, rows);
 }
 
-static bool set_page_icon_capacity(uint64_t listView, int desired, int preferredCols,
-                                   const char *tag)
+// 1 = capacity confirmed; 0 = this page can't take it (no model, or the
+// count isn't expressible as a supported grid) -- skipped, as before;
+// -1 = outcome unknown (a lost reply or a read-back mismatch): the caller
+// must not rebalance on top of a state it can't see.
+typedef enum { SBCCapacityUnknown = -1, SBCCapacityUnsupported = 0, SBCCapacityConfirmed = 1 } SBCCapacityResult;
+
+static SBCCapacityResult set_page_icon_capacity(uint64_t listView, int desired, int preferredCols,
+                                                const char *tag)
 {
     uint64_t model = list_view_model(listView);
-    if (!r_is_objc_ptr(model)) return false;
+    if (!r_is_objc_ptr(model)) return SBCCapacityUnsupported;
 
     const char *capacitySetters[] = {
         "setMaximumIconCount:",
@@ -984,8 +996,29 @@ static bool set_page_icon_capacity(uint64_t listView, int desired, int preferred
     for (int i = 0; capacitySetters[i]; i++) {
         if (!r_responds(model, capacitySetters[i])) continue;
         r_msg2(model, capacitySetters[i], (uint64_t)desired, 0, 0, 0);
-        printf("[SBC:ARRANGE] %s %s -> %d\n", tag, capacitySetters[i], desired);
-        return true;
+        if (!r_last_call_ok()) {
+            printf("[SBC:ARRANGE] %s %s -> %d (reply unknown)\n",
+                   tag, capacitySetters[i], desired);
+            return SBCCapacityUnknown;
+        }
+        const char *capacityGetters[] = {
+            "maximumIconCount",
+            "maxIconCount",
+            "maximumNumberOfIcons",
+            NULL,
+        };
+        for (int g = 0; capacityGetters[g]; g++) {
+            if (!r_responds(model, capacityGetters[g])) continue;
+            uint64_t readback = r_msg2(model, capacityGetters[g], 0, 0, 0, 0);
+            if (!r_last_call_ok() || readback != (uint64_t)desired) {
+                printf("[SBC:ARRANGE] %s %s readback unknown/mismatch got=%llu expected=%d\n",
+                       tag, capacityGetters[g], (unsigned long long)readback, desired);
+                return SBCCapacityUnknown;
+            }
+            break;
+        }
+        printf("[SBC:ARRANGE] %s %s -> %d confirmed\n", tag, capacitySetters[i], desired);
+        return SBCCapacityConfirmed;
     }
 
     int bestCols = 0;
@@ -1005,9 +1038,10 @@ static bool set_page_icon_capacity(uint64_t listView, int desired, int preferred
     if (!bestCols) {
         printf("[SBC:ARRANGE] %s cannot express exact capacity=%d as supported grid\n",
                tag, desired);
-        return false;
+        return SBCCapacityUnsupported;
     }
-    return patch_list_model_grid(listView, tag, bestCols, bestRows);
+    return patch_list_model_grid(listView, tag, bestCols, bestRows)
+        ? SBCCapacityConfirmed : SBCCapacityUnsupported;
 }
 
 static uint64_t icon_array_count(uint64_t model)
@@ -1015,8 +1049,9 @@ static uint64_t icon_array_count(uint64_t model)
     uint64_t icons = model_icons_retained(model);
     if (!r_is_objc_ptr(icons)) return UINT64_MAX;
     uint64_t count = r_msg2_main(icons, "count", 0, 0, 0, 0);
+    bool countOK = r_last_main_ok();
     release_remote_object(icons);
-    return count;
+    return countOK ? count : UINT64_MAX;
 }
 
 // Do not use CFRetain while redistributing pages. SBIconListModel and its
@@ -1029,8 +1064,9 @@ static uint64_t icon_array_count_transient(uint64_t model)
 {
     if (!r_is_objc_ptr(model)) return UINT64_MAX;
     uint64_t icons = r_msg2_main(model, "icons", 0, 0, 0, 0);
-    if (!r_is_objc_ptr(icons)) return UINT64_MAX;
-    return r_msg2_main(icons, "count", 0, 0, 0, 0);
+    if (!r_last_main_ok() || !r_is_objc_ptr(icons)) return UINT64_MAX;
+    uint64_t count = r_msg2_main(icons, "count", 0, 0, 0, 0);
+    return r_last_main_ok() ? count : UINT64_MAX;
 }
 
 // Per-arrange cache of page list views. iconListViewAtIndex: returns the SAME
@@ -1057,17 +1093,21 @@ static uint64_t page_model_at(uint64_t rootFolder, uint64_t page)
     uint64_t listView = cacheable ? gPageViewCache[page] : 0;
     if (!r_is_objc_ptr(listView)) {
         listView = r_msg2_main(rootFolder, "iconListViewAtIndex:", page, 0, 0, 0);
+        if (!r_last_main_ok()) return 0;
         if (cacheable) gPageViewCache[page] = listView;
     }
     if (!r_is_objc_ptr(listView)) return 0;
     uint64_t model = r_msg2_main(listView, "model", 0, 0, 0, 0);
+    if (!r_last_main_ok()) return 0;
     if (!r_is_objc_ptr(model) && cacheable) {
         // Cached view no longer yields a model -- re-resolve once and retry.
         gPageViewCache[page] = 0;
         listView = r_msg2_main(rootFolder, "iconListViewAtIndex:", page, 0, 0, 0);
+        if (!r_last_main_ok()) return 0;
         if (!r_is_objc_ptr(listView)) return 0;
         gPageViewCache[page] = listView;
         model = r_msg2_main(listView, "model", 0, 0, 0, 0);
+        if (!r_last_main_ok()) return 0;
     }
     return model;
 }
@@ -1078,7 +1118,7 @@ static uint64_t icon_at_index_transient(uint64_t model, uint64_t index)
     uint64_t icons = r_msg2_main(model, "icons", 0, 0, 0, 0);
     if (!r_is_objc_ptr(icons)) return 0;
     uint64_t count = r_msg2_main(icons, "count", 0, 0, 0, 0);
-    if (index >= count) return 0;
+    if (!r_last_main_ok() || index >= count) return 0;
     return r_msg2_main(icons, "objectAtIndex:", index, 0, 0, 0);
 }
 
@@ -1290,7 +1330,10 @@ static int rebalance_impl(uint64_t rootFolder, uint64_t count,
     uint64_t donorCount = UINT64_MAX;
     for (uint64_t page = 0; page + 1 < count; page++) {
         uint64_t model = page_model_at(rootFolder, page);
-        if (!r_is_objc_ptr(model)) continue;
+        if (!r_is_objc_ptr(model)) {
+            failed = true;
+            continue;
+        }
         uint64_t desired = (uint64_t)(page == 0 ? firstPageIcons : otherPageIcons);
         uint64_t current = icon_array_count_transient(model);
         if (current == UINT64_MAX) {
@@ -1335,6 +1378,10 @@ static int rebalance_impl(uint64_t rootFolder, uint64_t count,
                 if (destinationCount == UINT64_MAX) {
                     destinationCount = icon_array_count_transient(
                         page_model_at(rootFolder, page + 1));
+                    if (destinationCount == UINT64_MAX) {
+                        failed = true;
+                        break;
+                    }
                 }
                 didMove = r_is_objc_ptr(icon) &&
                     move_icon_between_pages(rootFolder, page, iconIndex,
@@ -1376,10 +1423,15 @@ static int rebalance_impl(uint64_t rootFolder, uint64_t count,
                     donorCount = icon_array_count_transient(
                         page_model_at(rootFolder, donorPage));
                 }
-                if (donorCount != UINT64_MAX && donorCount > 0) break;
+                if (donorCount == UINT64_MAX) {
+                    failed = true;
+                    break;
+                }
+                if (donorCount > 0) break;
                 donorPage++;
                 donorCount = UINT64_MAX;
             }
+            if (failed) break;
             if (donorPage >= count) break;
             uint64_t donorModel = page_model_at(rootFolder, donorPage);
             uint64_t icon = icon_at_index_transient(donorModel, 0);
@@ -1443,14 +1495,20 @@ static int rebalance_impl(uint64_t rootFolder, uint64_t count,
         uint64_t lastModel = page_model_at(rootFolder, lastPage);
         uint64_t lastCount = icon_array_count_transient(lastModel);
         uint64_t lastCap   = (uint64_t)(lastPage == 0 ? firstPageIcons : otherPageIcons);
-        if (r_is_objc_ptr(lastModel) && lastCount != UINT64_MAX && lastCount > lastCap &&
-            r_responds(lastModel, "gridSize") && r_responds(lastModel, "setGridSize:")) {
-            uint64_t grid = r_msg2(lastModel, "gridSize", 0, 0, 0, 0) & 0xffffffffULL;
+        if (!r_is_objc_ptr(lastModel) || lastCount == UINT64_MAX) {
+            failed = true;
+        } else if (lastCount > lastCap &&
+                   r_responds(lastModel, "gridSize") &&
+                   r_responds(lastModel, "setGridSize:")) {
+            uint64_t grid = r_msg2(lastModel, "gridSize", 0, 0, 0, 0);
+            if (!r_last_call_ok()) return -1;
+            grid &= 0xffffffffULL;
             uint64_t cols = grid & 0xffffULL;
             if (cols == 0) cols = 4;
             uint64_t rowsNeeded = (lastCount + cols - 1) / cols;
             uint64_t newGrid = ((rowsNeeded & 0xffffULL) << 16) | (cols & 0xffffULL);
             r_msg2(lastModel, "setGridSize:", newGrid, 0, 0, 0);
+            if (!r_last_call_ok()) return -1;
             printf("[SBC:ARRANGE] last page[%llu] overflow %llu > cap %llu; grid grown to "
                    "%llux%llu so no icon is left off-grid\n",
                    lastPage, lastCount, lastCap, cols, rowsNeeded);
@@ -1478,15 +1536,40 @@ static bool arrange_homescreen_pages(uint64_t iconCtrl, int preferredCols,
     }
 
     uint64_t count = r_msg2(rootFolder, "iconListViewCount", 0, 0, 0, 0);
+    if (!r_last_call_ok()) {
+        printf("[SBC:ARRANGE] page count unavailable\n");
+        return false;
+    }
     uint64_t limit = count < 64 ? count : 64;
     int changed = 0;
+    bool capacityUnknown = false;
     for (uint64_t i = 0; i < limit; i++) {
         uint64_t listView = r_msg2(rootFolder, "iconListViewAtIndex:", i, 0, 0, 0);
-        if (!r_is_objc_ptr(listView)) continue;
+        if (!r_last_call_ok()) {
+            printf("[SBC:ARRANGE] page[%llu] list view reply lost\n", i);
+            capacityUnknown = true;
+            continue;
+        }
+        if (!r_is_objc_ptr(listView)) {
+            printf("[SBC:ARRANGE] page[%llu] list view unavailable — skipped\n", i);
+            continue;
+        }
         char tag[32];
         snprintf(tag, sizeof(tag), "page[%llu]", i);
         int desired = i == 0 ? firstPageIcons : otherPageIcons;
-        if (set_page_icon_capacity(listView, desired, preferredCols, tag)) changed++;
+        SBCCapacityResult r = set_page_icon_capacity(listView, desired, preferredCols, tag);
+        if (r == SBCCapacityConfirmed) changed++;
+        else if (r == SBCCapacityUnknown) capacityUnknown = true;
+        // Unsupported: this page keeps its grid and is skipped, as before.
+    }
+    // Only an UNKNOWN outcome stops the arrange (it can't rebalance on top of
+    // a state it can't see). A page that simply can't take the capacity is
+    // skipped, as it always was -- failing the whole arrange for it reported
+    // failure after the other pages had already been changed.
+    if (capacityUnknown || changed == 0) {
+        printf("[SBC:ARRANGE] capacity step %s changed=%d pages=%llu\n",
+               capacityUnknown ? "had a lost reply" : "changed no page", changed, limit);
+        return false;
     }
 
     // Grid changes can rebuild SBIconListView and its model. Never reuse the
@@ -1499,6 +1582,10 @@ static bool arrange_homescreen_pages(uint64_t iconCtrl, int preferredCols,
         return false;
     }
     count = r_msg2_main(rootFolder, "iconListViewCount", 0, 0, 0, 0);
+    if (!r_last_main_ok()) {
+        printf("[SBC:ARRANGE] refreshed page count unavailable\n");
+        return false;
+    }
     limit = count < 64 ? count : 64;
     // The rebalance is by far the most expensive part of an SBC apply -- each
     // icon move is a sequence of synchronous main-thread RemoteCalls. Report the
@@ -1528,7 +1615,10 @@ static bool arrange_homescreen_pages(uint64_t iconCtrl, int preferredCols,
         for (uint64_t i = 0; i < refreshedLimit; i++) {
             uint64_t listView = r_msg2_main(
                 rootFolder, "iconListViewAtIndex:", i, 0, 0, 0);
-            if (!r_is_objc_ptr(listView)) continue;
+            if (!r_last_main_ok() || !r_is_objc_ptr(listView)) {
+                printf("[SBC:ARRANGE] refreshed page[%llu] unavailable\n", i);
+                return false;
+            }
             if (canLayout < 0) canLayout = r_responds(listView, "setNeedsLayout") ? 1 : 0;
             // Fire-and-forget, as in patch_dock: one round trip instead of
             // an NSInvocation build per page.
