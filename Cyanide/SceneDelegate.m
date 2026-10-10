@@ -165,7 +165,7 @@ static void scene_suspend_to_home(void)
     title.textColor = UIColor.labelColor;
 
     UILabel *status = [UILabel new];
-    status.text = @"Getting ready…";
+    status.text = @"Starting…";
     status.font = [UIFont systemFontOfSize:15];
     status.textColor = UIColor.secondaryLabelColor;
 
@@ -249,7 +249,7 @@ static const double kQuietMinDone = 0.3;    // "Done" visible before leaving
     }
     // The wait ends with opening the SpringBoard connection (~0.5 s, the
     // tail of `over`): switch the text when that part begins.
-    if ([text isEqualToString:@"Waiting for the system"] && over > 0.8) {
+    if ([text isEqualToString:@"Getting kernel ready"] && over > 0.8) {
         __weak typeof(self) weakSelf = self;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((over - 0.5) * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{

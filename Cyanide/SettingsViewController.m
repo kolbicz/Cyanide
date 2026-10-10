@@ -6526,7 +6526,11 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
         // changed since, and a toggle must flip what is actually there).
         BOOL enable = desired < 0 ? (locationservices_enabled_local() != 1) : (desired != 0);
         NSString *verb = enable ? @"Turning on" : @"Turning off";
-        step(0.1f, @"Getting ready", 0);
+        // No live or parked kernel access (e.g. after a restart): the full
+        // exploit chain runs first (~10 s on A18) — say so.
+        BOOL needsChain = !settings_krw_available_without_exploit();
+        if (needsChain) step(0.45f, @"Exploiting kernel", 12.0);
+        else            step(0.1f, @"Getting kernel ready", 0);
         __block BOOL ok = NO;
         __block NSString *message = nil;
         __block uint64_t resultPostedNs = 0;
@@ -6560,8 +6564,11 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
             {
                 uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
                 uint64_t until = g_activation_settle_until_ns;
-                double wait = (until > now ? (double)(until - now) / 1e9 : 0) + (g_springboard_rc_ready ? 0 : 0.5);
-                step(0.75f, g_springboard_rc_ready ? @"Connecting" : @"Waiting for the system", wait);
+                double settle = until > now ? (double)(until - now) / 1e9 : 0;
+                double wait = settle + (g_springboard_rc_ready ? 0 : 0.5);
+                // The settle window shows as "Getting kernel ready"; after a
+                // chain run it has usually passed, so straight to Connecting.
+                step(0.75f, settle > 0.3 ? @"Getting kernel ready" : @"Connecting", wait);
             }
             @synchronized (settings_rc_lock()) {
                 if (settings_ensure_springboard_remote_call_locked()) {
