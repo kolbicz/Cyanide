@@ -333,22 +333,49 @@ uint64_t r_msg(uint64_t obj, uint64_t sel,
                          obj, sel, a0, a1, a2, a3, 0, 0);
 }
 
+// A retain result is usable only when the RPC completed and returned an
+// Objective-C pointer. If completion is unknown, the retain may or may not
+// have run; callers must not hand the autoreleased object to later code or
+// attempt a compensating release that could over-release it.
+static uint64_t r_retain_checked(uint64_t obj, bool *callCompleted)
+{
+    if (callCompleted) *callCompleted = false;
+    if (!r_is_objc_ptr(obj)) return 0;
+    uint64_t retainSel = r_sel("retain");
+    if (!retainSel) return 0;
+
+    uint64_t retained = r_msg(obj, retainSel, 0, 0, 0, 0);
+    bool completed = r_last_call_ok();
+    if (callCompleted) *callCompleted = completed;
+    if (!completed || !r_is_objc_ptr(retained)) return 0;
+    return retained;
+}
+
 static uint64_t r_msg_retained_return(uint64_t obj, uint64_t sel,
                                       uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3)
 {
     if (!obj || !sel) return 0;
 
     if (remote_call_uses_vphone_bridge()) {
-        return r_call_stable(R_TIMEOUT, "objc_msgSend_retain",
-                             obj, sel, a0, a1, a2, a3, 0, 0);
+        uint64_t retained = r_call_stable(R_TIMEOUT, "objc_msgSend_retain",
+                                          obj, sel, a0, a1, a2, a3, 0, 0);
+        return (r_last_call_ok() && r_is_objc_ptr(retained)) ? retained : 0;
     }
 
     uint64_t ret = r_msg(obj, sel, a0, a1, a2, a3);
-    if (r_is_objc_ptr(ret)) {
-        uint64_t retained = r_msg(ret, r_sel("retain"), 0, 0, 0, 0);
-        if (r_is_objc_ptr(retained)) ret = retained;
+    if (!r_last_call_ok() || !r_is_objc_ptr(ret)) return 0;
+
+    bool retainCompleted = false;
+    uint64_t retained = r_retain_checked(ret, &retainCompleted);
+    if (!retained) {
+        // Only compensate when the retain definitely completed. An unknown
+        // retain outcome cannot be safely balanced without risking overrelease.
+        if (retainCompleted) {
+            r_msg(ret, r_sel("release"), 0, 0, 0, 0);
+        }
+        return 0;
     }
-    return ret;
+    return retained;
 }
 
 uint64_t r_msg2(uint64_t obj, const char *selName,
@@ -1056,11 +1083,18 @@ uint64_t r_ivar_value(uint64_t obj, const char *ivarName)
 uint64_t r_msg2_main_retained(uint64_t obj, const char *selName)
 {
     uint64_t value = r_msg2_main(obj, selName, 0, 0, 0, 0);
-    if (!r_is_objc_ptr(value)) return 0;
+    if (!r_last_main_ok() || !r_is_objc_ptr(value)) return 0;
     // retain is an atomic refcount bump, safe from any thread (r_release is
     // already off-main); a second main-thread hop only added ~5 round trips.
-    r_msg(value, r_sel("retain"), 0, 0, 0, 0);
-    return value;
+    bool retainCompleted = false;
+    uint64_t retained = r_retain_checked(value, &retainCompleted);
+    if (!retained) {
+        if (retainCompleted) {
+            r_msg(value, r_sel("release"), 0, 0, 0, 0);
+        }
+        return 0;
+    }
+    return retained;
 }
 
 void r_release(uint64_t obj)
@@ -1096,8 +1130,15 @@ uint64_t r_invocation_retained(uint64_t sample, const char *selName,
     if (!r_is_objc_ptr(sig)) return 0;
     uint64_t inv = r_msg(NSInvocation, r_sel("invocationWithMethodSignature:"), sig, 0, 0, 0);
     if (!r_is_objc_ptr(inv) || !r_last_call_ok()) return 0;
-    r_msg(inv, r_sel("retain"), 0, 0, 0, 0);
-    if (!r_last_call_ok()) return 0;   // not retained: don't hand out an autoreleased pointer
+    bool retainCompleted = false;
+    uint64_t retained = r_retain_checked(inv, &retainCompleted);
+    if (!retained) {
+        if (retainCompleted) {
+            r_msg(inv, r_sel("release"), 0, 0, 0, 0);
+        }
+        return 0;   // not retained: don't hand out an autoreleased pointer
+    }
+    inv = retained;
     r_msg(inv, r_sel("setSelector:"), sel, 0, 0, 0);
     bool ok = r_last_call_ok();
     // NSInvocation copies the argument bytes, so the buffer is freed here.
