@@ -1098,11 +1098,16 @@ static void axn_cache_icon_for_bundle(const char *bundle, uint64_t image)
     if (!bundle || !bundle[0] || !r_is_objc_ptr(image)) return;
 
     uint64_t retained = r_msg2(image, "retain", 0, 0, 0, 0);
-    uint64_t stored = r_is_objc_ptr(retained) ? retained : image;
+    if (!r_last_call_ok() || !r_is_objc_ptr(retained)) {
+        printf("[AXONLITE] icon cache retain unknown bundle=%s; preserving prior entry\n",
+               bundle);
+        return;
+    }
+    uint64_t stored = retained;
 
     for (int i = 0; i < gAxonIconCacheCount; i++) {
         if (strcmp(gAxonIconCache[i].bundle, bundle) == 0) {
-            if (r_is_objc_ptr(gAxonIconCache[i].image) && gAxonIconCache[i].image != stored) {
+            if (r_is_objc_ptr(gAxonIconCache[i].image)) {
                 axn_release_remote_obj(gAxonIconCache[i].image);
             }
             gAxonIconCache[i].image = stored;
@@ -1111,7 +1116,7 @@ static void axn_cache_icon_for_bundle(const char *bundle, uint64_t image)
     }
 
     if (gAxonIconCacheCount >= kAxonMaxIconCache) {
-        if (stored != image) axn_release_remote_obj(stored);
+        axn_release_remote_obj(stored);
         return;
     }
     AXNIconCacheEntry *entry = &gAxonIconCache[gAxonIconCacheCount++];
@@ -1136,17 +1141,27 @@ static void axn_cache_request(uint64_t req, uint64_t cell, const char *bundle, c
     int idx = axn_find_cached_request(identifier, req);
     if (idx < 0) {
         if (gAxonRequestCount >= kAxonMaxRequests) return;
+        uint64_t retained = r_msg2(req, "retain", 0, 0, 0, 0);
+        if (!r_last_call_ok() || !r_is_objc_ptr(retained)) {
+            printf("[AXONLITE] request cache retain unknown bundle=%s; skipping\n",
+                   bundle);
+            return;
+        }
         idx = gAxonRequestCount++;
         memset(&gAxonRequests[idx], 0, sizeof(gAxonRequests[idx]));
-        uint64_t retained = r_msg2(req, "retain", 0, 0, 0, 0);
-        gAxonRequests[idx].request = r_is_objc_ptr(retained) ? retained : req;
-        gAxonRequests[idx].retained = r_is_objc_ptr(retained);
+        gAxonRequests[idx].request = retained;
+        gAxonRequests[idx].retained = true;
         gAxonRequests[idx].hiddenByAxon = false;
     } else if (gAxonRequests[idx].request != req && r_is_objc_ptr(req)) {
         uint64_t retained = r_msg2(req, "retain", 0, 0, 0, 0);
+        if (!r_last_call_ok() || !r_is_objc_ptr(retained)) {
+            printf("[AXONLITE] request replacement retain unknown bundle=%s; preserving prior entry\n",
+                   bundle);
+            return;
+        }
         if (gAxonRequests[idx].retained) axn_release_remote_obj(gAxonRequests[idx].request);
-        gAxonRequests[idx].request = r_is_objc_ptr(retained) ? retained : req;
-        gAxonRequests[idx].retained = r_is_objc_ptr(retained);
+        gAxonRequests[idx].request = retained;
+        gAxonRequests[idx].retained = true;
         gAxonRequests[idx].hiddenByAxon = false;
     }
 
