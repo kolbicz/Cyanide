@@ -247,8 +247,9 @@ void settings_unlock_filesystem_async(void (^completion)(BOOL ok, NSString *mess
 // removeFromSwitcher: on success, SpringBoard deletes Cyanide's App Switcher
 // card ~2 s later (meant for shortcut runs that return to the Home Screen).
 // Progress for a running action: move to `fraction` (0…1), animated over
-// `animateOver` seconds (0 = at once), and show `step`. Main queue.
-typedef void (^SettingsProgressBlock)(float fraction, NSString *step, NSTimeInterval animateOver);
+// `animateOver` seconds (0 = at once), and show `step`. `target` is what the
+// action is setting (Location Services: 1 = on, 0 = off). Main queue.
+typedef void (^SettingsProgressBlock)(float fraction, NSString *step, NSTimeInterval animateOver, int target);
 void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                                           SettingsProgressBlock progress,
                                           void (^completion)(BOOL ok, NSString *message,

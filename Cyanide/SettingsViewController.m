@@ -6501,8 +6501,10 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
                                           void (^completion)(BOOL ok, NSString *message,
                                                              NSTimeInterval resultAge))
 {
+    __block int target = desired;   // final once decided under the action lock
     void (^step)(float, NSString *, NSTimeInterval) = ^(float f, NSString *text, NSTimeInterval over) {
-        if (progress) dispatch_async(dispatch_get_main_queue(), ^{ progress(f, text, over); });
+        int t = target;
+        if (progress) dispatch_async(dispatch_get_main_queue(), ^{ progress(f, text, over, t); });
     };
     // Every exit — including the early ones — posts the actions-complete
     // result, so an activity log opened for this request always finishes.
@@ -6525,6 +6527,7 @@ void settings_location_services_set_async(int desired, BOOL removeFromSwitcher,
         // reading — not when the request was made (the state may have
         // changed since, and a toggle must flip what is actually there).
         BOOL enable = desired < 0 ? (locationservices_enabled_local() != 1) : (desired != 0);
+        target = enable ? 1 : 0;
         NSString *verb = enable ? @"Turning on" : @"Turning off";
         // No live or parked kernel access (e.g. after a restart): the full
         // exploit chain runs first (~10 s on A18) — say so.

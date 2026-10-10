@@ -8,6 +8,7 @@
 #import "SceneDelegate.h"
 #import "AppDelegate.h"            // round 31: cyanide_launch_trace
 #import "SettingsViewController.h"
+#import "tweaks/location_services.h"
 #import "installer/InstallProgressViewController.h"
 #import "UpdateChecker.h"
 #import "TaskRop/Exception.h"   // round 30: excport lifecycle gate (early close)
@@ -23,6 +24,8 @@
 @property (nonatomic, assign) BOOL actionInProgress;
 @property (nonatomic, strong) UIView *quietCover;   // shown during a quiet shortcut run
 @property (nonatomic, strong) UIImageView *quietIcon;
+@property (nonatomic, strong) UILabel *quietTitle;
+@property (nonatomic, assign) int quietTarget;   // 1 on, 0 off, -1 unknown
 @property (nonatomic, strong) UILabel *quietStatus;
 @property (nonatomic, strong) UIProgressView *quietProgress;
 // Steps are shown one after another, each for at least kQuietMinStep, so
@@ -123,6 +126,14 @@ static BOOL scene_parse_location_url(NSURL *url, int *desiredOut, BOOL *keepCard
     return YES;
 }
 
+// What a request will most likely set: explicit on/off, or for a toggle the
+// opposite of the current state (the worker decides finally, under its lock).
+static int scene_expected_target(int desired)
+{
+    if (desired >= 0) return desired;
+    return locationservices_enabled_local() == 1 ? 0 : 1;
+}
+
 // Private but long-stable: what the Home gesture does.
 static void scene_suspend_to_home(void)
 {
@@ -148,8 +159,27 @@ static void scene_suspend_to_home(void)
 
 // A small progress screen for quiet shortcut runs instead of Cyanide's UI:
 // icon, title, a short status line and a progress bar.
+// Title/icon for what the run is doing: "Turning Off Location Services"
+// with a crossed-out location while working, "Location Services Off" when done.
+- (void)applyQuietTarget:(int)target done:(BOOL)done {
+    self.quietTarget = target;
+    if (target < 0) { self.quietTitle.text = @"Location Services"; return; }
+    NSString *state = target ? @"On" : @"Off";
+    self.quietTitle.text = done ? [NSString stringWithFormat:@"Location Services %@", state]
+                                : [NSString stringWithFormat:@"Turning %@ Location Services", state];
+    if (!done) {
+        UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:56 weight:UIImageSymbolWeightRegular];
+        self.quietIcon.image = [UIImage systemImageNamed:target ? @"location.fill" : @"location.slash.fill"
+                                       withConfiguration:cfg];
+    }
+}
+
 - (void)showQuietCover {
-    if (self.quietCover) return;
+    [self showQuietCoverForTarget:-1];
+}
+
+- (void)showQuietCoverForTarget:(int)target {
+    if (self.quietCover) { if (target >= 0) [self applyQuietTarget:target done:NO]; return; }
     UIView *cover = [[UIView alloc] initWithFrame:self.window.bounds];
     cover.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     cover.backgroundColor = UIColor.systemBackgroundColor;
@@ -161,6 +191,8 @@ static void scene_suspend_to_home(void)
 
     UILabel *title = [UILabel new];
     title.text = @"Location Services";
+    title.textAlignment = NSTextAlignmentCenter;
+    title.numberOfLines = 0;
     title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
     title.textColor = UIColor.labelColor;
 
@@ -192,6 +224,8 @@ static void scene_suspend_to_home(void)
 
     self.quietCover = cover;
     self.quietIcon = icon;
+    self.quietTitle = title;
+    [self applyQuietTarget:target done:NO];
     self.quietStatus = status;
     self.quietProgress = bar;
 }
@@ -201,8 +235,10 @@ static const double kQuietMinDone = 0.3;    // "Done" visible before leaving
 
 // Progress from the running action, queued: steps appear in order, each for
 // at least kQuietMinStep.
-- (void)updateQuietProgress:(float)fraction step:(NSString *)step over:(NSTimeInterval)over {
+- (void)updateQuietProgress:(float)fraction step:(NSString *)step over:(NSTimeInterval)over target:(int)target {
     if (!self.quietCover) return;
+    // The worker's decision is final (a toggle's guess may have been wrong).
+    if (target >= 0 && target != self.quietTarget) [self applyQuietTarget:target done:NO];
     if (!self.quietSteps) self.quietSteps = [NSMutableArray array];
     [self.quietSteps addObject:@{ @"f": @(fraction), @"t": step ?: @"", @"o": @(over),
                                   @"at": @(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) }];
@@ -263,6 +299,7 @@ static const double kQuietMinDone = 0.3;    // "Done" visible before leaving
         UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:56 weight:UIImageSymbolWeightRegular];
         self.quietIcon.image = [UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:cfg];
         self.quietIcon.tintColor = UIColor.systemGreenColor;
+        if (self.quietTarget >= 0) [self applyQuietTarget:self.quietTarget done:YES];
     }
 }
 
@@ -308,7 +345,8 @@ static const double kQuietMinDone = 0.3;    // "Done" visible before leaving
 - (void)coverEarlyForURL:(NSURL *)url {
     if (!url || ![url.host.lowercaseString isEqualToString:@"location-services"]) return;
     int desired; BOOL keep, showLog; NSString *err = nil;
-    if (scene_parse_location_url(url, &desired, &keep, &showLog, &err) && !showLog) [self showQuietCover];
+    if (scene_parse_location_url(url, &desired, &keep, &showLog, &err) && !showLog)
+        [self showQuietCoverForTarget:scene_expected_target(desired)];
 }
 
 // cyanide://location-services/toggle | /on | /off. Runs only that action.
@@ -344,9 +382,10 @@ static const double kQuietMinDone = 0.3;    // "Done" visible before leaving
     }
     __weak typeof(self) weakSelf = self;
     dispatch_block_t run = ^{
-        SettingsProgressBlock progress = showLog ? nil : ^(float fraction, NSString *step, NSTimeInterval over) {
+        SettingsProgressBlock progress = showLog ? nil : ^(float fraction, NSString *step, NSTimeInterval over, int target) {
             typeof(self) me = weakSelf;
-            if (me && generation == me.actionGeneration) [me updateQuietProgress:fraction step:step over:over];
+            if (me && generation == me.actionGeneration)
+                [me updateQuietProgress:fraction step:step over:over target:target];
         };
         settings_location_services_set_async(desired, !keepCard, progress, ^(BOOL ok, NSString *message,
                                                                     NSTimeInterval resultAge) {
@@ -385,7 +424,7 @@ static const double kQuietMinDone = 0.3;    // "Done" visible before leaving
     if (showLog) {
         [self presentActivityLogThen:run];
     } else {
-        [self showQuietCover];
+        [self showQuietCoverForTarget:scene_expected_target(desired)];
         run();
     }
 }
