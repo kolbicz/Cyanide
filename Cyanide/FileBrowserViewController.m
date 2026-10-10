@@ -58,18 +58,67 @@ void filebrowser_note_filesystem_changed(void)
 // A path that isn't one is rejected by stat BEFORE opening (opening a device
 // node can itself have side effects); O_NONBLOCK keeps a FIFO swapped in
 // meanwhile from blocking the open, and fstat then checks the object
-// actually opened. Returns -1 for anything else.
+// actually opened.  The pre-stat/fstat identity comparison rejects a pathname
+// swap to a different regular object.  This is still not an atomic
+// open-if-regular operation: without a trusted parent descriptor and a
+// no-follow/openat-style primitive, an external writer can race the pathname
+// lookup.  Callers must keep treating the result as a best-effort read guard.
+static int fb_open_regular_classified(NSString *path, int *errorOut, BOOL *notRegularOut)
+{
+    if (errorOut) *errorOut = 0;
+    if (notRegularOut) *notRegularOut = NO;
+    const char *fsPath = path.fileSystemRepresentation;
+    if (!fsPath || !path.length) {
+        if (errorOut) *errorOut = EINVAL;
+        return -1;
+    }
+    struct stat pre;
+    if (stat(fsPath, &pre) != 0) {
+        if (errorOut) *errorOut = errno;
+        return -1;
+    }
+    if (!S_ISREG(pre.st_mode)) {
+        if (notRegularOut) *notRegularOut = YES;
+        return -1;
+    }
+    int fd = open(fsPath, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        if (errorOut) *errorOut = errno;
+        return -1;
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        int saved = errno;
+        close(fd);
+        if (errorOut) *errorOut = saved;
+        return -1;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        if (notRegularOut) *notRegularOut = YES;
+        close(fd);
+        return -1;
+    }
+    if (st.st_dev != pre.st_dev || st.st_ino != pre.st_ino ||
+        (st.st_mode & S_IFMT) != (pre.st_mode & S_IFMT)) {
+        close(fd);
+        if (errorOut) *errorOut = EAGAIN;
+        return -1;
+    }
+    // Regular file: back to blocking reads.  If this fails, do not return a
+    // descriptor that could retain nonblocking FIFO semantics after a race.
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) < 0) {
+        int saved = errno;
+        close(fd);
+        if (errorOut) *errorOut = saved;
+        return -1;
+    }
+    return fd;
+}
+
 int filebrowser_open_regular(NSString *path)
 {
-    struct stat pre;
-    if (stat(path.fileSystemRepresentation, &pre) != 0 || !S_ISREG(pre.st_mode)) return -1;
-    int fd = open(path.fileSystemRepresentation, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-    if (fd < 0) return -1;
-    struct stat st;
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) { close(fd); return -1; }
-    // Regular file: back to blocking reads.
-    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
-    return fd;
+    return fb_open_regular_classified(path, NULL, NULL);
 }
 
 // Reads `fd` from the start to EOF, at most maxBytes. EINTR is retried; any
@@ -823,6 +872,7 @@ typedef NS_ENUM(NSInteger, FBViewMode) { FBViewText, FBViewImage, FBViewHex, FBV
 @property (nonatomic, assign) BOOL sharing;
 @property (nonatomic, assign) BOOL saving;
 @property (nonatomic, assign) int readError;              // errno of a failed read
+@property (nonatomic, copy) NSString *readFailure;        // explicit root/transport classification
 @property (nonatomic, assign) NSUInteger hexBytesPerLine;   // layout of the current hex dump
 @end
 
@@ -878,17 +928,18 @@ static const NSUInteger kFBMaxHexBytes = 64 * 1024;
         NSData *data = nil;
         BOOL truncated = NO, notRegular = NO;
         int readError = 0;
+        NSString *readFailure = nil;
         FBFileIdentity ident = {0};
         if (viaRoot) {
-            data = settings_root_read_file(path, kFBMaxTextBytes, &truncated, NULL);
+            data = settings_root_read_file(path, kFBMaxTextBytes, &truncated, &readFailure);
         } else {
             // Regular files only: a FIFO/device would block or have side
             // effects. Identity comes from the descriptor actually read, and a
             // read error leaves no data (never an "empty, editable" file).
-            int fd = filebrowser_open_regular(path);
+            int openError = 0;
+            int fd = fb_open_regular_classified(path, &openError, &notRegular);
             if (fd < 0) {
-                struct stat st;
-                notRegular = stat(path.fileSystemRepresentation, &st) == 0 && !S_ISREG(st.st_mode);
+                readError = openError;
             } else {
                 ident = filebrowser_identity_fd(fd);
                 int rerr = 0;
@@ -901,6 +952,7 @@ static const NSUInteger kFBMaxHexBytes = 64 * 1024;
             self.truncated = truncated;
             self.notRegular = notRegular;
             self.readError = readError;
+            self.readFailure = readFailure;
             self.identity = ident;
             self.data = data;
             self.modeControl.selectedSegmentIndex = [self bestMode];
@@ -1211,6 +1263,8 @@ static NSUInteger fb_hex_line_chars(NSUInteger digits, NSUInteger per)
     if (self.notRegular)
         [s appendString:@"This is a special file (FIFO, device or socket). Its contents are not read, "
                         @"because opening it could block or have side effects.\n"];
+    else if (self.readFailure.length)
+        [s appendFormat:@"Reading the contents failed: %@\n", self.readFailure];
     else if (!self.data && self.readError)
         [s appendFormat:@"Reading the contents failed: %s.\n", strerror(self.readError)];
     else if (!self.data)
@@ -1227,15 +1281,18 @@ static NSUInteger fb_hex_line_chars(NSUInteger digits, NSUInteger per)
     if (image) { self.imageView.image = image; return; }
 
     NSString *text = nil;
+    if (!self.data) {
+        text = [self infoText];
+    }
     // Hex sizes its own font to the width; everything else uses 12 pt.
     self.textView.font = [UIFont monospacedSystemFontOfSize:kFBHexBaseFont weight:UIFontWeightRegular];
     switch (mode) {
         case FBViewText:
-            text = [self plistText] ?: [self utf8Text] ?: @"Not a text file. Try Hex.";
+            if (self.data) text = [self plistText] ?: [self utf8Text] ?: @"Not a text file. Try Hex.";
             if (self.truncated) text = [text stringByAppendingFormat:@"\n\n… first %@ shown", fb_size_string(kFBMaxTextBytes)];
             break;
-        case FBViewImage: text = @"Not an image (or too large to show)."; break;
-        case FBViewHex:   text = self.data ? [self hexText] : [self infoText]; break;
+        case FBViewImage: if (self.data) text = @"Not an image (or too large to show)."; break;
+        case FBViewHex:   if (self.data) text = [self hexText]; break;
         case FBViewInfo:  text = [self infoText]; break;
     }
     self.textView.text = text;
