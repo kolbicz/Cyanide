@@ -11,6 +11,13 @@
 
 static NSString * const SBLArchiveErrorDomain = @"SnowBoardLiteArchive";
 
+// Decompression-bomb bounds. A theme file is at most a few MiB; anything past
+// these is refused instead of being allocated / written.
+static const uint64_t kSBLMaxEntryBytes = 64ull * 1024 * 1024;    // per extracted file
+static const uint64_t kSBLMaxTotalBytes = 256ull * 1024 * 1024;   // whole archive / decompressed tar
+// liblzma decoder memory limit (dictionary etc., not output). xz -9 needs ~65 MiB.
+static const uint64_t kSBLXZMemLimit    = 128ull * 1024 * 1024;
+
 typedef int (*sbl_inflateInit2_)(z_streamp strm, int windowBits, const char *version, int stream_size);
 typedef int (*sbl_inflate)(z_streamp strm, int flush);
 typedef int (*sbl_inflateEnd)(z_streamp strm);
@@ -169,7 +176,7 @@ static NSData *sbl_decode_xz_data(NSData *input, NSError **error)
     stream.next_in = input.bytes;
     stream.avail_in = input.length;
 
-    sbl_lzma_ret rc = pDecoder(&stream, UINT64_MAX, 0);
+    sbl_lzma_ret rc = pDecoder(&stream, kSBLXZMemLimit, 0);
     if (rc != SBL_LZMA_OK) {
         dlclose(lib);
         sbl_set_error(error, 16, @"Could not initialize xz decoder.");
@@ -184,6 +191,12 @@ static NSData *sbl_decode_xz_data(NSData *input, NSError **error)
         rc = pCode(&stream, SBL_LZMA_FINISH);
         NSUInteger produced = sizeof(buffer) - stream.avail_out;
         if (produced > 0) {
+            if (out.length + produced > kSBLMaxTotalBytes) {
+                pEnd(&stream);
+                dlclose(lib);
+                sbl_set_error(error, 18, @"data.tar.xz decompresses to more than 256 MB.");
+                return nil;
+            }
             [out appendBytes:buffer length:produced];
         }
     } while (rc == SBL_LZMA_OK);
@@ -236,9 +249,13 @@ static BOOL sbl_extract_zip(NSData *zip, NSString *destination, NSError **error)
     uint32_t cdOffset = sbl_le32(b + eocd + 16);
     NSUInteger p = cdOffset;
     NSUInteger extracted = 0;
+    uint64_t totalBytes = 0;
 
     for (uint16_t i = 0; i < count; i++) {
-        if (p + 46 > len || sbl_le32(b + p) != 0x02014b50) break;
+        if (p + 46 > len || sbl_le32(b + p) != 0x02014b50) {
+            sbl_set_error(error, 23, @"ZIP central directory is malformed.");
+            return NO;
+        }
         uint16_t method = sbl_le16(b + p + 10);
         uint32_t compSize = sbl_le32(b + p + 20);
         uint32_t uncompSize = sbl_le32(b + p + 24);
@@ -246,7 +263,10 @@ static BOOL sbl_extract_zip(NSData *zip, NSString *destination, NSError **error)
         uint16_t extraLen = sbl_le16(b + p + 30);
         uint16_t commentLen = sbl_le16(b + p + 32);
         uint32_t localOff = sbl_le32(b + p + 42);
-        if (p + 46 + nameLen + extraLen + commentLen > len) break;
+        if (p + 46 + nameLen + extraLen + commentLen > len) {
+            sbl_set_error(error, 23, @"ZIP central directory is malformed.");
+            return NO;
+        }
 
         NSString *name = [[NSString alloc] initWithBytes:b + p + 46
                                                   length:nameLen
@@ -272,6 +292,13 @@ static BOOL sbl_extract_zip(NSData *zip, NSString *destination, NSError **error)
 
         NSString *outPath = sbl_safe_output_path(destination, name);
         if (!outPath) continue;
+
+        uint64_t entryBytes = (method == 0) ? compSize : uncompSize;
+        if (entryBytes > kSBLMaxEntryBytes || totalBytes + entryBytes > kSBLMaxTotalBytes) {
+            sbl_set_error(error, 24, @"ZIP contains a file larger than 64 MB or more than 256 MB in total.");
+            return NO;
+        }
+        totalBytes += entryBytes;
 
         NSData *payload = [NSData dataWithBytes:b + dataOff length:compSize];
         NSData *fileData = nil;
@@ -300,6 +327,7 @@ static BOOL sbl_extract_tar(NSData *tar, NSString *destination, NSError **error)
     NSUInteger len = tar.length;
     NSUInteger p = 0;
     NSUInteger extracted = 0;
+    uint64_t totalBytes = 0;
 
     while (p + 512 <= len) {
         const uint8_t *h = b + p;
@@ -320,10 +348,23 @@ static BOOL sbl_extract_tar(NSData *tar, NSString *destination, NSError **error)
         NSUInteger size = (NSUInteger)strtoull(sizeBuf, NULL, 8);
         char type = h[156];
         NSUInteger dataOff = p + 512;
+        // size <= len checked first so the round-up below cannot wrap.
+        if (size > len - dataOff) {
+            sbl_set_error(error, 31, @"TAR entry runs past the end of the archive.");
+            return NO;
+        }
         NSUInteger next = dataOff + ((size + 511) & ~((NSUInteger)511));
-        if (next > len) break;
+        if (next > len) {
+            sbl_set_error(error, 31, @"TAR entry runs past the end of the archive.");
+            return NO;
+        }
 
         if (type == '0' || type == '\0') {
+            if (size > kSBLMaxEntryBytes || totalBytes + size > kSBLMaxTotalBytes) {
+                sbl_set_error(error, 32, @"TAR contains a file larger than 64 MB or more than 256 MB in total.");
+                return NO;
+            }
+            totalBytes += size;
             NSString *outPath = sbl_safe_output_path(destination, name);
             if (outPath) {
                 NSData *data = [NSData dataWithBytes:b + dataOff length:size];
@@ -379,6 +420,11 @@ static BOOL sbl_extract_deb(NSData *deb, NSString *destination, NSError **error)
         }
         const uint8_t *b = dataTarGz.bytes;
         uint32_t outSize = sbl_le32(b + dataTarGz.length - 4);
+        // ISIZE sizes the output buffer up front, so bound it before allocating.
+        if (outSize > kSBLMaxTotalBytes) {
+            sbl_set_error(error, 42, @"data.tar.gz decompresses to more than 256 MB.");
+            return NO;
+        }
         NSData *tar = sbl_inflate_data(dataTarGz, outSize, MAX_WBITS + 16, error);
         return tar ? sbl_extract_tar(tar, destination, error) : NO;
     }

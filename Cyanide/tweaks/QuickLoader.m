@@ -504,6 +504,13 @@ bool quickloader_run_js_string(NSString *jsCode) {
                 log_user("[QuickLoader] dz_zero_system_file_page missing path.\n");
                 return @(NO);
             }
+            // Only the Hide Home Bar asset: this zeroes a page of a system
+            // file in the page cache, so a script must not aim it elsewhere.
+            if (![path isEqualToString:kQuickLoaderHideHomeBarMaterialKitAssets]) {
+                log_user("[QuickLoader] dz_zero_system_file_page refused for %s (not allowlisted).\n",
+                         path.UTF8String);
+                return @(NO);
+            }
             uint64_t offset = offsetValue ? js_to_uint64(offsetValue) : 0;
             log_user("[QuickLoader] Stable page-zero request: %s offset=%llu\n",
                      path.UTF8String,

@@ -291,13 +291,87 @@ static NSMutableURLRequest *repotweaks_uncached_request(NSString *urlString, NST
     return request;
 }
 
-static NSURLSession *repotweaks_uncached_session(NSTimeInterval timeout) {
+static NSURLSessionConfiguration *repotweaks_uncached_configuration(NSTimeInterval timeout) {
     NSURLSessionConfiguration *cfg = NSURLSessionConfiguration.ephemeralSessionConfiguration;
     cfg.URLCache = nil;
     cfg.requestCachePolicy = NSURLRequestReloadIgnoringLocalAndRemoteCacheData;
     cfg.timeoutIntervalForRequest = timeout > 0 ? timeout : 20.0;
     cfg.timeoutIntervalForResource = timeout > 0 ? timeout : 20.0;
-    return [NSURLSession sessionWithConfiguration:cfg];
+    return cfg;
+}
+
+// Size-bounded fetch: a completion-handler data task buffers the whole body
+// before we can look at it, so a hostile source could make us hold an
+// arbitrarily large response. This delegate refuses up front when the
+// declared Content-Length exceeds the cap, and cancels mid-stream once the
+// received bytes do (Content-Length may be absent or wrong). Callers keep
+// their post-download length check.
+@interface RepoTweaksBoundedFetch : NSObject <NSURLSessionDataDelegate>
+@property (nonatomic, assign) NSUInteger maxBytes;
+@property (nonatomic, strong) NSMutableData *data;
+@property (nonatomic, strong) NSURLResponse *response;
+@property (nonatomic, assign) BOOL tooLarge;
+@property (nonatomic, copy) void (^handler)(NSData *data, NSURLResponse *response, NSError *error);
+@end
+
+@implementation RepoTweaksBoundedFetch
+
+- (void)URLSession:(NSURLSession *)session
+          dataTask:(NSURLSessionDataTask *)dataTask
+didReceiveResponse:(NSURLResponse *)response
+ completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
+    self.response = response;
+    long long expected = response.expectedContentLength;
+    if (expected != NSURLResponseUnknownLength && expected > (long long)self.maxBytes) {
+        self.tooLarge = YES;
+        completionHandler(NSURLSessionResponseCancel);
+        return;
+    }
+    completionHandler(NSURLSessionResponseAllow);
+}
+
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
+    if (self.tooLarge) return;
+    if (!self.data) self.data = [NSMutableData data];
+    if (self.data.length + data.length > self.maxBytes) {
+        self.tooLarge = YES;
+        self.data = nil;
+        [dataTask cancel];
+        return;
+    }
+    [self.data appendData:data];
+}
+
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+    void (^handler)(NSData *, NSURLResponse *, NSError *) = self.handler;
+    self.handler = nil;
+    if (!handler) return;
+    if (self.tooLarge) {
+        NSString *desc = [NSString stringWithFormat:@"Response is larger than the %lu KB limit.",
+                          (unsigned long)(self.maxBytes / 1024)];
+        handler(nil, self.response,
+                [NSError errorWithDomain:@"RepoTweaks" code:413
+                                userInfo:@{NSLocalizedDescriptionKey: desc}]);
+        return;
+    }
+    handler(error ? nil : (self.data ?: [NSData data]), self.response, error);
+}
+
+@end
+
+// Same call shape as -dataTaskWithRequest:completionHandler: (handler runs on
+// the session's background delegate queue), with the body capped at maxBytes.
+static void repotweaks_bounded_fetch(NSURLRequest *request, NSTimeInterval timeout, NSUInteger maxBytes,
+                                     void (^handler)(NSData *data, NSURLResponse *response, NSError *error)) {
+    RepoTweaksBoundedFetch *fetch = [RepoTweaksBoundedFetch new];
+    fetch.maxBytes = maxBytes;
+    fetch.handler = handler;
+    // The session retains its delegate until invalidated.
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:repotweaks_uncached_configuration(timeout)
+                                                          delegate:fetch
+                                                     delegateQueue:nil];
+    [[session dataTaskWithRequest:request] resume];
+    [session finishTasksAndInvalidate];
 }
 
 static NSDictionary *repotweaks_sanitized_tweak(id raw, NSString **errorMessage) {
@@ -614,6 +688,13 @@ bool repotweaks_run_isolated_js(NSString *tweakID, NSString *tweakName, NSString
                 log_user("[RepoTweaks][%s] dz_zero_system_file_page missing path.\n", safeName.UTF8String);
                 return @(NO);
             }
+            // Only the Hide Home Bar asset: this zeroes a page of a system
+            // file in the page cache, so a script must not aim it elsewhere.
+            if (![path isEqualToString:kRepoTweaksHideHomeBarMaterialKitAssets]) {
+                log_user("[RepoTweaks][%s] dz_zero_system_file_page refused for %s (not allowlisted).\n",
+                         safeName.UTF8String, path.UTF8String);
+                return @(NO);
+            }
             uint64_t offset = offsetValue ? repo_js_to_uint64(offsetValue) : 0;
             log_user("[RepoTweaks][%s] Stable page-zero request: %s offset=%llu\n",
                      safeName.UTF8String,
@@ -806,7 +887,11 @@ bool repotweaks_apply_in_session(void) {
     return executedAny;
 }
 
-void repotweaks_refresh_repo(NSString *repoURL, void (^completion)(BOOL success, NSString *message)) {
+// addIfMissing: YES only for an explicit Add Source. A refresh never puts a
+// URL (back) into RepoTweaksURLs, and drops its result if the source was
+// removed while the fetch was in flight.
+static void repotweaks_fetch_repo(NSString *repoURL, BOOL addIfMissing,
+                                  void (^completion)(BOOL success, NSString *message)) {
     void (^finish)(BOOL, NSString *) = ^(BOOL success, NSString *message) {
         if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(success, message ?: @""); });
     };
@@ -827,9 +912,7 @@ void repotweaks_refresh_repo(NSString *repoURL, void (^completion)(BOOL success,
         return;
     }
 
-    NSURLSession *session = repotweaks_uncached_session(20.0);
-    [[session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        [session finishTasksAndInvalidate];
+    repotweaks_bounded_fetch(request, 20.0, kRepoTweaksMaxRepoBytes, ^(NSData *data, NSURLResponse *response, NSError *error) {
         if (error || !data) {
             finish(NO, error.localizedDescription ?: @"Download failed.");
             return;
@@ -860,55 +943,74 @@ void repotweaks_refresh_repo(NSString *repoURL, void (^completion)(BOOL success,
             return;
         }
 
-        NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-        NSMutableDictionary *caches = [repotweaks_saved_caches(d) mutableCopy];
-        NSDictionary *oldRepo = [caches[repoURL] isKindOfClass:NSDictionary.class] ? caches[repoURL] : nil;
-        NSArray *oldTweaks = [oldRepo[@"tweaks"] isKindOfClass:NSArray.class] ? oldRepo[@"tweaks"] : @[];
-        NSMutableDictionary<NSString *, NSString *> *oldVersions = [NSMutableDictionary dictionary];
-        for (id t in oldTweaks) {
-            if ([t isKindOfClass:NSDictionary.class]) {
-                NSString *tid = repotweaks_string_or_empty(t[@"id"]);
-                NSString *tv = repotweaks_string_or_empty(t[@"version"]);
-                if (tid.length > 0) oldVersions[tid] = tv;
+        // Persist on main: source add/delete and the other refreshes (refresh
+        // all runs them in parallel) read-modify-write the same defaults
+        // dictionaries, so serialize them all there.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+            NSMutableArray *urls = [[repotweaks_saved_urls(d) mutableCopy] ?: [NSMutableArray array] mutableCopy];
+            if (![urls containsObject:repoURL]) {
+                if (!addIfMissing) {
+                    finish(NO, @"Source was removed during refresh.");
+                    return;
+                }
+                [urls addObject:repoURL];
+                [d setObject:urls forKey:@"RepoTweaksURLs"];
             }
-        }
 
-        NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-        for (NSDictionary *tweak in sanitized[@"tweaks"]) {
-            NSString *tid = repotweaks_string_or_empty(tweak[@"id"]);
-            NSString *tv = repotweaks_string_or_empty(tweak[@"version"]);
-            if (tid.length == 0) continue;
-            NSString *seenKey = [NSString stringWithFormat:@"RepoTweakSeen_%@", repotweaks_storage_key(repoURL, tid)];
-            NSString *oldV = oldVersions[tid];
-            if (!oldV || (tv.length > 0 && ![tv isEqualToString:oldV])) {
-                [d setDouble:now forKey:seenKey];
-            } else if ([d doubleForKey:seenKey] == 0) {
-                [d setDouble:now forKey:seenKey];
+            NSMutableDictionary *caches = [repotweaks_saved_caches(d) mutableCopy];
+            NSDictionary *oldRepo = [caches[repoURL] isKindOfClass:NSDictionary.class] ? caches[repoURL] : nil;
+            NSArray *oldTweaks = [oldRepo[@"tweaks"] isKindOfClass:NSArray.class] ? oldRepo[@"tweaks"] : @[];
+            NSMutableDictionary<NSString *, NSString *> *oldVersions = [NSMutableDictionary dictionary];
+            for (id t in oldTweaks) {
+                if ([t isKindOfClass:NSDictionary.class]) {
+                    NSString *tid = repotweaks_string_or_empty(t[@"id"]);
+                    NSString *tv = repotweaks_string_or_empty(t[@"version"]);
+                    if (tid.length > 0) oldVersions[tid] = tv;
+                }
             }
-        }
 
-        caches[repoURL] = sanitized;
-        [d setObject:caches forKey:@"RepoTweaksCaches"];
+            NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+            for (NSDictionary *tweak in sanitized[@"tweaks"]) {
+                NSString *tid = repotweaks_string_or_empty(tweak[@"id"]);
+                NSString *tv = repotweaks_string_or_empty(tweak[@"version"]);
+                if (tid.length == 0) continue;
+                NSString *seenKey = [NSString stringWithFormat:@"RepoTweakSeen_%@", repotweaks_storage_key(repoURL, tid)];
+                NSString *oldV = oldVersions[tid];
+                if (!oldV || (tv.length > 0 && ![tv isEqualToString:oldV])) {
+                    [d setDouble:now forKey:seenKey];
+                } else if ([d doubleForKey:seenKey] == 0) {
+                    [d setDouble:now forKey:seenKey];
+                }
+            }
 
-        NSMutableArray *urls = [[repotweaks_saved_urls(d) mutableCopy] ?: [NSMutableArray array] mutableCopy];
-        if (![urls containsObject:repoURL]) [urls addObject:repoURL];
-        [d setObject:urls forKey:@"RepoTweaksURLs"];
-        [d synchronize];
+            caches[repoURL] = sanitized;
+            [d setObject:caches forKey:@"RepoTweaksCaches"];
+            [d synchronize];
 
-        NSArray *tweaks = sanitized[@"tweaks"];
-        dispatch_group_t group = dispatch_group_create();
-        __block BOOL scriptsOK = YES;
-        for (NSDictionary *tweak in tweaks) {
-            dispatch_group_enter(group);
-            repotweaks_download_script(repoURL, tweak[@"id"], tweak[@"scriptURL"], ^(BOOL success) {
-                if (!success) scriptsOK = NO;
-                dispatch_group_leave(group);
+            NSArray *tweaks = sanitized[@"tweaks"];
+            dispatch_group_t group = dispatch_group_create();
+            __block BOOL scriptsOK = YES;
+            for (NSDictionary *tweak in tweaks) {
+                dispatch_group_enter(group);
+                repotweaks_download_script(repoURL, tweak[@"id"], tweak[@"scriptURL"], ^(BOOL success) {
+                    if (!success) scriptsOK = NO;
+                    dispatch_group_leave(group);
+                });
+            }
+            dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+                finish(scriptsOK, scriptsOK ? @"Refreshed." : @"Refreshed, but one or more scripts failed to download.");
             });
-        }
-        dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-            finish(scriptsOK, scriptsOK ? @"Refreshed." : @"Refreshed, but one or more scripts failed to download.");
         });
-    }] resume];
+    });
+}
+
+void repotweaks_refresh_repo(NSString *repoURL, void (^completion)(BOOL success, NSString *message)) {
+    repotweaks_fetch_repo(repoURL, NO, completion);
+}
+
+void repotweaks_add_repo(NSString *repoURL, void (^completion)(BOOL success, NSString *message)) {
+    repotweaks_fetch_repo(repoURL, YES, completion);
 }
 
 void repotweaks_download_script(NSString *repoURL, NSString *tweakId, NSString *scriptURL, void (^completion)(BOOL success)) {
@@ -931,9 +1033,7 @@ void repotweaks_download_script(NSString *repoURL, NSString *tweakId, NSString *
         return;
     }
 
-    NSURLSession *session = repotweaks_uncached_session(20.0);
-    [[session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        [session finishTasksAndInvalidate];
+    repotweaks_bounded_fetch(request, 20.0, kRepoTweaksMaxScriptBytes, ^(NSData *data, NSURLResponse *response, NSError *error) {
         if (error || !data) {
             finish(NO);
             return;
@@ -965,7 +1065,7 @@ void repotweaks_download_script(NSString *repoURL, NSString *tweakId, NSString *
         repotweaks_seed_default_values_for_script(d, repoURL, tweakId, jsCode);
         [d synchronize];
         finish(YES);
-    }] resume];
+    });
 }
 
 BOOL repotweaks_download_script_sync(NSString *repoURL,

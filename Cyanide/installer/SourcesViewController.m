@@ -537,7 +537,7 @@ static UIColor *category_color(NSString *cat)
     }];
     [alert addAction:[UIAlertAction actionWithTitle:@"Add" style:UIAlertActionStyleDefault handler:^(UIAlertAction *_) {
         NSString *url = alert.textFields.firstObject.text ?: @"";
-        repotweaks_refresh_repo(url, ^(BOOL success, NSString *message) {
+        repotweaks_add_repo(url, ^(BOOL success, NSString *message) {
             [self reloadSources];
             [[NSNotificationCenter defaultCenter] postNotificationName:RepoTweaksDidRefreshNotification object:nil];
             if (!success) [self presentError:message ?: @"Could not refresh that source."];

@@ -6,6 +6,7 @@
 #import "PackageQueue.h"
 #import "PackageCatalog.h"
 #import "../SettingsViewController.h"
+#import "../LogTextView.h"
 #import "../tweaks/QuickLoader.h"
 #import "../tweaks/RepoTweaks.h"
 
@@ -14,6 +15,10 @@ NSString * const PackageQueueDidChangeNotification = @"PackageQueueDidChangeNoti
 @interface PackageQueue ()
 @property (nonatomic, strong) NSMutableArray<Package *> *installs;
 @property (nonatomic, strong) NSMutableArray<Package *> *uninstalls;
+// YES from commit until the queue's own apply work is done (handed to
+// settings_run_pending_actions, which has its own actions lock, or the
+// completion notification is posted). A second commit meanwhile is refused.
+@property (nonatomic, assign) BOOL isCommitting;
 @end
 
 static BOOL PackageIsThemer(Package *package)
@@ -350,6 +355,12 @@ static BOOL PackageShouldAutoQueueForApply(Package *package)
 
 - (void)commit
 {
+    if (self.isCommitting) {
+        log_user("[INSTALLER] A queue commit is already running; ignoring this one.\n");
+        return;
+    }
+    self.isCommitting = YES;
+
     NSArray<Package *> *toInstall   = self.queuedInstalls;
     NSArray<Package *> *toUninstall = self.queuedUninstalls;
 
@@ -363,11 +374,12 @@ static BOOL PackageShouldAutoQueueForApply(Package *package)
     NSMutableArray<Package *> *heavyInstalls   = [NSMutableArray array];
     NSMutableArray<Package *> *heavyUninstalls = [NSMutableArray array];
     BOOL needsRunActions = NO;
+    __block BOOL allApplied = YES;
 
     for (Package *pkg in toInstall) {
         if (pkg.kind == PackageInstallKindToggle) {
             needsRunActions = YES;
-            [pkg applyCommittedState:YES];
+            allApplied = [pkg applyCommittedState:YES] && allApplied;
         } else if (pkg.kind == PackageInstallKindRepoTweak) {
             needsRunActions = YES;
             [heavyInstalls addObject:pkg];
@@ -378,7 +390,7 @@ static BOOL PackageShouldAutoQueueForApply(Package *package)
     for (Package *pkg in toUninstall) {
         if (pkg.kind == PackageInstallKindToggle) {
             needsRunActions = YES;
-            [pkg applyCommittedState:NO];
+            allApplied = [pkg applyCommittedState:NO] && allApplied;
         } else if (pkg.kind == PackageInstallKindRepoTweak) {
             needsRunActions = YES;
             [heavyUninstalls addObject:pkg];
@@ -394,31 +406,43 @@ static BOOL PackageShouldAutoQueueForApply(Package *package)
     BOOL hasHeavy = (heavyInstalls.count + heavyUninstalls.count) > 0;
 
     if (!hasHeavy) {
-        if (needsRunActions) {
-            settings_run_pending_actions();
-        } else {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [[NSNotificationCenter defaultCenter]
-                    postNotificationName:kSettingsActionsDidCompleteNotification
-                                  object:nil];
-            });
-        }
+        [self finishCommitRunningActions:needsRunActions allApplied:allApplied];
         return;
     }
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        for (Package *pkg in heavyInstalls)   [pkg applyCommittedState:YES];
-        for (Package *pkg in heavyUninstalls) [pkg applyCommittedState:NO];
+        for (Package *pkg in heavyInstalls)   allApplied = [pkg applyCommittedState:YES] && allApplied;
+        for (Package *pkg in heavyUninstalls) allApplied = [pkg applyCommittedState:NO] && allApplied;
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (needsRunActions) {
-                settings_run_pending_actions();
-            } else {
-                [[NSNotificationCenter defaultCenter]
-                    postNotificationName:kSettingsActionsDidCompleteNotification
-                                  object:nil];
-            }
+            [self finishCommitRunningActions:needsRunActions allApplied:allApplied];
         });
+    });
+}
+
+// Main queue. Clears isCommitting, then either hands off to the actions run
+// (which posts its own completion) or posts completion directly — with
+// success = NO when any package failed to apply, since the progress screen
+// treats a missing success key as success.
+- (void)finishCommitRunningActions:(BOOL)needsRunActions allApplied:(BOOL)allApplied
+{
+    self.isCommitting = NO;
+    if (needsRunActions) {
+        if (!allApplied) {
+            log_user("[INSTALLER] Some queued packages failed to apply (see above); applying the rest.\n");
+        }
+        settings_run_pending_actions();
+        return;
+    }
+    NSDictionary *userInfo = allApplied ? nil : @{
+        kSettingsActionsDidCompleteSuccessKey: @NO,
+        kSettingsActionsDidCompleteMessageKey: @"Some packages failed to apply — check the log above.",
+    };
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter]
+            postNotificationName:kSettingsActionsDidCompleteNotification
+                          object:nil
+                        userInfo:userInfo];
     });
 }
 

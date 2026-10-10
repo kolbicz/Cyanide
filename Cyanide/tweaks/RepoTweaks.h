@@ -18,8 +18,12 @@ bool repotweaks_sources_enabled(void);
 // Runs all enabled tweaks during the RUN 4/4 sequence
 bool repotweaks_apply_in_session(void);
 
-// Fetches the JSON from the given URL and caches it
+// Fetches the JSON from the given URL and caches it. Refresh only updates an
+// existing source: if the URL is not (or no longer) in the saved source list
+// the result is dropped and completion reports failure. Use
+// repotweaks_add_repo for a user-initiated Add Source. Completion runs on main.
 void repotweaks_refresh_repo(NSString *repoURL, void (^completion)(BOOL success, NSString *message));
+void repotweaks_add_repo(NSString *repoURL, void (^completion)(BOOL success, NSString *message));
 void repotweaks_seed_default_repos(void);
 
 NSString *repotweaks_storage_key(NSString *repoURL, NSString *tweakId);

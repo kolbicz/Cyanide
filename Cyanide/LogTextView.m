@@ -20,8 +20,10 @@
 #include <time.h>
 #import "kexploit/machine_info.h"
 
-#define LOG_MAX_LINES   50000
-#define LOG_TRIM_TO     30000
+// 10000 x 2560 B = ~25 MB of static ring (was 50000 lines = ~128 MB). Full
+// history is in the chain-*.log / live.log files; the ring only backs the view.
+#define LOG_MAX_LINES   10000
+#define LOG_TRIM_TO     6000
 #define LOG_LINE_SIZE   2560
 
 static char            log_buf[LOG_MAX_LINES][LOG_LINE_SIZE];
@@ -316,7 +318,10 @@ static void log_prune_old_sessions(NSInteger keep) {
                              options:0
                                error:nil];
         if (!files) return;
-        NSPredicate *isLog = [NSPredicate predicateWithFormat:@"pathExtension = 'log'"];
+        // Only chain session files: live.log (always newest) and any user .log
+        // must not be shared as "the session" nor counted/pruned against keep.
+        NSPredicate *isLog = [NSPredicate predicateWithFormat:
+            @"pathExtension = 'log' AND lastPathComponent BEGINSWITH 'chain-'"];
         NSArray<NSURL *> *logs = [files filteredArrayUsingPredicate:isLog];
         if (logs.count <= (NSUInteger)keep) return;
         NSArray<NSURL *> *sorted = [logs sortedArrayUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) {
@@ -511,7 +516,10 @@ NSString *log_most_recent_session_path(void) {
                              options:0
                                error:nil];
         if (!files) return nil;
-        NSPredicate *isLog = [NSPredicate predicateWithFormat:@"pathExtension = 'log'"];
+        // Only chain session files: live.log (always newest) and any user .log
+        // must not be shared as "the session" nor counted/pruned against keep.
+        NSPredicate *isLog = [NSPredicate predicateWithFormat:
+            @"pathExtension = 'log' AND lastPathComponent BEGINSWITH 'chain-'"];
         NSArray<NSURL *> *logs = [files filteredArrayUsingPredicate:isLog];
         if (logs.count == 0) return nil;
         NSArray<NSURL *> *sorted = [logs sortedArrayUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) {

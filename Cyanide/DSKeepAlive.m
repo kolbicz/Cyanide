@@ -80,7 +80,16 @@ static BOOL ds_keepalive_ensure_wav(NSURL *url)
     return YES;
 }
 
-// Arm the AVAudioSession + player. Assumes the global lock is held.
+static void ds_keepalive_deactivate_session(void)
+{
+    [[AVAudioSession sharedInstance] setActive:NO
+                                    withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
+                                          error:nil];
+}
+
+// Arm the AVAudioSession + player. Assumes the global lock is held. On a
+// failure after the session was activated it is deactivated again, so a
+// failed arm doesn't leave an active playback session with nothing playing.
 static BOOL ds_keepalive_arm_locked(void)
 {
     NSError *error = nil;
@@ -98,11 +107,15 @@ static BOOL ds_keepalive_arm_locked(void)
 
     if (!gKeepAlivePlayer) {
         NSURL *url = ds_keepalive_wav_url();
-        if (!ds_keepalive_ensure_wav(url)) return NO;
+        if (!ds_keepalive_ensure_wav(url)) {
+            ds_keepalive_deactivate_session();
+            return NO;
+        }
 
         AVAudioPlayer *player = [[AVAudioPlayer alloc] initWithContentsOfURL:url error:&error];
         if (!player) {
             log_user("[WARN] Keep Alive audio player failed: %s\n", error.localizedDescription.UTF8String);
+            ds_keepalive_deactivate_session();
             return NO;
         }
         player.numberOfLoops = -1;
@@ -113,6 +126,7 @@ static BOOL ds_keepalive_arm_locked(void)
 
     if (!gKeepAlivePlayer.isPlaying && ![gKeepAlivePlayer play]) {
         log_user("[WARN] Keep Alive audio player refused to start.\n");
+        ds_keepalive_deactivate_session();
         return NO;
     }
     return YES;
@@ -206,13 +220,14 @@ void ds_keepalive_apply_enabled(BOOL enabled)
 {
     @synchronized (ds_keepalive_lock()) {
         if (!enabled) {
-            if (gKeepAlivePlayer || gKeepAliveRunning) {
-                [gKeepAlivePlayer stop];
-                gKeepAlivePlayer = nil;
-                gKeepAliveRunning = NO;
-                [[AVAudioSession sharedInstance] setActive:NO
-                                                withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
-                                                      error:nil];
+            BOOL wasArmed = gKeepAlivePlayer || gKeepAliveRunning;
+            [gKeepAlivePlayer stop];
+            gKeepAlivePlayer = nil;
+            gKeepAliveRunning = NO;
+            // Unconditional: an arm that failed part-way (player never built)
+            // may still have left the session active.
+            ds_keepalive_deactivate_session();
+            if (wasArmed) {
                 log_user("[APP] Keep Alive disabled; app-side tweak feeds can pause when minimized.\n");
             }
             return;

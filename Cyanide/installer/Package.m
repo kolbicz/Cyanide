@@ -226,7 +226,7 @@ static BOOL PackageRepoScriptRequiresNativeBridge(NSString *rawScript)
 
 // Called by PackageQueue.commit — writes the persisted state without
 // triggering settings_run_actions itself (the queue does that once).
-- (void)applyCommittedState:(BOOL)installed
+- (BOOL)applyCommittedState:(BOOL)installed
 {
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     switch (self.kind) {
@@ -235,36 +235,36 @@ static BOOL PackageRepoScriptRequiresNativeBridge(NSString *rawScript)
                 [d setBool:installed forKey:self.enabledKey];
                 [d synchronize];
             }
-            return;
+            return YES;
         case PackageInstallKindNanoRegistry:
             if (settings_apply_nano_registry_now(installed)) {
                 log_user("[INSTALLER] Watch pairing override %s.\n",
                          installed ? "applied" : "removed");
-            } else {
-                log_user("[INSTALLER] Watch pairing override %s failed; state was not changed.\n",
-                         installed ? "apply" : "remove");
+                return YES;
             }
-            return;
+            log_user("[INSTALLER] Watch pairing override %s failed; state was not changed.\n",
+                     installed ? "apply" : "remove");
+            return NO;
         case PackageInstallKindCallRecordingSound:
             if (settings_apply_call_recording_sound_disabled(installed)) {
                 log_user("[INSTALLER] Call recording disclosure sound %s.\n",
                          installed ? "silenced" : "restored");
-            } else {
-                log_user("[INSTALLER] Call recording disclosure sound %s failed.\n",
-                         installed ? "silence" : "restore");
+                return YES;
             }
-            return;
+            log_user("[INSTALLER] Call recording disclosure sound %s failed.\n",
+                     installed ? "silence" : "restore");
+            return NO;
         case PackageInstallKindHideHomeBar:
             if (settings_apply_hide_home_bar_hidden(installed)) {
                 log_user("[INSTALLER] Home bar %s.\n",
                          installed ? "hidden; respring to apply" : "restore queued; respring to apply");
-            } else {
-                log_user("[INSTALLER] Home bar %s failed.\n",
-                         installed ? "hide" : "restore");
+                return YES;
             }
-            return;
+            log_user("[INSTALLER] Home bar %s failed.\n",
+                     installed ? "hide" : "restore");
+            return NO;
         case PackageInstallKindDirectTool:
-            return;
+            return YES;
         case PackageInstallKindRepoTweak: {
             NSString *versionKey = repotweaks_installed_version_key(self.repoURL, self.repoTweakID);
             if (!installed) {
@@ -290,7 +290,7 @@ static BOOL PackageRepoScriptRequiresNativeBridge(NSString *rawScript)
                     [d synchronize];
                     log_user("[INSTALLER] Native repo package removal prepared: %s\n", self.name.UTF8String);
                 }
-                return;
+                return YES;
             }
 
             if (!installed) {
@@ -301,7 +301,7 @@ static BOOL PackageRepoScriptRequiresNativeBridge(NSString *rawScript)
                     [d synchronize];
                     log_user("[INSTALLER] Removed QuickLoader repo tweak: %s\n", self.name.UTF8String);
                 }
-                return;
+                return YES;
             }
 
             NSString *downloadMessage = nil;
@@ -313,19 +313,19 @@ static BOOL PackageRepoScriptRequiresNativeBridge(NSString *rawScript)
                 log_user("[INSTALLER] Cannot install %s: %s Refresh the source and try again.\n",
                          self.name.UTF8String,
                          (downloadMessage ?: @"could not fetch the latest cache-busted script.").UTF8String);
-                return;
+                return NO;
             }
 
             NSString *rawScript = [d stringForKey:repotweaks_script_defaults_key(self.repoURL, self.repoTweakID)];
             if (rawScript.length == 0) {
                 log_user("[INSTALLER] Cannot install %s: script is missing. Refresh its source first.\n",
                          self.name.UTF8String);
-                return;
+                return NO;
             }
             if (PackageRepoScriptRequiresNativeBridge(rawScript)) {
                 log_user("[INSTALLER] Cannot install %s through QuickLoader: this repo script needs a native injection backend.\n",
                          self.name.UTF8String);
-                return;
+                return NO;
             }
 
             NSDictionary *values = [d dictionaryForKey:repotweaks_values_defaults_key(self.repoURL, self.repoTweakID)] ?: @{};
@@ -337,12 +337,13 @@ static BOOL PackageRepoScriptRequiresNativeBridge(NSString *rawScript)
                 settings_mark_tweak_needs_apply(kSettingsQuickLoaderEnabled);
                 [d synchronize];
                 log_user("[INSTALLER] Pending QuickLoader install prepared: %s\n", self.name.UTF8String);
-            } else {
-                log_user("[INSTALLER] Failed to prepare QuickLoader script for %s.\n", self.name.UTF8String);
+                return YES;
             }
-            return;
+            log_user("[INSTALLER] Failed to prepare QuickLoader script for %s.\n", self.name.UTF8String);
+            return NO;
         }
     }
+    return YES;
 }
 
 @end

@@ -810,7 +810,8 @@ NSString *CyanideNiceBarWeatherSummary(NSInteger code, BOOL chinese)
     self.weatherFetchInFlight = YES;
 
     NSString *unit = self.requestUsesCelsius ? @"celsius" : @"fahrenheit";
-    log_user("[NICEBAR] Weather fetching lat=%.4f lon=%.4f unit=%s.\n",
+    // ~11 km precision is enough to debug; the log is shareable/uploadable.
+    log_user("[NICEBAR] Weather fetching lat=%.1f lon=%.1f unit=%s.\n",
              location.coordinate.latitude,
              location.coordinate.longitude,
              unit.UTF8String);
@@ -826,8 +827,13 @@ NSString *CyanideNiceBarWeatherSummary(NSInteger code, BOOL chinese)
         return;
     }
 
-    [[[NSURLSession sharedSession] dataTaskWithURL:url
-                                 completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+    // Bounded: weatherFetchInFlight blocks further fetches until this
+    // completes, and the shared session's default timeout is 60 s.
+    NSURLRequest *request = [NSURLRequest requestWithURL:url
+                                             cachePolicy:NSURLRequestUseProtocolCachePolicy
+                                         timeoutInterval:15.0];
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request
+                                     completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         (void)response;
         dispatch_async(dispatch_get_main_queue(), ^{
             self.weatherFetchInFlight = NO;

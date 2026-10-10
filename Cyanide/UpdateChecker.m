@@ -7,6 +7,8 @@
 #import "LogTextView.h"   // mirror printf into the chain log
 
 static NSString * const kReleasesAPI             = @"https://api.github.com/repos/kolbicz/cyanide/releases/latest";
+// Opened instead of the feed's html_url when that isn't an https github.com link.
+static NSString * const kReleasesPage            = @"https://github.com/kolbicz/cyanide/releases";
 static NSString * const kUpdateSkippedVersionKey = @"installer.update.skippedVersion";
 static NSString * const kUpdateSnoozeUntilKey    = @"installer.update.snoozeUntil";
 static NSString * const kUpdateLastCheckAtKey    = @"installer.update.lastCheckAt";
@@ -63,6 +65,15 @@ static int compare_versions(NSString *a, NSString *b)
     return 0;
 }
 
+// nil for an HTTP 200; otherwise the failure text.
+static NSString *update_http_failure(NSURLResponse *response)
+{
+    if (![response isKindOfClass:NSHTTPURLResponse.class]) return @"Unexpected response from GitHub.";
+    NSInteger status = ((NSHTTPURLResponse *)response).statusCode;
+    if (status != 200) return [NSString stringWithFormat:@"GitHub returned HTTP %ld.", (long)status];
+    return nil;
+}
+
 - (void)checkForUpdatesIfNeededFrom:(UIViewController *)presenter
 {
     if (!presenter) return;
@@ -102,7 +113,11 @@ static int compare_versions(NSString *a, NSString *b)
           completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error)
     {
         __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (strongSelf) strongSelf.autoCheckInFlight = NO;
+        // The flags are read on main (checkForUpdatesIfNeededFrom:), so only
+        // write them there too.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            strongSelf.autoCheckInFlight = NO;
+        });
 
         if (error || !data) {
             // Don't stamp the timestamp or set the per-process flag — a
@@ -110,6 +125,12 @@ static int compare_versions(NSString *a, NSString *b)
             // should retry.
             printf("[UPDATE] check failed: %s\n",
                    error ? error.localizedDescription.UTF8String : "no data");
+            return;
+        }
+        NSString *httpFailure = update_http_failure(response);
+        if (httpFailure) {
+            // Same as a network failure: rate limit / outage shouldn't burn the gates.
+            printf("[UPDATE] check failed: %s\n", httpFailure.UTF8String);
             return;
         }
         NSError *jsonErr = nil;
@@ -129,7 +150,9 @@ static int compare_versions(NSString *a, NSString *b)
         }
 
         // From here we have a usable response — burn both gates.
-        if (strongSelf) strongSelf.didCompleteAutoCheckThisProcess = YES;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            strongSelf.didCompleteAutoCheckThisProcess = YES;
+        });
         [[NSUserDefaults standardUserDefaults] setObject:[NSDate date] forKey:kUpdateLastCheckAtKey];
 
         if (!strongSelf) return;
@@ -211,6 +234,8 @@ static int compare_versions(NSString *a, NSString *b)
 
         if (error || !data) {
             failureReason = error ? error.localizedDescription : @"No response from GitHub.";
+        } else if ((failureReason = update_http_failure(response))) {
+            // Non-200 (rate limit, outage): don't parse an error body as a release.
         } else {
             NSError *jsonErr = nil;
             id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonErr];
@@ -321,7 +346,14 @@ static int compare_versions(NSString *a, NSString *b)
     [ac addAction:[UIAlertAction actionWithTitle:@"View Release"
                                            style:UIAlertActionStyleDefault
                                          handler:^(UIAlertAction *_) {
+        // Only follow the feed's link to an https github.com page; anything
+        // else falls back to the fixed releases page.
         NSURL *u = [NSURL URLWithString:urlString];
+        if (![u.scheme.lowercaseString isEqualToString:@"https"] ||
+            ![u.host.lowercaseString isEqualToString:@"github.com"]) {
+            printf("[UPDATE] release link is not an https github.com URL; opening releases page\n");
+            u = [NSURL URLWithString:kReleasesPage];
+        }
         if (!u) return;
         [[UIApplication sharedApplication] openURL:u options:@{} completionHandler:nil];
     }]];

@@ -118,7 +118,8 @@ typedef NS_ENUM(NSInteger, PackageInstallKind) {
 
 - (void)install;
 - (void)uninstall;
-- (void)applyCommittedState:(BOOL)installed;
+// Returns NO when the requested state could not be applied (already logged).
+- (BOOL)applyCommittedState:(BOOL)installed;
 - (void)syncRepoTweakOptionsToNativeSettings;
 
 @end

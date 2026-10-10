@@ -629,7 +629,7 @@ static NSArray<NSDictionary *> *settings_repotweaks_tweaks_for_url(NSString *rep
     [alert addAction:[UIAlertAction actionWithTitle:@"Add" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         NSString *url = alert.textFields.firstObject.text;
         if (url.length > 0) {
-            repotweaks_refresh_repo(url, ^(BOOL success, NSString *message) {
+            repotweaks_add_repo(url, ^(BOOL success, NSString *message) {
                 [self updateData];
                 if (!success) {
                     UIAlertController *err = [UIAlertController alertControllerWithTitle:@"Source Failed"
