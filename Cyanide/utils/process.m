@@ -866,7 +866,8 @@ static uint32_t g_pm_rc_track_stride = 0;
 static uint32_t g_pm_rc_lvl_stride = 0;
 static uint32_t g_pm_rc_count = 0;
 
-static bool     g_pm_xpf_tried = false;     // lazy one-shot init_xpf() to bring up ksafe
+static int      g_pm_xpf_attempts = 0;      // init_xpf() tries to bring up ksafe (bounded)
+static uint64_t g_pm_xpf_last_ns = 0;       // when the last try ran
 
 // Memory reads are only possible when the mapped-check (ksafe) is up:
 // they dereference a per-process ledger POINTER, and a stale/wrong one among
@@ -2031,15 +2032,40 @@ int procmgr_calibrate(void) {
     }
     sCalibSkipLogged = false;
 
+    // ksafe (the mapped-address gate) comes up BEFORE any offset discovery:
+    // the sub-calibrators below probe speculative offsets, and an unmapped
+    // read panics the device. Up to 3 tries, at least 10 s apart (it was a
+    // one-shot: one failed bring-up left every later pass ungated).
+    if (!ksafe_available() && g_pm_xpf_attempts < 3) {
+        uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        if (!g_pm_xpf_last_ns || now - g_pm_xpf_last_ns >= 10000000000ULL) {
+            g_pm_xpf_attempts++;
+            g_pm_xpf_last_ns = now;
+            printf("[PROCMGR] bringing up kernel_map snapshot (try %d/3)...\n", g_pm_xpf_attempts);
+            krw_set_nonfatal(true);
+            init_xpf();
+            krw_set_nonfatal(false);
+            printf("[PROCMGR] bring-up done; ksafe_available=%d\n", ksafe_available());
+        }
+    }
+    // Fail closed: without the gate, no speculative discovery this pass.
+    bool discoverySafe = ksafe_available();
+    static bool sNoGateLogged = false;
+    if (!discoverySafe && !sNoGateLogged) {
+        sNoGateLogged = true;
+        printf("[PROCMGR] calibrate: mapped-address gate unavailable — offset discovery "
+               "skipped (CPU/suspend columns stay empty) until it comes up\n");
+    }
+
     // suspend_count offset calibration is independent of the stat calibrations
     // below and manages its own nonfatal window, so run it first (its exit
     // reset would otherwise silently end the window the stages below rely on).
-    if (!g_pm_off_task_suspcount)
+    if (!g_pm_off_task_suspcount && discoverySafe)
         pm_calibrate_suspcount();
     // Same for the bsd_info back-pointer guard: independent, own nonfatal
     // window, capped retries. Arms the TOCTOU check used by every proc->task
     // path in the poll loop (stats / suspend_count / role).
-    pm_calibrate_bsdinfo();
+    if (discoverySafe) pm_calibrate_bsdinfo();
     // App-switcher marking is disabled (see pm_calibrate_task_role) — call once
     // so the tried-flag is set, never per poll.
     if (!g_pm_role_tried)
@@ -2050,15 +2076,6 @@ int procmgr_calibrate(void) {
     // degrade to a failed pass — never crash the app.
     krw_set_nonfatal(true);
 
-    // Lazy one-time ksafe bring-up: snapshots kernel_map's entry list for the
-    // mapped-address safety gate. No kernelcache, no symbols; happens at most
-    // once per session.
-    if (!ksafe_available() && !g_pm_xpf_tried) {
-        g_pm_xpf_tried = true;
-        printf("[PROCMGR] bringing up kernel_map snapshot (one-time)...\n");
-        init_xpf();
-        printf("[PROCMGR] bring-up done; ksafe_available=%d\n", ksafe_available());
-    }
 
     // Log the cache-load ONCE, not every poll. procmgr_calibrate() runs on
     // every process-viewer refresh; a per-poll log line here is one write every
@@ -2097,6 +2114,9 @@ int procmgr_calibrate(void) {
         krw_set_nonfatal(false);
         return 1;
     }
+    // The cached offsets above were checked against our own process only;
+    // discovering new ones probes candidates and needs the gate.
+    if (!discoverySafe) { krw_set_nonfatal(false); return 0; }
     if (!kexploit_krw_ready()) { krw_set_nonfatal(false); return 0; }
 
     uint64_t task = proc_task(proc_self());
