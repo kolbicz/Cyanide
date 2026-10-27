@@ -46,7 +46,6 @@ the Cache Cleaner deletes what you select.
 | --- | --- |
 | **SBCustomizer** | Custom dock, grid, app placement, and page counts |
 | **Home Layout Extras** | Extra home/dock padding and per-icon scaling |
-| **Gravity Lite** | Make home-screen icons fall with physics |
 | **Hide Home Bar** | Hide the bottom home indicator |
 
 ### SpringBoard
@@ -119,6 +118,11 @@ his permission.
 | **App Decrypt** | Make a decrypted IPA of an installed App Store app |
 | **SpringBoard Tools** | Your own tint and blur, or none, for the dock, folders, Control Center, notifications and the app switcher |
 | **Font Overwrite** | Replace the system font, its italic and monospaced variants, or the Lock Screen clock, in memory only; plain fonts are adapted on the device |
+
+### Settings → Gravity Lite
+
+Make home-screen icons fall with physics, steered by tilting the device. Not
+an Installer package: Activate and Deactivate on its Settings page.
 
 ### Settings → System
 

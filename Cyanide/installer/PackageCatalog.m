@@ -120,7 +120,6 @@ static const NSInteger kSecNanoRegistry     = SectionNanoRegistry;
 static const NSInteger kSecSnowBoardLite    = SectionSnowBoardLite;
 static const NSInteger kSecLiveWP           = SectionLiveWP;
 static const NSInteger kSecLocationSim      = SectionLocationSim;
-static const NSInteger kSecGravityLite      = SectionGravityLite;
 static const NSInteger kSecAppSwitcherGrid  = SectionAppSwitcherGrid;
 static const NSInteger kSecFloatingDock     = SectionFloatingDock;
 static const NSInteger kSecFastLockXLite    = SectionFastLockXLite;
@@ -342,26 +341,6 @@ static const NSInteger kSecOTA              = SectionOTA;
                                           isNew:YES];
         lockScreenDuration.settingsSection = kSecLockScreenDuration;
 
-        Package *gravityLite = [[Package alloc] initWithIdentifier:@"com.darksword.gravitylite"
-                                           name:@"Gravity Lite"
-                               shortDescription:@"Make home-screen icons fall with physics"
-                                longDescription:@"Core RemoteCall-only port of Julio Verne's classic Gravity tweak for iOS 26. Applies UIDynamicAnimator gravity, collision bounds, bounce, friction, resistance, optional dock physics, accelerometer steering, shake pulses, restore, and an explosion pulse to the currently visible SpringBoard icon views.\n\nThis is not a full Substrate-style port. Activator/Home-button hooks, drag gestures, and preference-daemon notifications are intentionally left out. Use Settings to tune the core physics and the Restore button to reset the layout."
-                                        version:version
-                                         author:@"Julio Verne / zeroxjf"
-                                       category:@"Home Screen"
-                                     symbolName:@"arrow.down.circle.fill"
-                                           kind:PackageInstallKindToggle
-                                     enabledKey:kSettingsGravityLiteEnabled
-                                          isNew:NO];
-        gravityLite.settingsSection = kSecGravityLite;
-        gravityLite.unstableWarning = @"Beta: RemoteCall-only physics can be reset by SpringBoard relayouts such as page swipes, rotations, folder transitions, or resprings. Use Restore Icon Layout if icons stay displaced.";
-        gravityLite.knownIssues = @[
-            @"To disable, use the App Switcher to return to Cyanide and deactivate Gravity Lite. There is no other way to stop it right now.",
-            @"Touch input does not register on displaced icons yet. Forwarding taps in this environment is a major WIP.",
-            @"Install is slow as hell. WIP. Cyanide has to capture every visible icon and widget before physics start.",
-            @"Page swipes, folder opens, or SpringBoard relayouts may stop the effect. Run Gravity again.",
-        ];
-
         Package *appSwitcherGrid = [[Package alloc] initWithIdentifier:@"com.darksword.appswitchergrid"
                                            name:@"App Switcher Grid"
                                shortDescription:@"Grid-style app switcher"
@@ -513,7 +492,6 @@ static const NSInteger kSecOTA              = SectionOTA;
             niceBarLite,
             sbc,
             layoutExtras,
-            gravityLite,
             powercuff,
 
             disableAppLibrary,
