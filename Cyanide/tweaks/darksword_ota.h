@@ -20,6 +20,10 @@ int darksword_ota_read_disabled(void);
 // write. No-op when nothing is pending or kernel access is not ready.
 void darksword_ota_retry_pending_dir_restore(void);
 
+// Gives this app read/write access to /private/var (launchd token, sandbox
+// patch or a borrowed daemon extension). Needs live kernel access.
+bool darksword_prepare_var_rw(void);
+
 #ifdef __OBJC__
 #import <Foundation/Foundation.h>
 // launchd's disabled.plist for any Daemons-catalog label (daemon_catalog.h).

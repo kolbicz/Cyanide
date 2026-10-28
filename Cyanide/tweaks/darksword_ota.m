@@ -751,6 +751,11 @@ static bool ota_prepare_local_root_rw(void)
     return false;
 }
 
+bool darksword_prepare_var_rw(void)
+{
+    return ota_prepare_local_root_rw();
+}
+
 static int ota_apply_labels(NSMutableDictionary *plist, bool disabled)
 {
     int changed = 0;

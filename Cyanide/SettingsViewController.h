@@ -38,6 +38,7 @@ typedef NS_ENUM(NSInteger, SettingsSection) {
     SectionLockScreenDuration,
     SectionPasscodeTheme,
     SectionFloatingDock,
+    SectionSupervision,
     SectionCount,
 };
 

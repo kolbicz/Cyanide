@@ -33,6 +33,7 @@
 #import "tweaks/darksword_tweaks.h"
 #import "tweaks/darksword_drag.h"
 #import "tweaks/darksword_ota.h"
+#import "tweaks/supervision.h"
 #import "tweaks/darksword_layout.h"
 #import "tweaks/nano_registry.h"
 #import "tweaks/killallapps.h"
@@ -8153,6 +8154,45 @@ void settings_daemons_apply_async(NSDictionary<NSString *, NSNumber *> *changes,
     });
 }
 
+// Supervision page. op: 1 activate, 0 deactivate, -1 read. Kernel access as
+// for the Daemons screen. completion(ok, state, message) on main; state is a
+// SupervisionState after a read (or the state after a change).
+static void settings_supervision_async(int op, BOOL allowFullExploit,
+                                       void (^completion)(BOOL ok, int state, NSString *message))
+{
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        BOOL ok = NO;
+        int state = SupervisionStateUnknown;
+        NSString *message = nil;
+        if (!settings_try_claim_actions_lock("Supervision", "[SUPERVISION] Another action is already running.")) {
+            message = @"Another action is already running. Try again when it has finished.";
+        } else {
+            @try {
+                BOOL ready = (op < 0) ? settings_ensure_kexploit_for_read()
+                                      : settings_daemons_kernel_ready(allowFullExploit, &message);
+                if (!ready) {
+                    if (!message) message = @"Kernel access isn't active. Run the chain first, then try again.";
+                } else if (op < 0) {
+                    state = supervision_read_state();
+                    ok = state != SupervisionStateUnknown;
+                } else {
+                    ok = supervision_set(op == 1);
+                    if (ok) {
+                        message = op == 1 ? @"Supervision activated. Restart the device to apply."
+                                          : @"Supervision deactivated. Restart the device to apply.";
+                    } else {
+                        message = @"Supervision could not be changed. Check the log.";
+                    }
+                    log_user("%s %s\n", ok ? "[OK]" : "[FAIL]", message.UTF8String);
+                }
+            } @finally {
+                settings_release_actions_lock();
+            }
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(ok, state, message); });
+    });
+}
+
 void settings_application_did_become_active(void)
 {
     // Round 31: same reorder as will_enter_foreground — the gate re-open must
@@ -14359,6 +14399,16 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
     ];
 }
 
+- (NSArray<NSDictionary *> *)supervisionRows
+{
+    return @[
+        @{ @"kind": @"button", @"title": @"Activate Supervision",   @"action": @"supervision-activate" },
+        @{ @"kind": @"button", @"title": @"Deactivate Supervision", @"action": @"supervision-deactivate" },
+        @{ @"kind": @"button", @"title": @"Read Current Status",    @"action": @"supervision-read",
+           @"requiresKRW": @YES },
+    ];
+}
+
 - (NSArray<NSDictionary *> *)nanoRegistryRows
 {
     return @[
@@ -15065,6 +15115,7 @@ static const NSInteger kPasscodePreviewRow = 1;
         case SectionLocationSim: return self.locationSimRows;
         case SectionSnowBoardLite: return self.snowboardLiteRows;
         case SectionPasscodeTheme: return self.passcodeThemeRows;
+        case SectionSupervision: return self.supervisionRows;
         case SectionLiveWP: return self.liveWPRows;
         case SectionQuickLoader: return self.quickLoaderRows;
         case SectionRepoTweaks: return self.repoTweaksRows;
@@ -15125,6 +15176,7 @@ UIViewController *settings_make_daemons_viewer(void)
 {
     return @[
         @{ @"title": @"OTA Updates",       @"icon": @"icloud.slash.fill",    @"color": [UIColor systemGrayColor],   @"section": @(SectionOTA) },
+        @{ @"title": @"Supervision",       @"icon": @"building.2.fill",      @"color": [UIColor systemIndigoColor], @"section": @(SectionSupervision) },
         @{ @"title": @"Watch Pairing",     @"icon": @"applewatch.radiowaves.left.and.right", @"color": [UIColor systemPurpleColor], @"section": @(SectionNanoRegistry) },
         // Process Viewer: shipped in 1.7.0 after the rounds 23–42 stability work
         // (launchd-hijack ABBA avoidance, tro-dance helper liveness, safe-detach
@@ -15288,6 +15340,15 @@ UIViewController *settings_make_daemons_viewer(void)
                 (long)major];
         }
         return @"Adds extra padding and per-icon scaling on top of the stock home/dock layout. Defaults are zero padding and 100% scale (no change). Toggle Enable on and hit Run to apply; values aren't persisted across respring.";
+    }
+    if (s == SectionSupervision) {
+        return @"Marks the device as supervised, with \"" @SUPERVISION_ORGANIZATION_NAME @"\" as the organization, so "
+               @"configuration profiles with supervised-only restrictions can be installed. Only the flag "
+               @"is set: no device management is involved and nothing is restricted by itself. "
+               @"Activate and Deactivate are written right away, persist across reboots and take effect "
+               @"after a restart. Deactivate puts the previous values back; a device supervised by a "
+               @"real organization is left alone. Uses saved kernel access; a full exploit run is only "
+               @"offered when there is none.";
     }
     if (s == SectionOTA) {
         return @"Blocks or restores the launchd jobs that run over-the-air system updates. "
@@ -18699,6 +18760,60 @@ void cyanide_present_contact(UIViewController *host)
                                                         object:[PackageQueue sharedQueue]];
 }
 
+// Supervision page: Activate / Deactivate write the flag right away; Read
+// shows the current state. Kernel access only (no SpringBoard), live or
+// parked; a full exploit run only after the user agreed to it.
+- (void)runSupervisionAction:(NSString *)action
+{
+    if (!settings_device_supported()) return;
+    BOOL read = [action isEqualToString:@"supervision-read"];
+    BOOL activate = [action isEqualToString:@"supervision-activate"];
+    if (!read && !activate && ![action isEqualToString:@"supervision-deactivate"]) return;
+    __weak typeof(self) weakSelf = self;
+
+    if (read) {
+        settings_supervision_async(-1, NO, ^(BOOL ok, int state, NSString *message) {
+            typeof(self) me = weakSelf;
+            if (!me) return;
+            if (ok || !message) {
+                if (state == SupervisionStateCyanide) message = @"Supervised by " @SUPERVISION_ORGANIZATION_NAME @" (set by Cyanide). If you just activated it, restart to apply.";
+                else if (state == SupervisionStateOther) message = @"Supervised by an organization, not by Cyanide. Cyanide leaves it alone.";
+                else if (state == SupervisionStateOff) message = @"Not supervised (stock).";
+                else message = @"Could not read the supervision state — filesystem access was denied.";
+            }
+            UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Supervision"
+                                                                        message:message
+                                                                 preferredStyle:UIAlertControllerStyleAlert];
+            [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+            settings_present_controller(ac, me);
+        });
+        return;
+    }
+
+    [self presentActivityLogWithCompletion:^{
+        log_user("[SUPERVISION] %s supervision…\n", activate ? "Activating" : "Deactivating");
+        settings_supervision_async(activate ? 1 : 0, NO, ^(BOOL ok, int state, NSString *message) {
+            (void)state;
+            typeof(self) me = weakSelf;
+            if ([message isEqualToString:kSettingsFullExploitRequiredMessage]) {
+                settings_post_actions_complete_async(NO, kSettingsNoKernelAccessHint);
+                if (!me) return;
+                void (^offer)(void) = ^{
+                    typeof(self) owner = weakSelf;
+                    if (!owner) return;
+                    settings_tool_needs_exploit(owner, owner.tableView, @"Supervision", ^{
+                        [weakSelf runSupervisionAction:action];
+                    });
+                };
+                if (me.presentedViewController) [me dismissViewControllerAnimated:YES completion:offer];
+                else offer();
+                return;
+            }
+            settings_post_actions_complete_async(ok, message);
+        });
+    }];
+}
+
 // Activate / Deactivate on Gravity Lite's page: started or stopped right away
 // in SpringBoard, not through the Apply queue. Uses live or parked kernel
 // access; a full exploit run only after the user agreed to it.
@@ -19462,6 +19577,13 @@ void cyanide_present_contact(UIViewController *host)
         } else {
             settings_run_ota_action(indexPath.row == 0);
         }
+        return;
+    }
+
+    if (indexPath.section == SectionSupervision) {
+        NSArray<NSDictionary *> *rows = [self rowsForSection:SectionSupervision];
+        if (indexPath.row < (NSInteger)rows.count)
+            [self runSupervisionAction:rows[indexPath.row][@"action"]];
         return;
     }
 

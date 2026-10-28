@@ -37,7 +37,7 @@ Installed from the in-app Installer. Most tweaks are applied in memory for the
 current boot, and a respring undoes them. A few write files or system settings
 that last beyond a respring or reboot: the OTA blocker, the call recording
 sound, Hide Home Bar, Passcode Style, Lock Screen Duration, Watch Pairing
-Override and the Daemon Manager stay until you switch them off in Cyanide, and
+Override, Supervision and the Daemon Manager stay until you switch them off in Cyanide, and
 the Cache Cleaner deletes what you select.
 
 ### Home Screen
@@ -91,6 +91,7 @@ the Cache Cleaner deletes what you select.
 | **Watch Pairing Override** | Pair a newer watch or revive an older one |
 | **Call Recording Sound** | Silence disclosure start/stop sounds |
 | **OTA Updates** | Enable or disable over-the-air system updates |
+| **Supervision** | Mark the device as supervised (organization "Cyanide"), so supervised-only profile restrictions can be installed |
 
 ### Beta
 
@@ -270,6 +271,12 @@ Ported from [`kolbicz/DarkSword-Tweaks`](https://github.com/kolbicz/DarkSword-Tw
 
 - **Disable OTA Updates**: toggles the launchd OTA `disabled.plist` to block or
   unblock update prompts. Persists across reboots.
+- **Supervision** (Settings → Supervision): Activate / Deactivate set the
+  `IsSupervised` flag in the configuration profiles'
+  `CloudConfigurationDetails.plist`, with "Cyanide" as the organization. No
+  device management is involved. Persists across reboots and takes effect
+  after a restart; Deactivate restores the previous values, and a device
+  supervised by a real organization is left alone.
 
 ### Beta
 
