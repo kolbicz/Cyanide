@@ -152,6 +152,10 @@ static bool sup_write_plist(NSDictionary *plist, NSPropertyListFormat format)
         fd = open(temp.fileSystemRepresentation, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0) { printf("[SUPERVISION] open temp failed errno=%d\n", errno); break; }
         if (!sup_write_all(fd, data)) { printf("[SUPERVISION] write failed errno=%d\n", errno); break; }
+        // Owner can chmod its own file; the kernel route is only a fallback
+        // (it refused 0666 on iOS 18.0.1 where the plist is mobile-owned).
+        if (fchmod(fd, finalMode) != 0)
+            printf("[SUPERVISION] fchmod temp %o errno=%d; trying the kernel route\n", finalMode, errno);
         if (fsync(fd) != 0) { printf("[SUPERVISION] fsync failed errno=%d\n", errno); break; }
         int closeRC = close(fd);
         fd = -1;
@@ -163,9 +167,14 @@ static bool sup_write_plist(NSDictionary *plist, NSPropertyListFormat format)
             printf("[SUPERVISION] chown temp failed\n");
             break;
         }
-        if (vnode_apfs_chmod(temp.fileSystemRepresentation, finalMode) != 0 &&
+        if (!sup_mode_is(temp.fileSystemRepresentation, finalMode) &&
+            chmod(temp.fileSystemRepresentation, finalMode) != 0 &&
+            vnode_apfs_chmod(temp.fileSystemRepresentation, finalMode) != 0 &&
             !sup_mode_is(temp.fileSystemRepresentation, finalMode)) {
-            printf("[SUPERVISION] chmod temp failed\n");
+            struct stat now = {0};
+            stat(temp.fileSystemRepresentation, &now);
+            printf("[SUPERVISION] chmod temp to %o failed (now uid=%u gid=%u mode=%o)\n",
+                   finalMode, now.st_uid, now.st_gid, now.st_mode & 07777);
             break;
         }
         if (rename(temp.fileSystemRepresentation, path.fileSystemRepresentation) != 0) {
