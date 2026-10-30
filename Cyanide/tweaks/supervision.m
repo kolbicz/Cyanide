@@ -19,7 +19,8 @@ static NSString * const kSupTempName = @"CloudConfigurationDetails.plist.cyanide
 static NSString * const kSupIsSupervisedKey = @"IsSupervised";
 static NSString * const kSupOrganizationKey = @"OrganizationName";
 
-// The values Activate replaced (NSNull = key was absent), for Deactivate.
+// The values Activate replaced, for Deactivate. A key that was absent is
+// left out (NSUserDefaults only stores property-list objects, no NSNull).
 static NSString * const kSupOriginalDefaultsKey = @"SupervisionOriginalValues";
 // Folder mode to put back if a write that widened it was interrupted.
 static NSString * const kSupDirRestoreDefaultsKey = @"SupervisionDirModeRestore";
@@ -207,7 +208,7 @@ SupervisionState supervision_read_state(void)
 
 static void sup_put(NSMutableDictionary *plist, NSString *key, id value)
 {
-    if (!value || value == NSNull.null) [plist removeObjectForKey:key];
+    if (!value) [plist removeObjectForKey:key];
     else plist[key] = value;
 }
 
@@ -239,9 +240,10 @@ bool supervision_set(bool supervised)
             return true;
         }
         if (!original) {
-            [d setObject:@{ kSupIsSupervisedKey: plist[kSupIsSupervisedKey] ?: NSNull.null,
-                            kSupOrganizationKey: plist[kSupOrganizationKey] ?: NSNull.null }
-                  forKey:kSupOriginalDefaultsKey];
+            NSMutableDictionary *saved = [NSMutableDictionary dictionary];
+            if (plist[kSupIsSupervisedKey]) saved[kSupIsSupervisedKey] = plist[kSupIsSupervisedKey];
+            if (plist[kSupOrganizationKey]) saved[kSupOrganizationKey] = plist[kSupOrganizationKey];
+            [d setObject:saved forKey:kSupOriginalDefaultsKey];
         }
         plist[kSupIsSupervisedKey] = @YES;
         plist[kSupOrganizationKey] = @SUPERVISION_ORGANIZATION_NAME;
