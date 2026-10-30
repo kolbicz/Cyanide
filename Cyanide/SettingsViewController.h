@@ -78,7 +78,6 @@ extern NSString * const kSettingsA18MemoryShaping;
 extern NSString * const kSettingsA18BoundedSearch;
 extern NSString * const kSettingsRemoteSettleMode;
 extern NSString * const kSettingsAutoRunKexploit;
-extern NSString * const kSettingsRunSandboxEscape;
 extern NSString * const kSettingsRunPatchSandboxExt;
 extern NSString * const kSettingsKeepAlive;
 

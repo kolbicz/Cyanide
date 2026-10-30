@@ -150,7 +150,6 @@ Under **Settings → Launch Options**:
 | **Controlled panic on injection wedge** | Diagnostic: write the log and panic on purpose instead of waiting for a watchdog reset. |
 | **Tweak apply speed** | Compatible / Fast / Fastest. Higher settings cut the delay paid between the remote calls that apply a tweak. |
 | **Verbose logging** | Full RemoteCall internals in the log, for bug reports. |
-| **Sandbox escape** | Run the sandbox escape demo. |
 | **Location Services links** | Allow `cyanide://location-services` links (off by default). |
 | **Repo sources** | Show or hide the Sources tab and repo tweaks. |
 | **Keep app alive in background** | Needed by tweaks that keep running while Cyanide is backgrounded. |

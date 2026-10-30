@@ -1048,7 +1048,6 @@ NSString * const kSettingsA18MemoryShaping = @"A18MemoryShaping";
 NSString * const kSettingsA18BoundedSearch = @"A18BoundedSearch";
 NSString * const kSettingsRemoteSettleMode  = @"RemoteSettleMode";
 NSString * const kSettingsAutoRunKexploit    = @"AutoRunKexploit";
-NSString * const kSettingsRunSandboxEscape   = @"RunSandboxEscape";
 NSString * const kSettingsRunPatchSandboxExt = @"RunPatchSandboxExt";
 NSString * const kSettingsKeepAlive          = @"KeepAlive";
 
@@ -9324,7 +9323,6 @@ void settings_register_defaults(void)
         // lands the PCB.
         kSettingsA18BoundedSearch:   @YES,
         kSettingsRemoteSettleMode:   @2,
-        kSettingsRunSandboxEscape:   @YES,
         kSettingsRunPatchSandboxExt: @NO,
         kSettingsKeepAlive:          @YES,
 
@@ -9682,8 +9680,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                               settings_sbtools_has_changes(d);
             BOOL cleanupDisabledSpringBoardTweaks = settings_disabled_applied_springboard_cleanup_needed(d);
             BOOL needsSpringBoardWork = runSBTools || runSBC || runDarkTweaks || runStatBar || runNSBar || runNiceBarLite || runAxonLite || runGravityLite || runLayoutExtras || restoreLayoutExtras || runAppSwitcherGrid || runFloatingDock || runThemer || runSnowBoardLite || runLiveWP || runStageStrip || runFastLockXLite || runQuickLoader || runRepoTweaks || cleanupDisabledSpringBoardTweaks;
-            BOOL runSandboxEscape = [d boolForKey:kSettingsRunSandboxEscape] && (!pendingOnly || needsSpringBoardWork);
-            BOOL needsSpringBoard = runSandboxEscape || needsSpringBoardWork || forceSpringBoardRefresh;
+            BOOL needsSpringBoard = needsSpringBoardWork || forceSpringBoardRefresh;
 
             BOOL hasRunWork = patchSandboxExt || runPowercuff || resetPowercuff || needsSpringBoard;
             BOOL skipKernelForVPhoneSpringBoardOnly =
@@ -9696,7 +9693,6 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             if (patchSandboxExt) total++;
             if (runPowercuff || resetPowercuff) total++;
             if (needsSpringBoard) total++;
-            if (runSandboxEscape) total++;
             if (runSBC) total++;
             if (runDarkTweaks) total++;
             if (runLayoutExtras) total++;
@@ -9831,18 +9827,6 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                         return;
                     }
                     log_user("[OK] SpringBoard channel open.\n");
-
-                    if (runSandboxEscape && !g_springboard_sandbox_escaped) {
-                        settings_progress(&step, total, "Lifting SpringBoard filesystem sandbox");
-                        int sbx = escape_sbx_demo2_in_session();
-                        g_springboard_sandbox_escaped = (sbx == 0);
-                        log_user("%s Filesystem sandbox %s.\n",
-                                 sbx == 0 ? "[OK]" : "[WARN]",
-                                 sbx == 0 ? "lifted — access granted" : "lift returned a warning");
-                    } else if (runSandboxEscape) {
-                        settings_progress(&step, total, "Reusing sandbox token from prior run");
-                        log_user("[OK] Sandbox already lifted — reusing token.\n");
-                    }
 
                     if (cleanupDisabledSpringBoardTweaks) {
                         settings_progress(&step, total, "Stopping disabled SpringBoard tweaks");
@@ -14334,7 +14318,6 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
         @{ @"kind": @"settlemode", @"key": kSettingsRemoteSettleMode, @"title": @"Tweak apply speed" },
         @{ @"key": kSettingsVerboseLoggingEnabled, @"title": @"Verbose logging",
            @"subtitle": @"Logs the full RemoteCall internals for every exploit run, tweak apply and Process Viewer action. Off keeps the log readable; turn it on before reproducing an issue, then share the log." },
-        @{ @"key": kSettingsRunSandboxEscape,   @"title": @"Sandbox escape (escape_sbx_demo2)" },
         @{ @"key": kSettingsLocationServicesLinksEnabled, @"title": @"Location Services links",
            @"subtitle": @"Lets cyanide://location-services links turn Location Services on or off. Any app can open these links without asking, so this is off by default. The Control Center toggle and the Shortcuts action work without it." },
         @{ @"key": kRepoSourcesEnabledKey,      @"title": @"Repo sources",
