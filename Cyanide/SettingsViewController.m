@@ -8177,8 +8177,8 @@ static void settings_supervision_async(int op, BOOL allowFullExploit,
                 } else {
                     ok = supervision_set(op == 1);
                     if (ok) {
-                        message = op == 1 ? @"Supervision activated. Restart the device to apply."
-                                          : @"Supervision deactivated. Restart the device to apply.";
+                        message = op == 1 ? @"Supervision activated. Reopen Settings to see it; restart only if it doesn't show."
+                                          : @"Supervision deactivated. Reopen Settings to see it; restart only if it still shows.";
                     } else {
                         message = @"Supervision could not be changed. Check the log.";
                     }
@@ -15328,8 +15328,8 @@ UIViewController *settings_make_daemons_viewer(void)
         return @"Marks the device as supervised, with \"" @SUPERVISION_ORGANIZATION_NAME @"\" as the organization, so "
                @"configuration profiles with supervised-only restrictions can be installed. Only the flag "
                @"is set: no device management is involved and nothing is restricted by itself. "
-               @"Activate and Deactivate are written right away, persist across reboots and take effect "
-               @"after a restart. Deactivate puts the previous values back; a device supervised by a "
+               @"Activate and Deactivate are written right away, take effect without a restart (reopen "
+               @"Settings) and persist across reboots. Deactivate puts the previous values back; a device supervised by a "
                @"real organization is left alone. Uses saved kernel access; a full exploit run is only "
                @"offered when there is none.";
     }
@@ -18759,7 +18759,7 @@ void cyanide_present_contact(UIViewController *host)
             typeof(self) me = weakSelf;
             if (!me) return;
             if (ok || !message) {
-                if (state == SupervisionStateCyanide) message = @"Supervised by " @SUPERVISION_ORGANIZATION_NAME @" (set by Cyanide). If you just activated it, restart to apply.";
+                if (state == SupervisionStateCyanide) message = @"Supervised by " @SUPERVISION_ORGANIZATION_NAME @" (set by Cyanide).";
                 else if (state == SupervisionStateOther) message = @"Supervised by an organization, not by Cyanide. Cyanide leaves it alone.";
                 else if (state == SupervisionStateOff) message = @"Not supervised (stock).";
                 else message = @"Could not read the supervision state — filesystem access was denied.";

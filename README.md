@@ -273,8 +273,8 @@ Ported from [`kolbicz/DarkSword-Tweaks`](https://github.com/kolbicz/DarkSword-Tw
 - **Supervision** (Settings → Supervision): Activate / Deactivate set the
   `IsSupervised` flag in the configuration profiles'
   `CloudConfigurationDetails.plist`, with "Cyanide" as the organization. No
-  device management is involved. Persists across reboots and takes effect
-  after a restart; Deactivate restores the previous values, and a device
+  device management is involved. Takes effect without a restart and persists
+  across reboots; Deactivate restores the previous values, and a device
   supervised by a real organization is left alone.
 
 ### Beta

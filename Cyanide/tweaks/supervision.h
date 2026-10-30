@@ -4,7 +4,7 @@
 //  Supervised mode: the IsSupervised flag in the configuration profiles'
 //  CloudConfigurationDetails.plist. Only the flag (and the organization
 //  name shown in Settings); no MDM is involved. Persists across reboots and
-//  takes effect after a restart. Both calls need live kernel access.
+//  takes effect right away (reopen Settings). Both calls need live kernel access.
 //
 
 #ifndef supervision_h
