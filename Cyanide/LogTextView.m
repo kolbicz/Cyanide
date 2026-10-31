@@ -677,8 +677,19 @@ static UIColor *colorForLogLine(NSString *line) {
 
 @implementation LogTextView
 
+// TextKit 1 with contiguous layout. The default TextKit 2 view lays out only
+// around the visible area and estimates the rest, so jumping to the tail
+// after a burst of lines landed in unlaid-out space: the log stayed black
+// until a scroll forced layout.
 - (instancetype)initWithFrame:(CGRect)frame {
-    self = [super initWithFrame:frame];
+    NSTextStorage *storage = [[NSTextStorage alloc] init];
+    NSLayoutManager *layout = [[NSLayoutManager alloc] init];
+    layout.allowsNonContiguousLayout = NO;
+    [storage addLayoutManager:layout];
+    NSTextContainer *container = [[NSTextContainer alloc] initWithSize:CGSizeMake(frame.size.width, CGFLOAT_MAX)];
+    container.widthTracksTextView = YES;
+    [layout addTextContainer:container];
+    self = [super initWithFrame:frame textContainer:container];
     if (self) [self setup];
     return self;
 }
