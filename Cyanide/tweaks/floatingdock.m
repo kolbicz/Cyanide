@@ -12,6 +12,7 @@
 #import "../LogTextView.h"
 
 #import <stdio.h>
+#import <stdlib.h>
 #import <sys/sysctl.h>
 #import <sys/time.h>
 
@@ -103,6 +104,40 @@ static bool floatingdock_persist_controller(uint64_t controller)
     [defaults setInteger:(NSInteger)currentBootTime forKey:kFloatingDockControllerBootTimeKey];
     [defaults synchronize];
     return true;
+}
+
+// What a later Cyanide launch needs to put the stock Dock back while the same
+// SpringBoard runs: the controller the scene had before, whether the stock
+// Dock was hidden, and the two gate methods with their own IMPs. Hex strings
+// (signed IMPs don't fit a plist integer). The scene context and the stock
+// Dock container are looked up again; they live as long as SpringBoard.
+static NSString *const kFloatingDockSessionKey = @"CyanideFloatingDockSession";
+
+static NSString *floatingdock_hex(uint64_t value) { return [NSString stringWithFormat:@"%llx", value]; }
+static uint64_t floatingdock_unhex(id value)
+{
+    return [value isKindOfClass:NSString.class] ? strtoull([value UTF8String], NULL, 16) : 0;
+}
+
+static void floatingdock_save_session(void)
+{
+    int pid = remote_call_current_pid();
+    if (pid <= 0) return;
+    [NSUserDefaults.standardUserDefaults setObject:@{
+        @"pid": @(pid),
+        @"boot": @(floatingdock_boot_time()),
+        @"previous": floatingdock_hex(gFloatingDockPreviousController),
+        @"stockWasHidden": @(gFloatingDockStockContainerWasHidden),
+        @"supportMethod": floatingdock_hex(gFloatingDockSupportMethod),
+        @"supportImp": floatingdock_hex(gFloatingDockSupportOriginalImp),
+        @"utilitiesMethod": floatingdock_hex(gFloatingDockUtilitiesMethod),
+        @"utilitiesImp": floatingdock_hex(gFloatingDockUtilitiesOriginalImp),
+    } forKey:kFloatingDockSessionKey];
+}
+
+static void floatingdock_clear_session(void)
+{
+    [NSUserDefaults.standardUserDefaults removeObjectForKey:kFloatingDockSessionKey];
 }
 
 static uint64_t floatingdock_instance_method(uint64_t cls, uint64_t sel)
@@ -525,9 +560,18 @@ static void floatingdock_refresh_library_pod(uint64_t controller)
            categoryCount, innerIconCount);
 }
 
+static bool floatingdock_recover_session(void);
+
 bool floatingdock_apply_in_session(void)
 {
     if (gFloatingDockApplied) return true;
+    // Still set up in this SpringBoard by an earlier Cyanide launch: keep it
+    // (and its saved "before" state) rather than capturing the iPad Dock
+    // itself as the controller to go back to.
+    if (floatingdock_recover_session()) {
+        log_user("[FLOATING-DOCK] The iPad Dock is still active in SpringBoard.\n");
+        return true;
+    }
 
     uint64_t controllerCls = r_class("SBFloatingDockController");
     uint64_t coverSheetCls = r_class("SBCoverSheetPrimarySlidingViewController");
@@ -655,6 +699,7 @@ bool floatingdock_apply_in_session(void)
         floatingdock_refresh_library_pod(reusableController);
         gFloatingDockApplied = true;
         gFloatingDockControllerHint = reusableController;
+        floatingdock_save_session();
 
         printf("[FLOATING-DOCK] reused controller=0x%llx sceneContext=0x%llx stockContainer=0x%llx\n",
                reusableController, sceneContext, stockContainer);
@@ -691,6 +736,7 @@ bool floatingdock_apply_in_session(void)
     floatingdock_refresh_library_pod(floatingController);
     gFloatingDockApplied = true;
     gFloatingDockControllerHint = floatingController;
+    floatingdock_save_session();
 
     printf("[FLOATING-DOCK] created controller=0x%llx sceneContext=0x%llx stockContainer=0x%llx\n",
            floatingController, sceneContext, stockContainer);
@@ -729,12 +775,68 @@ bool floatingdock_relayout_in_session(void)
     return resized || laidOut;
 }
 
+// Applied by an earlier Cyanide launch: take the saved record when it belongs
+// to this SpringBoard and look the scene context and stock Dock up again.
+static bool floatingdock_recover_session(void)
+{
+    NSDictionary *saved = [NSUserDefaults.standardUserDefaults dictionaryForKey:kFloatingDockSessionKey];
+    int pid = remote_call_current_pid();
+    if (!saved || pid <= 0 || [saved[@"pid"] intValue] != pid ||
+        [saved[@"boot"] unsignedLongLongValue] != floatingdock_boot_time()) {
+        if (saved && pid > 0) floatingdock_clear_session();   // an earlier SpringBoard's
+        return false;
+    }
+
+    uint64_t workspaceCls = r_class("SBMainWorkspace");
+    uint64_t iconControllerCls = r_class("SBIconController");
+    uint64_t workspace = r_is_objc_ptr(workspaceCls) ? r_msg2(workspaceCls, "sharedInstance", 0, 0, 0, 0) : 0;
+    uint64_t scene = r_is_objc_ptr(workspace) && r_responds(workspace, "mainWindowScene")
+        ? r_msg2(workspace, "mainWindowScene", 0, 0, 0, 0) : 0;
+    uint64_t sceneDelegate = r_is_objc_ptr(scene) && r_responds(scene, "delegate")
+        ? r_msg2(scene, "delegate", 0, 0, 0, 0) : 0;
+    uint64_t sceneContext = r_is_objc_ptr(sceneDelegate) && r_responds(sceneDelegate, "_sbWindowSceneContext")
+        ? r_msg2(sceneDelegate, "_sbWindowSceneContext", 0, 0, 0, 0) : 0;
+    uint64_t iconController = r_is_objc_ptr(iconControllerCls)
+        ? r_msg2(iconControllerCls, "sharedInstance", 0, 0, 0, 0) : 0;
+    uint64_t stockContainer = r_is_objc_ptr(iconController) ? floatingdock_stock_container(iconController) : 0;
+    if (!r_is_objc_ptr(sceneContext) || !r_is_objc_ptr(stockContainer)) {
+        printf("[FLOATING-DOCK] recover: scene context 0x%llx / stock Dock 0x%llx not found\n",
+               sceneContext, stockContainer);
+        return false;
+    }
+
+    // The previous controller is used only if its memory still holds a
+    // Floating Dock controller (it may have been released since): read, never
+    // messaged, before that check.
+    uint64_t previous = floatingdock_unhex(saved[@"previous"]);
+    if (previous) {
+        uint64_t cls = r_class("SBFloatingDockController");
+        uint64_t isa = 0;
+        bool alive = r_is_objc_ptr(previous) && remote_read(previous, &isa, sizeof(isa)) &&
+                     (isa == cls || (isa & 0x0000000ffffffff8ULL) == cls || (isa & 0x007ffffffffffff8ULL) == cls);
+        if (!alive) previous = 0;
+    }
+
+    gFloatingDockSceneContext = sceneContext;
+    gFloatingDockStockContainer = stockContainer;
+    gFloatingDockStockContainerWasHidden = [saved[@"stockWasHidden"] boolValue];
+    gFloatingDockPreviousController = previous;
+    gFloatingDockCapturedPreviousController = true;
+    gFloatingDockSupportMethod = floatingdock_unhex(saved[@"supportMethod"]);
+    gFloatingDockSupportOriginalImp = floatingdock_unhex(saved[@"supportImp"]);
+    gFloatingDockUtilitiesMethod = floatingdock_unhex(saved[@"utilitiesMethod"]);
+    gFloatingDockUtilitiesOriginalImp = floatingdock_unhex(saved[@"utilitiesImp"]);
+    gFloatingDockControllerHint = r_responds(sceneContext, "floatingDockController")
+        ? r_msg2_main(sceneContext, "floatingDockController", 0, 0, 0, 0) : 0;
+    gFloatingDockApplied = true;
+    printf("[FLOATING-DOCK] recovered the session saved for SpringBoard pid=%d\n", pid);
+    return true;
+}
+
 bool floatingdock_stop_in_session(void)
 {
-    if (!gFloatingDockApplied) {
-        // Applied by an earlier SpringBoard session: the controllers to put
-        // back aren't known any more.
-        log_user("[FLOATING-DOCK] The iPad Dock was set up in an earlier session; respring to bring back the stock Dock.\n");
+    if (!gFloatingDockApplied && !floatingdock_recover_session()) {
+        log_user("[FLOATING-DOCK] The iPad Dock was set up by an earlier SpringBoard session or build; respring to bring back the stock Dock.\n");
         return false;
     }
 
@@ -761,6 +863,7 @@ bool floatingdock_stop_in_session(void)
     floatingdock_restore_gates();
     bool ok = contextRestored && stockRestored && defaultsRestored;
     if (ok) {
+        floatingdock_clear_session();
         log_user("[FLOATING-DOCK] Restored the stock Dock; retained the existing Floating Dock controller for safe reuse.\n");
     } else {
         log_user("[FLOATING-DOCK] Partial cleanup; respring restores the stock Dock.\n");
