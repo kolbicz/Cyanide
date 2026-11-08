@@ -21,6 +21,7 @@ Notification previews for Face ID-locked apps, tweaks applied and undone one at 
 
 - **DarkSword tweaks can be turned off** without a respring: Disable App Library, Disable Icon Fly-In, Hide New App Dots, Zero Wake Animation, Zero Backlight Fade, Double Tap to Lock and Drag Coefficient now put back what they changed.
 - **Tweaks are remembered after closing Cyanide**: tweaks that stay in SpringBoard by themselves no longer show up as "Activation pending" after reopening Cyanide, and are no longer all applied again with the next one. They show as pending again only after a respring or reboot.
+- **iPad Dock** can be turned off after Cyanide was closed and reopened (it needed a respring before).
 - **Log window** no longer goes black during a run (the text came back only after scrolling).
 
 ## About A18 / M4
