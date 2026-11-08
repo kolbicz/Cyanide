@@ -674,7 +674,8 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     self.quietFinished = NO;
     self.quietPendingPhase = nil;
     self.quietTitle.text = reboot ? @"Rebooting" : @"Respringing";
-    self.quietStatus.text = @"Stopping live tweaks…";
+    self.quietStatus.text = @"Starting…";
+    self.quietPhaseShownNs = 0;
     if (@available(iOS 17.0, *)) [self.quietIcon removeAllSymbolEffects];
     self.quietIcon.image = [UIImage systemImageNamed:reboot ? @"power.circle.fill" : @"arrow.clockwise.circle.fill"
                                    withConfiguration:scene_quiet_symbol_config()];
@@ -682,14 +683,8 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     if (!UIAccessibilityIsReduceMotionEnabled()) {
         if (@available(iOS 17.0, *)) [self.quietIcon addSymbolEffect:[NSSymbolPulseEffect effect]];
     }
-    UIProgressView *bar = self.quietProgress;
-    [bar.layer removeAllAnimations];
-    [bar setProgress:0.05f animated:NO];
-    [bar layoutIfNeeded];
-    [UIView animateWithDuration:3.0 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
-        [bar setProgress:0.85f animated:NO];
-        [bar layoutIfNeeded];
-    } completion:nil];
+    [self.quietProgress.layer removeAllAnimations];
+    [self.quietProgress setProgress:0.05f animated:NO];
     scene_announce(self.quietTitle.text);
 }
 
@@ -697,6 +692,10 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
 - (void)finishPowerCover:(BOOL)reboot {
     if (!self.quietCover) return;
     self.quietFinished = YES;
+    self.quietPendingPhase = nil;
+    if (@available(iOS 17.0, *)) [self.quietIcon removeAllSymbolEffects];
+    self.quietIcon.image = [UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:scene_quiet_symbol_config()];
+    self.quietIcon.tintColor = UIColor.systemGreenColor;
     self.quietStatus.text = reboot ? @"The device restarts in a moment…" : @"SpringBoard restarts in a moment…";
     [self.quietProgress setProgress:1.0f animated:YES];
 }
@@ -746,7 +745,13 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     self.actionInProgress = YES;
     [self beginPowerCover:reboot];
     __weak typeof(self) weakSelf = self;
-    settings_power_action_async(reboot, [self topViewController], ^(BOOL ok, NSString *message) {
+    NSUInteger run = self.quietRun;
+    SettingsProgressBlock progress = ^(float fraction, NSString *step, NSTimeInterval over, int target) {
+        typeof(self) me = weakSelf;
+        // target -1: no Location Services state on this screen.
+        if (me && me.quietRun == run) [me quietPhase:fraction step:step over:over target:-1];
+    };
+    settings_power_action_async(reboot, [self topViewController], progress, ^(BOOL ok, NSString *message) {
         typeof(self) me = weakSelf;
         me.actionInProgress = NO;
         if (requester) requester(ok, message ?: @"");

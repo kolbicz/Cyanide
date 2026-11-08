@@ -294,11 +294,6 @@ extern NSString * const kSettingsFullExploitRequiredMessage;
 extern NSString * const kSettingsLocationServicesLinksEnabled;
 // cyanide://respring and cyanide://reboot links accepted (default NO).
 extern NSString * const kSettingsPowerLinksEnabled;
-// Respring or reboot without asking (links, Shortcuts, Control Center), with
-// the same cleanup as the Settings rows. Completion on the main queue once it
-// is under way or was refused.
-void settings_power_action_async(BOOL reboot, UIViewController *host,
-                                 void (^completion)(BOOL ok, NSString *message));
 void settings_unlock_filesystem_async(BOOL allowFullExploit,
                                       void (^completion)(BOOL ok, NSString *message));
 // Runs the exploit on its own (no tweaks applied) with the log window shown;
@@ -362,6 +357,13 @@ UIViewController *settings_make_cleaner_viewer(void);
 // `animateOver` seconds (0 = at once), and show `step`. `target` is what the
 // action is setting (Location Services: 1 = on, 0 = off). Main queue.
 typedef void (^SettingsProgressBlock)(float fraction, NSString *step, NSTimeInterval animateOver, int target);
+// Respring or reboot without asking (links, Shortcuts, Control Center), with
+// the same cleanup as the Settings rows. Completion on the main queue once it
+// is under way or was refused.
+// progress (optional, main queue): the steps, as for Location Services.
+void settings_power_action_async(BOOL reboot, UIViewController *host,
+                                 SettingsProgressBlock progress,
+                                 void (^completion)(BOOL ok, NSString *message));
 // allowFullExploit: as for settings_unlock_filesystem_async -- NO never starts
 // a fresh exploit run and fails with kSettingsFullExploitRequiredMessage instead.
 // resolveOrigin: on a SpringBoard success, also record where the user was

@@ -3911,12 +3911,24 @@ static const double kRespringDelay = 2.5;
 // without a SpringBoard session nothing can ask the system to reboot).
 static const double kRebootDelay = 2.5;
 
+// Steps of the respring/reboot preparation for a caller's progress screen
+// (settings_power_action_async); nil for the Settings rows.
+static SettingsProgressBlock g_restart_progress = nil;
+
+static void settings_restart_step(float fraction, NSString *step, NSTimeInterval over)
+{
+    SettingsProgressBlock progress = g_restart_progress;
+    if (!progress) return;
+    dispatch_async(dispatch_get_main_queue(), ^{ progress(fraction, step, over, -1); });
+}
+
 static BOOL settings_prepare_for_restart_sync(BOOL reboot)
 {
     const char *tag = reboot ? "[REBOOT]" : "[RESPRING]";
     uint64_t respringGeneration = reboot ? 0 : settings_arm_respring_generation();
     log_user("%s Stopping live sessions before %s.\n", tag, reboot ? "reboot" : "respring");
     printf("[SETTINGS] preparing for %s cleanup rcReady=%d\n", reboot ? "reboot" : "respring", g_springboard_rc_ready);
+    settings_restart_step(0.1f, @"Stopping live tweaks", 0.3);
     settings_request_all_live_loops_stop("pre-respring cleanup");
     settings_end_statbar_background_task_async("pre-respring cleanup");
     BOOL loopsStopped = settings_wait_live_loops_stopped_for_switch("pre-respring cleanup");
@@ -3926,7 +3938,16 @@ static BOOL settings_prepare_for_restart_sync(BOOL reboot)
     uint64_t scheduledNs = 0;
     // A direct relaunch needs a SpringBoard session; open one if kernel
     // access is live or parked (never a full exploit run for this).
+    if (!g_springboard_rc_ready) settings_restart_step(0.2f, @"Getting kernel ready", 0.5);
     BOOL kernelReady = g_springboard_rc_ready || settings_ensure_kexploit_for_read();
+    if (kernelReady && !g_springboard_rc_ready) {
+        // The activation settle window before SpringBoard can be opened is
+        // the longest wait: fill the bar over it, as Location Services does.
+        uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        uint64_t until = g_activation_settle_until_ns;
+        double settle = until > now ? (double)(until - now) / 1e9 : 0;
+        if (settle > 0.3) settings_restart_step(0.7f, @"Getting kernel ready", settle);
+    }
     @synchronized (settings_rc_lock()) {
         if (!g_springboard_rc_ready && kernelReady) {
             log_user("%s Opening SpringBoard to ask it to %s…\n", tag, reboot ? "reboot" : "restart");
@@ -3938,6 +3959,7 @@ static BOOL settings_prepare_for_restart_sync(BOOL reboot)
             // SB is about to restart, so cleanup uses the fast variant for
             // tweaks where full remote restoration is wasted.
             settings_stop_springboard_tweaks_locked("pre-respring cleanup", YES);
+            settings_restart_step(0.9f, reboot ? @"Asking the system to reboot" : @"Asking SpringBoard to restart", 0.3);
             // A live loop that didn't stop could still be working when the
             // relaunch fires: then the WebKit fallback below instead.
             if (reboot) {
@@ -4954,6 +4976,7 @@ static void settings_show_rebooting_cover(UIViewController *host)
 // buttons. Same cleanup as the Settings rows. Completion on the main queue,
 // once the respring or reboot is under way (or refused).
 void settings_power_action_async(BOOL reboot, UIViewController *host,
+                                 SettingsProgressBlock progress,
                                  void (^completion)(BOOL ok, NSString *message))
 {
     __weak UIViewController *weakHost = host;
@@ -4975,9 +4998,13 @@ void settings_power_action_async(BOOL reboot, UIViewController *host,
         }
         settings_notify_cleanup_state_changed();
         BOOL scheduled = NO;
+        g_restart_progress = progress;
+        g_springboard_connect_progress = progress ? ^{ settings_restart_step(0.82f, @"Connecting", 0.5); } : nil;
         @try {
             scheduled = settings_prepare_for_restart_sync(reboot);
         } @finally {
+            g_restart_progress = nil;
+            g_springboard_connect_progress = nil;
             __sync_lock_release(&g_settings_actions_running);
             if (reboot) __sync_lock_release(&g_settings_reboot_running);
             else __sync_lock_release(&g_settings_respring_cleanup_running);
