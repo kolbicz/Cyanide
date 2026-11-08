@@ -404,12 +404,27 @@ static BOOL PackageShouldAutoQueueForApply(Package *package)
     NSSet<NSString *> *keys = [self rightAwayKeys];
     if (!keys) return NO;
     self.runOnlyKeys = keys;
-    BOOL started = [self commit];
+    BOOL started = [self commitExplicitOnly:YES];
     if (!started) self.runOnlyKeys = nil;
     return started;
 }
 
+- (void)applyPackageNow:(Package *)package
+{
+    if (package.kind != PackageInstallKindToggle || package.enabledKey.length == 0) return;
+    if (![self packageInArray:self.installs matching:package]) [self.installs addObject:package];
+    [self notifyChange];
+    [self notifyEnqueue];
+}
+
 - (BOOL)commit
+{
+    return [self commitExplicitOnly:NO];
+}
+
+// explicitOnly: just the packages the user toggled, not the enabled tweaks
+// waiting to be applied again (the right-away path).
+- (BOOL)commitExplicitOnly:(BOOL)explicitOnly
 {
     if (self.isCommitting || settings_run_in_flight()) {
         log_user("[INSTALLER] A queue commit or its run is already active; ignoring this one.\n");
@@ -418,8 +433,8 @@ static BOOL PackageShouldAutoQueueForApply(Package *package)
     self.isCommitting = YES;
     self.awaitingRunCompletion = NO;
 
-    NSArray<Package *> *toInstall   = self.queuedInstalls;
-    NSArray<Package *> *toUninstall = self.queuedUninstalls;
+    NSArray<Package *> *toInstall   = explicitOnly ? [self.installs copy] : self.queuedInstalls;
+    NSArray<Package *> *toUninstall = explicitOnly ? [self.uninstalls copy] : self.queuedUninstalls;
 
     // Split packages into "stateful" (toggle: just flips an NSUserDefaults
     // BOOL — fast, safe to call on main) and "heavy" (OTA / NanoRegistry /

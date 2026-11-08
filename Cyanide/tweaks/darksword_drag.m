@@ -12,6 +12,7 @@
 #import "darksword_drag.h"
 #import "../TaskRop/RemoteCall.h"
 #import "../LogTextView.h"   // mirror printf into the chain log
+#import "darksword_tweaks.h"
 
 #import <dlfcn.h>
 #import <stdint.h>
@@ -112,6 +113,7 @@ static bool drag_find(drag_t *o)
 
 bool darksword_drag_coefficient_apply(double coefficient)
 {
+    darksword_journal_begin(DSTweakDragCoefficient);
     drag_t d;
     if (!drag_find(&d)) {
         printf("[DRAG] find failed\n");
@@ -127,13 +129,16 @@ bool darksword_drag_coefficient_apply(double coefficient)
         ok = remote_read(d.revVar, &rv, 4);
         if (ok && (int)rv < 1) {
             uint32_t one = 1;
+            darksword_journal_write(d.revVar, &one, 4, 0, 0);
             ok = remote_write(d.revVar, &one, 4) && remote_read(d.revVar, &rv, 4) && rv == 1;
         }
 
         union { double dv; uint64_t u; } b = { .dv = coefficient };
         uint32_t sentinel = 0x7fffffff;
 
+        if (ok) darksword_journal_write(d.g + d.revOff, &sentinel, 4, 0, 0);
         ok = ok && remote_write(d.g + d.revOff, &sentinel, 4);
+        if (ok) darksword_journal_write(d.g + d.valOff, &b.u, 8, 0, 0);
         ok = ok && remote_write(d.g + d.valOff, &b.u, 8);
 
         double chk = 0; uint32_t sr = 0;
@@ -144,12 +149,14 @@ bool darksword_drag_coefficient_apply(double coefficient)
     } else if (d.isFloat) {
         float f = (float)coefficient;
         float chk = 0;
+        darksword_journal_write(d.g + d.valOff, &f, 4, 0, 0);
         ok = remote_write(d.g + d.valOff, &f, 4) && remote_read(d.g + d.valOff, &chk, 4) && chk == f;
         printf("[DRAG] f32 g=0x%llx+0x%x value=%.4f%s\n",
                (unsigned long long)d.g, d.valOff, (double)chk, ok ? "" : " (NOT verified)");
     } else {
         union { double dv; uint64_t u; } b = { .dv = coefficient };
         double chk = 0;
+        darksword_journal_write(d.g + d.valOff, &b.u, 8, 0, 0);
         ok = remote_write(d.g + d.valOff, &b.u, 8) && remote_read(d.g + d.valOff, &chk, 8) && chk == coefficient;
         printf("[DRAG] f64 g=0x%llx+0x%x value=%.4f%s\n",
                (unsigned long long)d.g, d.valOff, chk, ok ? "" : " (NOT verified)");

@@ -731,7 +731,12 @@ bool floatingdock_relayout_in_session(void)
 
 bool floatingdock_stop_in_session(void)
 {
-    if (!gFloatingDockApplied) return false;
+    if (!gFloatingDockApplied) {
+        // Applied by an earlier SpringBoard session: the controllers to put
+        // back aren't known any more.
+        log_user("[FLOATING-DOCK] The iPad Dock was set up in an earlier session; respring to bring back the stock Dock.\n");
+        return false;
+    }
 
     uint64_t reusableControllerHint = gFloatingDockControllerHint;
     bool contextRestored = false;

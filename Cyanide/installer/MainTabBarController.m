@@ -104,7 +104,8 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
     PackageQueue *q = [PackageQueue sharedQueue];
     if (![NSUserDefaults.standardUserDefaults boolForKey:kSettingsInstallRightAway]) return;
     if (q.isCommitting || settings_run_in_flight()) return;
-    if (![q rightAwayKeys] || !settings_kernel_access_available()) return;
+    NSSet<NSString *> *keys = [q rightAwayKeys];
+    if (!keys || !settings_kernel_access_available()) return;
 
     UIViewController *host = self;
     while (host.presentedViewController && !host.presentedViewController.isBeingDismissed)
@@ -113,7 +114,7 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
     InstallProgressViewController *vc = [[InstallProgressViewController alloc] init];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
     nav.modalPresentationStyle = UIModalPresentationAutomatic;
-    NSInteger count = q.pendingCount;
+    NSInteger count = (NSInteger)keys.count;
     [host presentViewController:nav animated:YES completion:^{
         log_user("[INSTALLER] ── Applying %ld change(s) right away ──\n", (long)count);
         if (![q commitOnlyQueuedPackages]) {

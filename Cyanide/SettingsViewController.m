@@ -1947,13 +1947,54 @@ static NSMutableSet<NSString *> *settings_applied_keys_set(void)
     return g_applied_tweak_keys;
 }
 
+// One-shot SpringBoard patches: they stay in SpringBoard when Cyanide closes
+// (nothing of theirs runs in Cyanide), so "applied" is kept with the
+// SpringBoard pid and boot it was applied to and holds until that SpringBoard
+// exits. A reopened Cyanide then neither re-applies them all nor loses track
+// of what a switch-off has to undo. Live tweaks stop with Cyanide and stay
+// process-local.
+static BOOL settings_key_is_springboard_oneshot(NSString *key)
+{
+    static NSSet<NSString *> *keys;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        keys = [NSSet setWithArray:@[
+            kSettingsSBCEnabled,
+            kSettingsSBCHideLabels,
+            kSettingsLayoutExtrasEnabled,
+            kSettingsSBToolsWithTweaks,
+            kSettingsFloatingDockEnabled,
+            kSettingsLockedPreviewsEnabled,
+            kSettingsDSDisableAppLibrary,
+            kSettingsDSDisableIconFlyIn,
+            kSettingsDSHideNewAppDots,
+            kSettingsDSZeroWakeAnimation,
+            kSettingsDSZeroBacklightFade,
+            kSettingsDSDoubleTapToLock,
+            kSettingsDSDragCoefficientEnabled,
+        ]];
+    });
+    return key && [keys containsObject:key];
+}
+
 static BOOL settings_key_persists_applied_state(NSString *key)
 {
-    // SBCustomizer mutates SpringBoard's live icon models. Those mutations
-    // must be applied again after every SpringBoard restart, so its applied
-    // state is intentionally process-local rather than persisted.
     return [key isEqualToString:kSettingsQuickLoaderEnabled] ||
-           [key isEqualToString:kSettingsRepoTweaksEnabled];
+           [key isEqualToString:kSettingsRepoTweaksEnabled] ||
+           settings_key_is_springboard_oneshot(key);
+}
+
+static NSString *settings_persisted_applied_boot_key(NSString *key)
+{
+    return [@"CyanideAppliedBootTime." stringByAppendingString:key ?: @""];
+}
+
+static uint64_t settings_boot_time_seconds(void)
+{
+    struct timeval bootTime = {0};
+    size_t size = sizeof(bootTime);
+    if (sysctlbyname("kern.boottime", &bootTime, &size, NULL, 0) != 0) return 0;
+    return (uint64_t)bootTime.tv_sec;
 }
 
 static NSString *settings_persisted_applied_bool_key(NSString *key)
@@ -1973,13 +2014,16 @@ static void settings_set_persisted_applied(NSString *key, BOOL applied)
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     NSString *appliedKey = settings_persisted_applied_bool_key(key);
     NSString *pidKey = settings_persisted_applied_pid_key(key);
+    NSString *bootKey = settings_persisted_applied_boot_key(key);
     if (applied) {
         int pid = remote_call_current_pid();
         [d setBool:YES forKey:appliedKey];
         if (pid > 0) [d setInteger:pid forKey:pidKey];
+        [d setObject:@(settings_boot_time_seconds()) forKey:bootKey];
     } else {
         [d removeObjectForKey:appliedKey];
         [d removeObjectForKey:pidKey];
+        [d removeObjectForKey:bootKey];
     }
     [d synchronize];
 }
@@ -1999,6 +2043,19 @@ static BOOL settings_persisted_applied(NSString *key)
     if (storedPid > 0 && currentPid > 0 && storedPid != currentPid) {
         settings_set_persisted_applied(key, NO);
         return NO;
+    }
+    if (settings_key_is_springboard_oneshot(key)) {
+        // Applied to a SpringBoard that has since exited (respring, reboot)
+        // means gone. Without a session, kill(pid, 0) still tells an exited
+        // process (ESRCH) from one the sandbox won't signal (EPERM).
+        id storedBoot = [d objectForKey:settings_persisted_applied_boot_key(key)];
+        BOOL gone = storedPid <= 0 ||
+                    [storedBoot unsignedLongLongValue] != settings_boot_time_seconds() ||
+                    (currentPid <= 0 && kill((pid_t)storedPid, 0) != 0 && errno == ESRCH);
+        if (gone) {
+            settings_set_persisted_applied(key, NO);
+            return NO;
+        }
     }
     return YES;
 }
@@ -2082,17 +2139,10 @@ static BOOL settings_clear_all_applied_locked(void)
             changed = YES;
         }
     }
-    // The persisted markers describe a previous process's SpringBoard state.
-    // A not-ready notify before this process ever opened a SpringBoard session
-    // (launch, KRW acquire) says nothing about that state — keep them; the pid
-    // check in settings_persisted_applied() drops them once a session exists.
-    if (!g_springboard_session_seen) return changed;
-    for (NSString *key in @[ kSettingsSBCEnabled ]) {
-        if (settings_persisted_applied(key)) {
-            settings_set_persisted_applied(key, NO);
-            changed = YES;
-        }
-    }
+    // The persisted markers are left alone: a not-ready notify (KRW acquire,
+    // session closed after a run, Cyanide closing) says nothing about whether
+    // SpringBoard still carries those patches. settings_persisted_applied()
+    // drops a marker once its SpringBoard has exited.
     return changed;
 }
 
@@ -4878,6 +4928,22 @@ typedef struct {
     bool dragCoefficient;
 } SettingsDarkTweaksResult;
 
+static void settings_mark_dark_tweak_results(NSUserDefaults *d, SettingsDarkTweaksResult result,
+                                             NSSet<NSString *> *onlyKeys)
+{
+    void (^mark)(NSString *, bool) = ^(NSString *key, bool ok) {
+        if (![d boolForKey:key] || (onlyKeys && ![onlyKeys containsObject:key])) return;
+        settings_mark_tweak_applied(key, ok);
+    };
+    mark(kSettingsDSDisableAppLibrary, result.disableAppLibrary);
+    mark(kSettingsDSDisableIconFlyIn, result.disableIconFlyIn);
+    mark(kSettingsDSHideNewAppDots, result.hideNewAppDots);
+    mark(kSettingsDSZeroWakeAnimation, result.zeroWakeAnimation);
+    mark(kSettingsDSZeroBacklightFade, result.zeroBacklightFade);
+    mark(kSettingsDSDoubleTapToLock, result.doubleTapToLock);
+    mark(kSettingsDSDragCoefficientEnabled, result.dragCoefficient);
+}
+
 static bool settings_dark_tweaks_result_all_ok(SettingsDarkTweaksResult result)
 {
     return result.any &&
@@ -4890,19 +4956,81 @@ static bool settings_dark_tweaks_result_all_ok(SettingsDarkTweaksResult result)
            result.dragCoefficient;
 }
 
-static SettingsDarkTweaksResult settings_apply_dark_tweaks_from_defaults_locked(NSUserDefaults *d)
+// The DarkSword switches with the tweak each one journals its undo under.
+static NSDictionary<NSString *, NSNumber *> *settings_dark_tweak_ids(void)
+{
+    return @{
+        kSettingsDSDisableAppLibrary:      @(DSTweakAppLibrary),
+        kSettingsDSDisableIconFlyIn:       @(DSTweakIconFlyIn),
+        kSettingsDSHideNewAppDots:         @(DSTweakNewAppDots),
+        kSettingsDSZeroWakeAnimation:      @(DSTweakWakeAnimation),
+        kSettingsDSZeroBacklightFade:      @(DSTweakBacklightFade),
+        kSettingsDSDoubleTapToLock:        @(DSTweakDoubleTapLock),
+        kSettingsDSDragCoefficientEnabled: @(DSTweakDragCoefficient),
+    };
+}
+
+// Switched off but still patched in the running SpringBoard (onlyKeys, when
+// given, limits it to those).
+static BOOL settings_dark_tweaks_undo_needed(NSUserDefaults *d, NSSet<NSString *> *onlyKeys)
+{
+    NSDictionary<NSString *, NSNumber *> *ids = settings_dark_tweak_ids();
+    for (NSString *key in ids) {
+        if ([d boolForKey:key] || (onlyKeys && ![onlyKeys containsObject:key])) continue;
+        if (darksword_tweak_undo_pending((DSTweak)ids[key].intValue)) return YES;
+    }
+    return NO;
+}
+
+static const char *settings_dark_tweak_title(NSString *key)
+{
+    NSDictionary *titles = @{
+        kSettingsDSDisableAppLibrary: @"Disable App Library",
+        kSettingsDSDisableIconFlyIn: @"Disable Icon Fly-In",
+        kSettingsDSHideNewAppDots: @"Hide New App Dots",
+        kSettingsDSZeroWakeAnimation: @"Zero Wake Animation",
+        kSettingsDSZeroBacklightFade: @"Zero Backlight Fade",
+        kSettingsDSDoubleTapToLock: @"Double Tap to Lock",
+        kSettingsDSDragCoefficientEnabled: @"Drag Coefficient",
+    };
+    return [titles[key] ?: key UTF8String];
+}
+
+// SpringBoard session open. Returns NO when an undo did not finish.
+static BOOL settings_undo_disabled_dark_tweaks_locked(NSUserDefaults *d, NSSet<NSString *> *onlyKeys)
+{
+    BOOL allOK = YES;
+    NSDictionary<NSString *, NSNumber *> *ids = settings_dark_tweak_ids();
+    for (NSString *key in ids) {
+        if ([d boolForKey:key] || (onlyKeys && ![onlyKeys containsObject:key])) continue;
+        DSTweak tweak = (DSTweak)ids[key].intValue;
+        if (!darksword_tweak_undo_pending(tweak)) continue;
+        bool ok = darksword_tweak_undo_in_session(tweak);
+        if (ok) settings_mark_tweak_applied(key, NO);
+        allOK = allOK && ok;
+        log_user("%s %s %s.\n", ok ? "[OK]" : "[WARN]", settings_dark_tweak_title(key),
+                 ok ? "turned off" : "could not be turned off; a respring turns it off");
+    }
+    return allOK;
+}
+
+static SettingsDarkTweaksResult settings_apply_dark_tweaks_from_defaults_locked(NSUserDefaults *d,
+                                                                                NSSet<NSString *> *onlyKeys)
 {
     // The iOS 17 gate is lifted. darksword_tweaks.m carries a complete iOS 17
     // "singular controller" path that was never reachable from here, so it has
     // never actually been exercised on a device. It is enabled to be tested;
     // if it does not work the tweak reports failure rather than misbehaving.
-    BOOL disableAppLibrary = [d boolForKey:kSettingsDSDisableAppLibrary];
-    BOOL disableIconFlyIn = [d boolForKey:kSettingsDSDisableIconFlyIn];
-    BOOL hideNewAppDots = [d boolForKey:kSettingsDSHideNewAppDots];
-    BOOL zeroWakeAnimation = [d boolForKey:kSettingsDSZeroWakeAnimation];
-    BOOL zeroBacklightFade = [d boolForKey:kSettingsDSZeroBacklightFade];
-    BOOL doubleTapToLock = [d boolForKey:kSettingsDSDoubleTapToLock];
-    BOOL dragCoefficientEnabled = [d boolForKey:kSettingsDSDragCoefficientEnabled];
+    BOOL (^on)(NSString *) = ^BOOL(NSString *key) {
+        return [d boolForKey:key] && (!onlyKeys || [onlyKeys containsObject:key]);
+    };
+    BOOL disableAppLibrary = on(kSettingsDSDisableAppLibrary);
+    BOOL disableIconFlyIn = on(kSettingsDSDisableIconFlyIn);
+    BOOL hideNewAppDots = on(kSettingsDSHideNewAppDots);
+    BOOL zeroWakeAnimation = on(kSettingsDSZeroWakeAnimation);
+    BOOL zeroBacklightFade = on(kSettingsDSZeroBacklightFade);
+    BOOL doubleTapToLock = on(kSettingsDSDoubleTapToLock);
+    BOOL dragCoefficientEnabled = on(kSettingsDSDragCoefficientEnabled);
     SettingsDarkTweaksResult result = {
         .disableAppLibrary = true,
         .disableIconFlyIn = true,
@@ -4913,9 +5041,10 @@ static SettingsDarkTweaksResult settings_apply_dark_tweaks_from_defaults_locked(
         .dragCoefficient = true,
     };
 
-    printf("[DST] apply appLib=%d flyIn=%d wake=%d backlight=%d dblTap=%d drag=%d\n",
+    printf("[DST] apply appLib=%d flyIn=%d dots=%d wake=%d backlight=%d dblTap=%d drag=%d\n",
            disableAppLibrary,
            disableIconFlyIn,
+           hideNewAppDots,
            zeroWakeAnimation,
            zeroBacklightFade,
            doubleTapToLock,
@@ -9198,26 +9327,27 @@ static void settings_schedule_live_apply_for_key(NSString *key)
 
 
     if (settings_key_is_dark_tweak(key)) {
-        if (!g_springboard_rc_ready || ![d boolForKey:key]) return;
+        if (!g_springboard_rc_ready) return;
+        // Just this switch, not every DarkSword tweak.
+        NSString *switchKey = [key isEqualToString:kSettingsDSDragCoefficientValue]
+            ? kSettingsDSDragCoefficientEnabled : key;
+        NSSet<NSString *> *onlyKeys = [NSSet setWithObject:switchKey];
+        if (![d boolForKey:switchKey]) {
+            dispatch_async(dispatch_get_global_queue(0, 0), ^{
+                @synchronized (settings_rc_lock()) {
+                    if (settings_cleanup_in_progress() || !g_springboard_rc_ready) return;
+                    settings_undo_disabled_dark_tweaks_locked(d, onlyKeys);
+                }
+                settings_notify_package_queue_changed_async();
+            });
+            return;
+        }
         dispatch_async(dispatch_get_global_queue(0, 0), ^{
             @synchronized (settings_rc_lock()) {
                 if (settings_cleanup_in_progress() || !g_springboard_rc_ready) return;
-                SettingsDarkTweaksResult result = settings_apply_dark_tweaks_from_defaults_locked(d);
+                SettingsDarkTweaksResult result = settings_apply_dark_tweaks_from_defaults_locked(d, onlyKeys);
                 bool ok = settings_dark_tweaks_result_all_ok(result);
-                if ([d boolForKey:kSettingsDSDisableAppLibrary])
-                    settings_mark_tweak_applied(kSettingsDSDisableAppLibrary, result.disableAppLibrary);
-                if ([d boolForKey:kSettingsDSDisableIconFlyIn])
-                    settings_mark_tweak_applied(kSettingsDSDisableIconFlyIn, result.disableIconFlyIn);
-                if ([d boolForKey:kSettingsDSHideNewAppDots])
-                    settings_mark_tweak_applied(kSettingsDSHideNewAppDots, result.hideNewAppDots);
-                if ([d boolForKey:kSettingsDSZeroWakeAnimation])
-                    settings_mark_tweak_applied(kSettingsDSZeroWakeAnimation, result.zeroWakeAnimation);
-                if ([d boolForKey:kSettingsDSZeroBacklightFade])
-                    settings_mark_tweak_applied(kSettingsDSZeroBacklightFade, result.zeroBacklightFade);
-                if ([d boolForKey:kSettingsDSDoubleTapToLock])
-                    settings_mark_tweak_applied(kSettingsDSDoubleTapToLock, result.doubleTapToLock);
-                if ([d boolForKey:kSettingsDSDragCoefficientEnabled])
-                    settings_mark_tweak_applied(kSettingsDSDragCoefficientEnabled, result.dragCoefficient);
+                settings_mark_dark_tweak_results(d, result, onlyKeys);
                 printf("[SETTINGS] live DarkSword memory patch results appLib=%d flyIn=%d wake=%d backlight=%d dblTap=%d drag=%d categoryOK=%d\n",
                        [d boolForKey:kSettingsDSDisableAppLibrary] ? result.disableAppLibrary : -1,
                        [d boolForKey:kSettingsDSDisableIconFlyIn] ? result.disableIconFlyIn : -1,
@@ -9750,7 +9880,9 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             BOOL runSBTools = settings_enabled_tweak_should_run(d, kSettingsSBToolsWithTweaks, springBoardPendingOnly) &&
                               settings_sbtools_has_changes(d);
             BOOL cleanupDisabledSpringBoardTweaks = settings_disabled_applied_springboard_cleanup_needed(d);
-            BOOL needsSpringBoardWork = runSBTools || runSBC || runDarkTweaks || runStatBar || runNSBar || runNiceBarLite || runAxonLite || runGravityLite || runLayoutExtras || restoreLayoutExtras || runAppSwitcherGrid || runFloatingDock || runLockedPreviews || relockPreviews || runThemer || runSnowBoardLite || runLiveWP || runStageStrip || runFastLockXLite || runQuickLoader || runRepoTweaks || cleanupDisabledSpringBoardTweaks;
+            NSSet<NSString *> *scopedKeys = pendingOnly ? settings_run_only_keys() : nil;
+            BOOL undoDarkTweaks = settings_dark_tweaks_undo_needed(d, scopedKeys);
+            BOOL needsSpringBoardWork = runSBTools || runSBC || runDarkTweaks || runStatBar || runNSBar || runNiceBarLite || runAxonLite || runGravityLite || runLayoutExtras || restoreLayoutExtras || runAppSwitcherGrid || runFloatingDock || runLockedPreviews || relockPreviews || runThemer || runSnowBoardLite || runLiveWP || runStageStrip || runFastLockXLite || runQuickLoader || runRepoTweaks || cleanupDisabledSpringBoardTweaks || undoDarkTweaks;
             BOOL needsSpringBoard = needsSpringBoardWork || forceSpringBoardRefresh;
 
             BOOL hasRunWork = patchSandboxExt || runPowercuff || resetPowercuff || needsSpringBoard;
@@ -9785,6 +9917,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             if (runQuickLoader) total++;
             if (runRepoTweaks) total++;
             if (cleanupDisabledSpringBoardTweaks) total++;
+            if (undoDarkTweaks) total++;
             NSUInteger step = 0;
             BOOL startStageStripControlLoopAfterInstall = NO;
 
@@ -9812,6 +9945,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             if (runQuickLoader) [enabledTweaks addObject:@"quickloader"];
             if (runRepoTweaks) [enabledTweaks addObject:@"repotweaks"];
             if (cleanupDisabledSpringBoardTweaks) [enabledTweaks addObject:@"cleanup"];
+            if (undoDarkTweaks) [enabledTweaks addObject:@"dark-off"];
             if (forceSpringBoardRefresh) [enabledTweaks addObject:@"springboard-refresh"];
             log_user("[PLAN] %lu stages: %s\n",
                      (unsigned long)total,
@@ -9906,25 +10040,20 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                         settings_stop_disabled_applied_springboard_tweaks_locked(d);
                     }
 
+                    if (undoDarkTweaks) {
+                        settings_progress(&step, total, "Turning off DarkSword tweaks");
+                        if (!settings_undo_disabled_dark_tweaks_locked(d, scopedKeys)) {
+                            [runWarnings addObject:@"turning off DarkSword tweaks"];
+                        }
+                    }
+
 
                     if (runDarkTweaks) {
                         settings_progress(&step, total, "Applying DarkSword tweaks");
-                        SettingsDarkTweaksResult result = settings_apply_dark_tweaks_from_defaults_locked(d);
+                        NSSet<NSString *> *darkOnlyKeys = springBoardPendingOnly ? settings_run_only_keys() : nil;
+                        SettingsDarkTweaksResult result = settings_apply_dark_tweaks_from_defaults_locked(d, darkOnlyKeys);
                         bool ok = settings_dark_tweaks_result_all_ok(result);
-                        if ([d boolForKey:kSettingsDSDisableAppLibrary])
-                            settings_mark_tweak_applied(kSettingsDSDisableAppLibrary, result.disableAppLibrary);
-                        if ([d boolForKey:kSettingsDSDisableIconFlyIn])
-                            settings_mark_tweak_applied(kSettingsDSDisableIconFlyIn, result.disableIconFlyIn);
-                        if ([d boolForKey:kSettingsDSHideNewAppDots])
-                            settings_mark_tweak_applied(kSettingsDSHideNewAppDots, result.hideNewAppDots);
-                        if ([d boolForKey:kSettingsDSZeroWakeAnimation])
-                            settings_mark_tweak_applied(kSettingsDSZeroWakeAnimation, result.zeroWakeAnimation);
-                        if ([d boolForKey:kSettingsDSZeroBacklightFade])
-                            settings_mark_tweak_applied(kSettingsDSZeroBacklightFade, result.zeroBacklightFade);
-                        if ([d boolForKey:kSettingsDSDoubleTapToLock])
-                            settings_mark_tweak_applied(kSettingsDSDoubleTapToLock, result.doubleTapToLock);
-                        if ([d boolForKey:kSettingsDSDragCoefficientEnabled])
-                            settings_mark_tweak_applied(kSettingsDSDragCoefficientEnabled, result.dragCoefficient);
+                        settings_mark_dark_tweak_results(d, result, darkOnlyKeys);
                         printf("[SETTINGS] DarkSword memory patch results appLib=%d flyIn=%d wake=%d backlight=%d dblTap=%d drag=%d categoryOK=%d\n",
                                [d boolForKey:kSettingsDSDisableAppLibrary] ? result.disableAppLibrary : -1,
                                [d boolForKey:kSettingsDSDisableIconFlyIn] ? result.disableIconFlyIn : -1,
@@ -18591,17 +18720,13 @@ void cyanide_present_contact(UIViewController *host)
     // DarkSword patches rewrite SpringBoard methods with no in-session undo:
     // switching one off after it was applied only skips the next apply. Say
     // so (read before the applied marker is cleared below).
-    BOOL darkPatchStillLive = !sender.isOn && settings_key_is_dark_tweak(key) &&
-        ![key isEqualToString:kSettingsDSDragCoefficientEnabled] &&
-        ![key isEqualToString:kSettingsDSDragCoefficientValue] &&
-        settings_tweak_is_applied(key);
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:key];
     printf("[SETTINGS] toggle %s=%d\n", key.UTF8String, sender.isOn);
-    if (darkPatchStillLive) {
-        log_user("[DST] %s stays active until SpringBoard restarts.\n", key.UTF8String);
-        [self presentRespringPromptWithTitle:@"Respring to Turn It Off?"
-                                     message:[NSString stringWithFormat:@"%@ is still active in SpringBoard. "
-                                              @"It stays on until a respring.", row[@"title"] ?: @"This tweak"]];
+    // Switching a DarkSword patch off undoes it right away with an open
+    // SpringBoard session (the live key handler), otherwise with the next run.
+    if (!sender.isOn && settings_key_is_dark_tweak(key) && !g_springboard_rc_ready &&
+        settings_dark_tweaks_undo_needed([NSUserDefaults standardUserDefaults], [NSSet setWithObject:key])) {
+        log_user("[DST] %s turns off with the next apply.\n", settings_dark_tweak_title(key));
     }
     settings_note_package_configuration_changed(key);
     if ([key isEqualToString:kSettingsKeepAlive]) {

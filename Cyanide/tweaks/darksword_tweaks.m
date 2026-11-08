@@ -11,10 +11,162 @@
 #import <unistd.h>
 #import "../LogTextView.h"
 #import "sb_walk.h"
+#import <errno.h>
+#import <signal.h>
+#import <stdlib.h>
+#import <sys/sysctl.h>
+#import <sys/time.h>
 
 static int ds_ios_major_version(void)
 {
     return (int)[[NSProcessInfo processInfo] operatingSystemVersion].majorVersion;
+}
+
+#pragma mark - Undo journal
+
+// Stored in Cyanide's defaults as
+//   { pid, boot, tweaks: { name: [ { t, a, o, p, n, obj, cls } ] } }
+// t: "w" memory write (n bytes at a), "m" method swap (a = Method), "x" a
+// marker for a tweak undone by code rather than by values (double-tap).
+// o: the value before any tweak changed it, p: the value the tweak wrote.
+// Numbers are hex strings: signed IMPs don't fit a plist integer.
+static NSString *const kDSJournalKey = @"CyanideDarkSwordUndo";
+static NSString *const kDSTweakNames[DSTweakCount] = {
+    @"applib", @"flyin", @"dots", @"wake", @"backlight", @"doubletap", @"drag",
+};
+static int g_ds_journal_tweak = -1;
+
+static uint64_t ds_boot_time(void)
+{
+    struct timeval bootTime = {0};
+    size_t size = sizeof(bootTime);
+    if (sysctlbyname("kern.boottime", &bootTime, &size, NULL, 0) != 0) return 0;
+    return (uint64_t)bootTime.tv_sec;
+}
+
+static NSString *ds_hex(uint64_t value)
+{
+    return [NSString stringWithFormat:@"%llx", value];
+}
+
+static uint64_t ds_unhex(id value)
+{
+    return [value isKindOfClass:NSString.class] ? strtoull([value UTF8String], NULL, 16) : 0;
+}
+
+static NSMutableDictionary *ds_journal_load(void)
+{
+    NSDictionary *raw = [NSUserDefaults.standardUserDefaults dictionaryForKey:kDSJournalKey];
+    if (!raw) return nil;
+    NSMutableDictionary *tweaks = [NSMutableDictionary dictionary];
+    NSDictionary *rawTweaks = [raw[@"tweaks"] isKindOfClass:NSDictionary.class] ? raw[@"tweaks"] : @{};
+    for (NSString *name in rawTweaks) {
+        NSArray *entries = rawTweaks[name];
+        if ([entries isKindOfClass:NSArray.class] && entries.count) tweaks[name] = [entries mutableCopy];
+    }
+    return [@{ @"pid": raw[@"pid"] ?: @0, @"boot": raw[@"boot"] ?: @0, @"tweaks": tweaks } mutableCopy];
+}
+
+static void ds_journal_save(NSDictionary *journal)
+{
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    if ([journal[@"tweaks"] count] == 0) [d removeObjectForKey:kDSJournalKey];
+    else [d setObject:journal forKey:kDSJournalKey];
+}
+
+static bool ds_journal_is_for(NSDictionary *journal, int pid)
+{
+    return journal && pid > 0 && [journal[@"pid"] intValue] == pid &&
+           [journal[@"boot"] unsignedLongLongValue] == ds_boot_time();
+}
+
+// The journal of the open session's SpringBoard; a journal of an earlier
+// SpringBoard is dropped, its patches died with it.
+static NSMutableDictionary *ds_journal_for_session(void)
+{
+    int pid = remote_call_current_pid();
+    NSMutableDictionary *journal = ds_journal_load();
+    if (!ds_journal_is_for(journal, pid)) {
+        journal = [@{ @"pid": @(pid), @"boot": @(ds_boot_time()),
+                      @"tweaks": [NSMutableDictionary dictionary] } mutableCopy];
+    }
+    return journal;
+}
+
+static void ds_journal_record(NSString *type, uint64_t addr, uint64_t orig, uint64_t patched,
+                              int size, uint64_t obj, uint64_t cls)
+{
+    if (g_ds_journal_tweak < 0 || g_ds_journal_tweak >= DSTweakCount || !addr) return;
+    if (remote_call_current_pid() <= 0) return;
+    @synchronized (kDSJournalKey) {
+        NSMutableDictionary *journal = ds_journal_for_session();
+        NSMutableDictionary *tweaks = journal[@"tweaks"];
+        NSString *me = kDSTweakNames[g_ds_journal_tweak];
+        NSString *a = ds_hex(addr);
+        // Already changed by this or another tweak: what it held before that
+        // is the value to put back.
+        BOOL known = NO;
+        for (NSString *name in tweaks) {
+            for (NSDictionary *e in tweaks[name]) {
+                if ([e[@"t"] isEqual:type] && [e[@"a"] isEqual:a]) {
+                    orig = ds_unhex(e[@"o"]);
+                    known = YES;
+                    break;
+                }
+            }
+            if (known) break;
+        }
+        NSMutableArray *mine = tweaks[me] ?: [NSMutableArray array];
+        NSDictionary *entry = @{ @"t": type, @"a": a, @"o": ds_hex(orig), @"p": ds_hex(patched),
+                                 @"n": @(size), @"obj": ds_hex(obj), @"cls": ds_hex(cls) };
+        NSUInteger index = [mine indexOfObjectPassingTest:^BOOL(NSDictionary *e, NSUInteger i, BOOL *stop) {
+            return [e[@"t"] isEqual:type] && [e[@"a"] isEqual:a];
+        }];
+        if (index != NSNotFound) mine[index] = entry;
+        else [mine addObject:entry];
+        tweaks[me] = mine;
+        ds_journal_save(journal);
+    }
+}
+
+void darksword_journal_begin(DSTweak tweak)
+{
+    g_ds_journal_tweak = (tweak >= 0 && tweak < DSTweakCount) ? (int)tweak : -1;
+}
+
+void darksword_journal_write(uint64_t addr, const void *newValue, int size,
+                             uint64_t obj, uint64_t cls)
+{
+    if (!addr || !newValue || (size != 1 && size != 4 && size != 8)) return;
+    uint64_t orig = 0, patched = 0;
+    if (!remote_read(addr, &orig, (uint64_t)size)) return;
+    memcpy(&patched, newValue, (size_t)size);
+    ds_journal_record(@"w", addr, orig, patched, size, obj, cls);
+}
+
+static void ds_journal_method(uint64_t method, uint64_t origImp, uint64_t patchedImp)
+{
+    ds_journal_record(@"m", method, origImp, patchedImp, 8, 0, 0);
+}
+
+bool darksword_tweak_undo_pending(DSTweak tweak)
+{
+    if (tweak < 0 || tweak >= DSTweakCount) return false;
+    @synchronized (kDSJournalKey) {
+        NSMutableDictionary *journal = ds_journal_load();
+        if (!journal) return false;
+        int pid = [journal[@"pid"] intValue];
+        int current = remote_call_current_pid();
+        // Without a session: a SpringBoard that has exited (respring) or a
+        // previous boot means its patches are gone.
+        bool alive = [journal[@"boot"] unsignedLongLongValue] == ds_boot_time() && pid > 0 &&
+                     (current > 0 ? current == pid : !(kill(pid, 0) != 0 && errno == ESRCH));
+        if (!alive) {
+            [NSUserDefaults.standardUserDefaults removeObjectForKey:kDSJournalKey];
+            return false;
+        }
+        return [journal[@"tweaks"][kDSTweakNames[tweak]] count] > 0;
+    }
 }
 
 static uint64_t ds_try_msg0(uint64_t obj, const char *selName)
@@ -86,6 +238,7 @@ static bool ds_poke_pointer_ivar(uint64_t obj, uint64_t cls, const char *name, u
 {
     uint64_t target = ds_resolve_ivar_target(obj, cls, name);
     if (!target) return false;
+    darksword_journal_write(target, &value, sizeof(value), obj, cls);
     if (!remote_write(target, &value, sizeof(value))) return false;
     uint64_t readback = remote_read64(target);
     printf("[DST]   %-40s @ 0x%llx -> 0x%llx\n", name, target, readback);
@@ -125,6 +278,7 @@ static bool ds_poke_bool_ivar(uint64_t obj, uint64_t cls, const char *name, bool
     if (!offset) return false;
     uint8_t byte = value ? 1 : 0;
     uint64_t target = obj + offset;
+    darksword_journal_write(target, &byte, 1, obj, cls);
     if (!remote_write(target, &byte, sizeof(byte))) return false;
     uint8_t readback = 0xff;
     if (!remote_read(target, &readback, sizeof(readback))) return false;
@@ -322,6 +476,7 @@ static bool ds_force_method_zero(const char *className, const char *selectorName
     uint64_t oldIMP = r_dlsym_call(R_TIMEOUT, "method_setImplementation",
                                    method, falseIMP, 0, 0, 0, 0, 0, 0);
     printf("[DST:APPLIB] hooked %s.%s oldIMP=0x%llx\n", className, selectorName, oldIMP);
+    if (oldIMP) ds_journal_method(method, oldIMP, falseIMP);
     return oldIMP != 0;
 }
 
@@ -427,6 +582,7 @@ static bool ds_poke_double_ivar(uint64_t obj, uint64_t cls, const char *name, do
     if (!target) return false;
 
     union { double d; uint64_t u; } out = { .d = value };
+    darksword_journal_write(target, &out.u, sizeof(out.u), obj, cls);
     if (!remote_write(target, &out.u, sizeof(out.u))) return false;
 
     // remote_read64 is a memory read, not a remote call: r_last_call_ok()
@@ -467,6 +623,7 @@ static void ds_refresh_root_folder_after_app_library_change(uint64_t rootFC, uin
 
 bool darksword_tweak_disable_app_library_in_session(void)
 {
+    darksword_journal_begin(DSTweakAppLibrary);
     printf("[DST:APPLIB] disabling app library\n");
 
     uint64_t clsIC = r_class("SBIconController");
@@ -570,6 +727,7 @@ bool darksword_tweak_disable_app_library_in_session(void)
 
 bool darksword_tweak_disable_icon_fly_in_in_session(void)
 {
+    darksword_journal_begin(DSTweakIconFlyIn);
     printf("[DST:FLYIN] disabling icon fly-in animation\n");
 
     uint64_t cls = r_class("SBCoverSheetPresentationManager");
@@ -652,6 +810,7 @@ static int ds_dots_refresh_icons(void)
 
 bool darksword_tweak_hide_new_app_dots_in_session(void)
 {
+    darksword_journal_begin(DSTweakNewAppDots);
     printf("[DST:DOTS] hiding new app dots\n");
     // Existing ones. iOS 18: SpringBoard's own clear (what its home screen
     // service offers other processes), which drops the stored state and
@@ -679,6 +838,7 @@ bool darksword_tweak_hide_new_app_dots_in_session(void)
 
 bool darksword_tweak_zero_backlight_fade_in_session(void)
 {
+    darksword_journal_begin(DSTweakBacklightFade);
     printf("[DST:BLF] zeroing backlight fade durations\n");
 
     uint64_t cls = r_class("SBScreenWakeAnimationController");
@@ -724,6 +884,7 @@ bool darksword_tweak_zero_backlight_fade_in_session(void)
 
             union { double d; uint64_t u; } zero = { .d = 0.0 };
             uint64_t target = settings + ivarOffset;
+            darksword_journal_write(target, &zero.u, sizeof(zero.u), settings, ds_object_class(settings));
             if (remote_write(target, &zero.u, sizeof(zero.u))) {
                 printf("[DST:BLF]   settings=0x%llx -> 0\n", settings);
                 poked++;
@@ -737,6 +898,7 @@ bool darksword_tweak_zero_backlight_fade_in_session(void)
 
 bool darksword_tweak_zero_wake_animation_in_session(void)
 {
+    darksword_journal_begin(DSTweakWakeAnimation);
     printf("[DST:WAKE] zeroing wake animation\n");
 
     uint64_t cls = r_class("SBScreenWakeAnimationController");
@@ -1134,6 +1296,7 @@ static bool ds_remove_double_tap_from_view(uint64_t view, uint64_t assocKey, con
 
 bool darksword_tweak_double_tap_to_lock_in_session(void)
 {
+    darksword_journal_begin(DSTweakDoubleTapLock);
     printf("[DST:LOCK] installing double-tap to lock\n");
 
     uint64_t clsSB = r_class("SpringBoard");
@@ -1202,6 +1365,7 @@ bool darksword_tweak_double_tap_to_lock_in_session(void)
     r_release(windows);
     printf("[DST:LOCK] legacyRemoved=%d lockscreen=%d passcodeExcluded=1\n",
            removed, lockScreenInstalled);
+    if (ok) ds_journal_record(@"x", 1, 0, 0, 0, 0, 0);
 
     printf("[DST:LOCK] result=%d\n", ok);
     return ok;
@@ -1322,4 +1486,159 @@ bool darksword_tweaks_apply_in_session(bool disableAppLibrary,
     }
 
     return any ? ok : true;
+}
+
+#pragma mark - Undo
+
+static bool ds_isa_matches(uint64_t obj, uint64_t cls)
+{
+    if (!obj || !cls) return true;
+    uint64_t isa = 0;
+    if (!remote_read(obj, &isa, sizeof(isa))) return false;
+    return isa == cls ||
+           (isa & 0x0000000ffffffff8ULL) == cls ||
+           (isa & 0x007ffffffffffff8ULL) == cls;
+}
+
+// Another tweak still journaled at the same place keeps it changed.
+static bool ds_journal_shared(NSDictionary *journal, NSString *me, NSString *type, NSString *addr)
+{
+    NSDictionary *tweaks = journal[@"tweaks"];
+    for (NSString *name in tweaks) {
+        if ([name isEqualToString:me]) continue;
+        for (NSDictionary *e in tweaks[name]) {
+            if ([e[@"t"] isEqual:type] && [e[@"a"] isEqual:addr]) return true;
+        }
+    }
+    return false;
+}
+
+static void ds_remove_catcher_from_list(uint64_t list, uint64_t catcherAssocKey, uint64_t gestureAssocKey,
+                                        int *removed)
+{
+    if (!r_is_objc_ptr(list)) return;
+    uint64_t catcher = r_dlsym_call(R_TIMEOUT, "objc_getAssociatedObject",
+                                    list, catcherAssocKey, 0, 0, 0, 0, 0, 0);
+    if (!r_is_objc_ptr(catcher)) return;
+    (void)ds_remove_double_tap_from_view(catcher, gestureAssocKey, "home page catcher");
+    r_msg2_main(catcher, "removeFromSuperview", 0, 0, 0, 0);
+    // The association held the last reference besides the superview.
+    r_dlsym_call(R_TIMEOUT, "objc_setAssociatedObject",
+                 list, catcherAssocKey, 0, 1, 0, 0, 0, 0);
+    (*removed)++;
+}
+
+static int ds_remove_double_tap_to_lock(void)
+{
+    uint64_t gestureAssocKey = r_sel("darkswordDoubleTapLockGesture");
+    uint64_t catcherAssocKey = r_sel("darkswordDoubleTapLockCatcher");
+    if (!gestureAssocKey || !catcherAssocKey) return 0;
+    int removed = 0;
+
+    uint64_t clsIC = r_class("SBIconController");
+    uint64_t ctrl = r_is_objc_ptr(clsIC) ? r_msg2(clsIC, "sharedInstance", 0, 0, 0, 0) : 0;
+    uint64_t rootFC = ds_try_msg0(ds_try_msg0(ctrl, "iconManager"), "rootFolderController");
+    if (r_is_objc_ptr(rootFC) &&
+        r_responds(rootFC, "iconListViewCount") && r_responds(rootFC, "iconListViewAtIndex:")) {
+        uint64_t count = r_msg2_main(rootFC, "iconListViewCount", 0, 0, 0, 0);
+        if (count > 32) count = 32;
+        for (uint64_t i = 0; i < count; i++) {
+            uint64_t list = r_msg2_main(rootFC, "iconListViewAtIndex:", i, 0, 0, 0);
+            ds_remove_catcher_from_list(list, catcherAssocKey, gestureAssocKey, &removed);
+        }
+    }
+    if (r_is_objc_ptr(rootFC) && r_responds(rootFC, "iconListViews")) {
+        uint64_t lists = r_msg2_main_retained(rootFC, "iconListViews");
+        uint64_t items[48];
+        int n = r_array_items_of_class(lists, 0, items, 48);
+        for (int i = 0; i < n; i++) {
+            ds_remove_catcher_from_list(items[i], catcherAssocKey, gestureAssocKey, &removed);
+        }
+        if (r_is_objc_ptr(lists)) r_release(lists);
+    }
+
+    uint64_t UIApplication = r_class("UIApplication");
+    uint64_t app = r_is_objc_ptr(UIApplication) ?
+        r_msg2_main(UIApplication, "sharedApplication", 0, 0, 0, 0) : 0;
+    uint64_t windows = r_is_objc_ptr(app) ? r_msg2_main_retained(app, "windows") : 0;
+    uint64_t windowList[80];
+    int windowCount = r_array_items_of_class(windows, 0, windowList, 80);
+    uint64_t coverWindowClass = r_class("SBCoverSheetWindow");
+    uint64_t selKind = r_sel("isKindOfClass:");
+    for (int i = 0; i < windowCount; i++) {
+        if (ds_remove_double_tap_from_view(windowList[i], gestureAssocKey, "legacy window")) removed++;
+        if (r_is_objc_ptr(coverWindowClass) && r_msg(windowList[i], selKind, coverWindowClass, 0, 0, 0)) {
+            uint64_t lockView = ds_cover_sheet_main_page_view(windowList[i]);
+            if (ds_remove_double_tap_from_view(lockView, gestureAssocKey, "lockscreen main page")) removed++;
+        }
+    }
+    if (r_is_objc_ptr(windows)) r_release(windows);
+    printf("[DST:UNDO] double-tap to lock: removed %d recognizer(s)\n", removed);
+    return removed;
+}
+
+bool darksword_tweak_undo_in_session(DSTweak tweak)
+{
+    if (tweak < 0 || tweak >= DSTweakCount) return false;
+    int pid = remote_call_current_pid();
+    if (pid <= 0) return false;
+    NSString *me = kDSTweakNames[tweak];
+
+    NSMutableDictionary *journal = nil;
+    NSArray *entries = nil;
+    @synchronized (kDSJournalKey) {
+        journal = ds_journal_load();
+        if (!ds_journal_is_for(journal, pid)) {
+            // Journaled for an earlier SpringBoard: those changes are gone.
+            if (journal) [NSUserDefaults.standardUserDefaults removeObjectForKey:kDSJournalKey];
+            printf("[DST:UNDO] %s: nothing to put back in this SpringBoard\n", me.UTF8String);
+            return true;
+        }
+        entries = [journal[@"tweaks"][me] copy] ?: @[];
+    }
+
+    int restored = 0, kept = 0, changed = 0;
+    for (NSDictionary *e in entries.reverseObjectEnumerator) {
+        NSString *type = e[@"t"];
+        if ([type isEqualToString:@"x"]) continue;
+        if (ds_journal_shared(journal, me, type, e[@"a"])) { kept++; continue; }
+        uint64_t addr = ds_unhex(e[@"a"]);
+        uint64_t orig = ds_unhex(e[@"o"]);
+        uint64_t patched = ds_unhex(e[@"p"]);
+        if ([type isEqualToString:@"m"]) {
+            uint64_t current = r_dlsym_call(R_TIMEOUT, "method_getImplementation",
+                                            addr, 0, 0, 0, 0, 0, 0, 0);
+            if (current != patched || !orig) { changed++; continue; }
+            r_dlsym_call(R_TIMEOUT, "method_setImplementation", addr, orig, 0, 0, 0, 0, 0, 0);
+            restored++;
+            continue;
+        }
+        int size = [e[@"n"] intValue];
+        if (size != 1 && size != 4 && size != 8) continue;
+        if (!ds_isa_matches(ds_unhex(e[@"obj"]), ds_unhex(e[@"cls"]))) { changed++; continue; }
+        uint64_t current = 0;
+        // Something else has written it since: leave its value.
+        if (!remote_read(addr, &current, (uint64_t)size) || current != patched) { changed++; continue; }
+        if (remote_write(addr, &orig, (uint64_t)size)) restored++;
+    }
+
+    if (tweak == DSTweakDoubleTapLock) {
+        ds_remove_double_tap_to_lock();
+    } else if (tweak == DSTweakAppLibrary && restored > 0) {
+        uint64_t clsIC = r_class("SBIconController");
+        uint64_t ctrl = r_is_objc_ptr(clsIC) ? r_msg2(clsIC, "sharedInstance", 0, 0, 0, 0) : 0;
+        uint64_t rootFC = ds_try_msg0(ds_try_msg0(ctrl, "iconManager"), "rootFolderController");
+        ds_refresh_root_folder_after_app_library_change(rootFC, ds_try_msg0(rootFC, "rootFolderView"));
+    }
+
+    @synchronized (kDSJournalKey) {
+        NSMutableDictionary *now = ds_journal_load();
+        if (ds_journal_is_for(now, pid)) {
+            [now[@"tweaks"] removeObjectForKey:me];
+            ds_journal_save(now);
+        }
+    }
+    printf("[DST:UNDO] %s: restored=%d kept-for-other-tweak=%d changed-since=%d\n",
+           me.UTF8String, restored, kept, changed);
+    return true;
 }

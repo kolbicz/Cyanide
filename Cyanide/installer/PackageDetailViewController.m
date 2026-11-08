@@ -697,6 +697,10 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
             ? UIColor.secondaryLabelColor
             : self.view.tintColor;
         if (intent == PackageQueueIntentNone) style = UIBarButtonItemStyleDone;
+    } else if ([self canApplyNow]) {
+        title = @"Apply Now";
+        tint = self.view.tintColor;
+        style = UIBarButtonItemStyleDone;
     } else if (intent != PackageQueueIntentNone) {
         title = @"Cancel";
         tint = UIColor.secondaryLabelColor;
@@ -734,17 +738,57 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
         style = UIBarButtonItemStyleDone;
     }
 
-    BOOL useMenu = manual && intent == PackageQueueIntentNone;
+    BOOL applyNow = !manual && !directTool && [self canApplyNow];
+    BOOL useMenu = (manual && intent == PackageQueueIntentNone) || applyNow;
     UIBarButtonItem *item = [[UIBarButtonItem alloc] initWithTitle:title
                                                              style:style
                                                             target:useMenu ? nil : self
                                                             action:useMenu ? nil : @selector(didTapAction)];
-    if (useMenu) {
+    if (applyNow) {
+        item.menu = [self applyNowMenu];
+    } else if (useMenu) {
         item.menu = [self manualActionMenu];
     }
     if (tint) item.tintColor = tint;
     item.enabled = !self.package.isInstallDisabled || installed || intent != PackageQueueIntentNone;
     self.navigationItem.rightBarButtonItem = item;
+}
+
+// An enabled toggle tweak waiting to be applied again (Cyanide was reopened,
+// or SpringBoard restarted) while kernel access is saved and "Apply Installer
+// changes right away" is on: it can be applied by itself.
+- (BOOL)canApplyNow
+{
+    if (self.package.kind != PackageInstallKindToggle || self.package.enabledKey.length == 0) return NO;
+    if (!self.package.isInstalled || !self.package.isQueuedForApply) return NO;
+    if ([[PackageQueue sharedQueue] intentForPackage:self.package] != PackageQueueIntentInstall) return NO;
+    if (![NSUserDefaults.standardUserDefaults boolForKey:kSettingsInstallRightAway]) return NO;
+    return settings_kernel_access_available();
+}
+
+- (UIMenu *)applyNowMenu
+{
+    __weak typeof(self) weakSelf = self;
+    UIAction *apply = [UIAction actionWithTitle:@"Apply Now"
+                                          image:[UIImage systemImageNamed:@"bolt.fill"]
+                                     identifier:nil
+                                        handler:^(__kindof UIAction *action) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        log_user("[INSTALLER] Apply now: %s\n", strongSelf.package.name.UTF8String);
+        [[PackageQueue sharedQueue] applyPackageNow:strongSelf.package];
+    }];
+    UIAction *deactivate = [UIAction actionWithTitle:@"Deactivate"
+                                               image:[UIImage systemImageNamed:@"xmark.circle"]
+                                          identifier:nil
+                                             handler:^(__kindof UIAction *action) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        log_user("[INSTALLER] Deactivated %s\n", strongSelf.package.name.UTF8String);
+        [[PackageQueue sharedQueue] removePackage:strongSelf.package];
+    }];
+    deactivate.attributes = UIMenuElementAttributesDestructive;
+    return [UIMenu menuWithTitle:@"" children:@[ apply, deactivate ]];
 }
 
 - (void)didTapAction

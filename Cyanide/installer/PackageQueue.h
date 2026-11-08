@@ -57,9 +57,14 @@ typedef NS_ENUM(NSInteger, PackageQueueIntent) {
 // (and does nothing) when a commit is already running.
 - (BOOL)commit;
 
-// Same as -commit, but the run it starts applies only the committed
-// packages, not every enabled tweak that isn't marked applied yet.
+// Same as -commit, but commits only the packages the user toggled and the
+// run it starts applies only those, not every enabled tweak that isn't marked
+// applied yet.
 - (BOOL)commitOnlyQueuedPackages;
+
+// Queues an enabled toggle tweak that waits to be applied again explicitly,
+// so "Apply Installer changes right away" applies it by itself.
+- (void)applyPackageNow:(Package *)package;
 
 // Enabling keys of the queued packages when every one of them is a plain
 // toggle tweak (what "Apply Installer changes right away" handles); nil
