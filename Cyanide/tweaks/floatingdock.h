@@ -14,6 +14,8 @@
 #import <stdbool.h>
 
 bool floatingdock_apply_in_session(void);
+// Something to restore: set up in this launch, or a saved session.
+bool floatingdock_has_state(void);
 bool floatingdock_stop_in_session(void);
 // Sizes and lays out the iPad Dock for its current icons again: SBCustomizer
 // changes the Dock's icons (count, apps moved in) after the iPad Dock exists,

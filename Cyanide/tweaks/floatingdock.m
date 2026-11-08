@@ -833,6 +833,12 @@ static bool floatingdock_recover_session(void)
     return true;
 }
 
+bool floatingdock_has_state(void)
+{
+    return gFloatingDockApplied ||
+           [NSUserDefaults.standardUserDefaults dictionaryForKey:kFloatingDockSessionKey] != nil;
+}
+
 bool floatingdock_stop_in_session(void)
 {
     if (!gFloatingDockApplied && !floatingdock_recover_session()) {

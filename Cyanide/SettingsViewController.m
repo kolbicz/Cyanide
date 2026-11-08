@@ -9269,7 +9269,7 @@ static void settings_schedule_live_apply_for_key(NSString *key)
             if (g_springboard_rc_ready) {
                 dispatch_async(dispatch_get_global_queue(0, 0), ^{
                     @synchronized (settings_rc_lock()) {
-                        if (g_springboard_rc_ready) floatingdock_stop_in_session();
+                        if (g_springboard_rc_ready && floatingdock_has_state()) floatingdock_stop_in_session();
                     }
                 });
             } else {
@@ -10384,7 +10384,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                  ok ? "[OK]" : "[WARN]",
                                  ok ? "created" : "did not apply");
                         if (!ok) [runWarnings addObject:@"iPad Dock"];
-                    } else if (!floatingDockEnabled) {
+                    } else if (!floatingDockEnabled && floatingdock_has_state()) {
                         floatingdock_stop_in_session();
                     }
 
