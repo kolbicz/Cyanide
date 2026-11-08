@@ -15,6 +15,7 @@ Notification previews for Face ID-locked apps, tweaks applied and undone one at 
   - Shortcuts / Siri / Action button actions (iOS 17 and later).
   - Control Center buttons (iOS 18).
   - `cyanide://respring` and `cyanide://reboot` links, off by default: turn on Settings → Launch Options → Respring and reboot links. Any app can open these links; the Shortcuts actions and Control Center buttons don't need the option.
+  - A progress screen like the Location Services toggle's shows each step instead of Cyanide's Home tab.
   - Reboot needs kernel access from an earlier run.
 
 ## Fixes
