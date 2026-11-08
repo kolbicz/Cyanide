@@ -4984,14 +4984,19 @@ void settings_power_action_async(BOOL reboot, UIViewController *host,
             settings_notify_cleanup_state_changed();
         }
         if (!reboot) {
-            // The overlay respring has a fallback when no relaunch could be
-            // scheduled, so a respring always goes ahead.
-            settings_show_respring_overlay(weakHost);
+            // A scheduled relaunch needs nothing on screen but the caller's
+            // progress screen. Without one, the overlay's fallback respring.
+            if (!g_respring_scheduled) settings_show_respring_overlay(weakHost);
             finish(YES, @"Respringing.");
             return;
         }
         if (scheduled) {
-            settings_show_rebooting_cover(weakHost);
+            // The caller shows its own progress screen; only say so if the
+            // device is still up after a while.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                log_user("[REBOOT] The device did not reboot within 25 s.\n");
+                settings_show_reboot_failed_alert(weakHost);
+            });
             finish(YES, @"Rebooting.");
         } else {
             finish(NO, @"Cyanide couldn't ask the system to reboot. It needs kernel access from an earlier Run.");

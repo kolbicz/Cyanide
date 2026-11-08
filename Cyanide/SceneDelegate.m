@@ -665,10 +665,50 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     }
 }
 
+// The progress screen for a respring or reboot request, like the Location
+// Services one: Cyanide's normal UI never shows. The bar runs over the usual
+// cleanup time; SpringBoard or the device then restarts under it.
+- (void)beginPowerCover:(BOOL)reboot {
+    if (!self.quietCover) [self buildQuietCover];
+    self.quietRun++;
+    self.quietFinished = NO;
+    self.quietPendingPhase = nil;
+    self.quietTitle.text = reboot ? @"Rebooting" : @"Respringing";
+    self.quietStatus.text = @"Stopping live tweaks…";
+    if (@available(iOS 17.0, *)) [self.quietIcon removeAllSymbolEffects];
+    self.quietIcon.image = [UIImage systemImageNamed:reboot ? @"power.circle.fill" : @"arrow.clockwise.circle.fill"
+                                   withConfiguration:scene_quiet_symbol_config()];
+    self.quietIcon.tintColor = reboot ? UIColor.systemRedColor : UIColor.systemBlueColor;
+    if (!UIAccessibilityIsReduceMotionEnabled()) {
+        if (@available(iOS 17.0, *)) [self.quietIcon addSymbolEffect:[NSSymbolPulseEffect effect]];
+    }
+    UIProgressView *bar = self.quietProgress;
+    [bar.layer removeAllAnimations];
+    [bar setProgress:0.05f animated:NO];
+    [bar layoutIfNeeded];
+    [UIView animateWithDuration:3.0 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        [bar setProgress:0.85f animated:NO];
+        [bar layoutIfNeeded];
+    } completion:nil];
+    scene_announce(self.quietTitle.text);
+}
+
+// The request is under way: SpringBoard (or the device) goes down next.
+- (void)finishPowerCover:(BOOL)reboot {
+    if (!self.quietCover) return;
+    self.quietFinished = YES;
+    self.quietStatus.text = reboot ? @"The device restarts in a moment…" : @"SpringBoard restarts in a moment…";
+    [self.quietProgress setProgress:1.0f animated:YES];
+}
+
 // A quiet shortcut link arriving before the scene is active: put up the
 // progress screen right away, so Cyanide's normal UI doesn't flash first.
 - (void)coverEarlyForURL:(NSURL *)url {
     if (self.actionInProgress) return;   // the running request owns the screen
+    if (url && scene_is_power_url(url)) {
+        [self beginPowerCover:[url.host.lowercaseString isEqualToString:@"reboot"]];
+        return;
+    }
     if (!url || ![url.host.lowercaseString isEqualToString:@"location-services"]) return;
     int desired; BOOL keep, showLog; NSString *err = nil;
     if (scene_parse_location_url(url, &desired, &keep, &showLog, &err) && !showLog)
@@ -704,12 +744,18 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
         return;
     }
     self.actionInProgress = YES;
+    [self beginPowerCover:reboot];
     __weak typeof(self) weakSelf = self;
     settings_power_action_async(reboot, [self topViewController], ^(BOOL ok, NSString *message) {
         typeof(self) me = weakSelf;
         me.actionInProgress = NO;
         if (requester) requester(ok, message ?: @"");
-        if (!ok) [me showAlertTitle:title message:message];
+        if (ok) {
+            [me finishPowerCover:reboot];
+        } else {
+            [me hideQuietCover];
+            [me showAlertTitle:title message:message];
+        }
     });
 }
 
@@ -1091,7 +1137,9 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     // in sceneDidBecomeActive flashed the normal UI in between.
     BOOL pendingQuiet = NO;
     NSURL *pending = self.pendingActionURL;
-    if ([pending.host.lowercaseString isEqualToString:@"location-services"]) {
+    if (pending && scene_is_power_url(pending)) {
+        pendingQuiet = YES;
+    } else if ([pending.host.lowercaseString isEqualToString:@"location-services"]) {
         int desired; BOOL keep, showLog; NSString *err = nil;
         pendingQuiet = scene_parse_location_url(pending, &desired, &keep, &showLog, &err) && !showLog;
     }
