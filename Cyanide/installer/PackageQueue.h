@@ -13,6 +13,9 @@
 NS_ASSUME_NONNULL_BEGIN
 
 extern NSString * const PackageQueueDidChangeNotification;
+// Posted after a package was added to the queue: the Installer may apply it
+// right away instead (see -rightAwayKeys).
+extern NSString * const PackageQueueDidEnqueueNotification;
 
 // Intent stored per package once enqueued.
 typedef NS_ENUM(NSInteger, PackageQueueIntent) {
@@ -53,6 +56,15 @@ typedef NS_ENUM(NSInteger, PackageQueueIntent) {
 // settings_run_actions() once. Clears the queue afterwards. Returns NO
 // (and does nothing) when a commit is already running.
 - (BOOL)commit;
+
+// Same as -commit, but the run it starts applies only the committed
+// packages, not every enabled tweak that isn't marked applied yet.
+- (BOOL)commitOnlyQueuedPackages;
+
+// Enabling keys of the queued packages when every one of them is a plain
+// toggle tweak (what "Apply Installer changes right away" handles); nil
+// otherwise or when nothing is queued.
+- (nullable NSSet<NSString *> *)rightAwayKeys;
 
 @end
 

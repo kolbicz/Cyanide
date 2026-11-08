@@ -137,6 +137,8 @@ extern NSString * const kSettingsAxonLiteEnabled;
 extern NSString * const kSettingsAppSwitcherGridEnabled;
 extern NSString * const kSettingsFloatingDockEnabled;
 extern NSString * const kSettingsLockedPreviewsEnabled;
+// Launch Options: Installer toggles apply at once when kernel access is saved.
+extern NSString * const kSettingsInstallRightAway;
 extern NSString * const kSettingsFastLockXLiteEnabled;
 
 extern NSString * const kSettingsGravityLiteEnabled;
@@ -255,6 +257,9 @@ NSDictionary *settings_latest_changelog_entry(void);
 
 void settings_run_actions(void);
 void settings_run_pending_actions(void);
+// A pending-only run limited to these enabling keys: other enabled tweaks
+// are left alone even when they aren't marked applied in this session.
+void settings_run_pending_actions_for_keys(NSSet<NSString *> *keys);
 // YES while a chain/run (not an ordinary action) owns the actions lock.
 BOOL settings_run_in_flight(void);
 // Before Cyanide switches itself to another app: waits for a live tweak's

@@ -1208,6 +1208,7 @@ NSString * const kSettingsAxonLiteEnabled = @"AxonLiteEnabled";
 NSString * const kSettingsAppSwitcherGridEnabled = @"AppSwitcherGridEnabled";
 NSString * const kSettingsFloatingDockEnabled = @"FloatingDockEnabled";
 NSString * const kSettingsLockedPreviewsEnabled = @"LockedPreviewsEnabled";
+NSString * const kSettingsInstallRightAway = @"InstallRightAway";
 NSString * const kSettingsFastLockXLiteEnabled = @"FastLockXLiteEnabled";
 static NSString * const kSettingsFastLockXLiteBlockMusic = @"FastLockXLiteBlockMusic";
 static NSString * const kSettingsFastLockXLiteBlockFlashlight = @"FastLockXLiteBlockFlashlight";
@@ -4673,9 +4674,25 @@ static BOOL settings_dark_tweaks_any_enabled(NSUserDefaults *d)
            [d boolForKey:kSettingsDSDoubleTapToLock];
 }
 
+// Keys a scoped pending run (settings_run_pending_actions_for_keys) is limited
+// to; nil for every other run. Kept through auto-retries of that run.
+static NSSet<NSString *> *g_run_only_keys;
+
+static NSSet<NSString *> *settings_run_only_keys(void)
+{
+    @synchronized ([NSUserDefaults class]) { return g_run_only_keys; }
+}
+
+static void settings_set_run_only_keys(NSSet<NSString *> *keys)
+{
+    @synchronized ([NSUserDefaults class]) { g_run_only_keys = [keys copy]; }
+}
+
 static BOOL settings_enabled_tweak_should_run(NSUserDefaults *d, NSString *key, BOOL pendingOnly)
 {
     if (![d boolForKey:key]) return NO;
+    NSSet<NSString *> *onlyKeys = pendingOnly ? settings_run_only_keys() : nil;
+    if (onlyKeys) return [onlyKeys containsObject:key];
     return !pendingOnly || !settings_tweak_is_applied(key);
 }
 
@@ -9495,6 +9512,7 @@ void settings_register_defaults(void)
         kSettingsAppSwitcherGridEnabled: @NO,
         kSettingsFloatingDockEnabled: @NO,
         kSettingsLockedPreviewsEnabled: @NO,
+        kSettingsInstallRightAway: @YES,
 
         kSettingsQuickLoaderEnabled: @NO,
         kSettingsRepoTweaksEnabled: @NO,
@@ -10462,12 +10480,21 @@ static void settings_run_actions_internal(BOOL pendingOnly)
 
 void settings_run_actions(void)
 {
+    settings_set_run_only_keys(nil);
     g_settings_actions_auto_retry_attempt = 0;
     settings_run_actions_internal(NO);
 }
 
 void settings_run_pending_actions(void)
 {
+    settings_set_run_only_keys(nil);
+    g_settings_actions_auto_retry_attempt = 0;
+    settings_run_actions_internal(YES);
+}
+
+void settings_run_pending_actions_for_keys(NSSet<NSString *> *keys)
+{
+    settings_set_run_only_keys(keys.count ? keys : nil);
     g_settings_actions_auto_retry_attempt = 0;
     settings_run_actions_internal(YES);
 }
@@ -14390,6 +14417,8 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
            @"subtitle": @"Lets cyanide://location-services links turn Location Services on or off. Any app can open these links without asking, so this is off by default. The Control Center toggle and the Shortcuts action work without it." },
         @{ @"key": kRepoSourcesEnabledKey,      @"title": @"Repo sources",
            @"subtitle": @"Off hides the Sources tab and repo packages, stops refreshing sources, and skips repo tweaks when applying (running ones are stopped). Local QuickLoader .js files still work." },
+        @{ @"key": kSettingsInstallRightAway,   @"title": @"Apply Installer changes right away",
+           @"subtitle": @"With saved kernel access, activating or deactivating a tweak in the Installer applies just that tweak at once instead of adding it to the queue. Without kernel access, and for OTA, Hide Home Bar and repo tweaks, the queue works as before." },
         @{ @"key": kSettingsKeepAlive,          @"title": @"Keep app alive in background",
            @"subtitle": @"Required for app-driven live tweaks to persist while minimized, including StatBar receiving fresh live data." },
     ];

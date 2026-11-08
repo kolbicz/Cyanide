@@ -153,6 +153,7 @@ Under **Settings → Launch Options**:
 | **Verbose logging** | Full RemoteCall internals in the log, for bug reports. |
 | **Location Services links** | Allow `cyanide://location-services` links (off by default). |
 | **Repo sources** | Show or hide the Sources tab and repo tweaks. |
+| **Apply Installer changes right away** | With saved kernel access, activating or deactivating a tweak applies just that tweak at once instead of queueing it (on by default). |
 | **Keep app alive in background** | Needed by tweaks that keep running while Cyanide is backgrounded. |
 
 Each tweak has its own section in Settings once installed.

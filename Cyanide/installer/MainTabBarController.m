@@ -6,6 +6,8 @@
 #import "MainTabBarController.h"
 #import "QueuePopupBar.h"
 #import "QueueReviewViewController.h"
+#import "InstallProgressViewController.h"
+#import "../LogTextView.h"
 #import "PackageQueue.h"
 #import "HomeViewController.h"
 #import "SourcesViewController.h"
@@ -54,6 +56,10 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
                                                  name:kSettingsActionsDidCompleteNotification
                                                object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(queueDidEnqueue:)
+                                                 name:PackageQueueDidEnqueueNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(sourcesDidRefresh:)
                                                  name:RepoTweaksDidRefreshNotification
                                                object:nil];
@@ -87,6 +93,34 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
                                                    image:[UIImage systemImageNamed:symbol]
                                                      tag:0];
     return nav;
+}
+
+// "Apply Installer changes right away": with live or parked kernel access, a
+// toggle tweak just queued is applied at once (only that tweak), with the
+// usual progress screen. Anything else stays in the queue.
+- (void)queueDidEnqueue:(NSNotification *)note
+{
+    (void)note;
+    PackageQueue *q = [PackageQueue sharedQueue];
+    if (![NSUserDefaults.standardUserDefaults boolForKey:kSettingsInstallRightAway]) return;
+    if (q.isCommitting || settings_run_in_flight()) return;
+    if (![q rightAwayKeys] || !settings_kernel_access_available()) return;
+
+    UIViewController *host = self;
+    while (host.presentedViewController && !host.presentedViewController.isBeingDismissed)
+        host = host.presentedViewController;
+
+    InstallProgressViewController *vc = [[InstallProgressViewController alloc] init];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+    nav.modalPresentationStyle = UIModalPresentationAutomatic;
+    NSInteger count = q.pendingCount;
+    [host presentViewController:nav animated:YES completion:^{
+        log_user("[INSTALLER] ── Applying %ld change(s) right away ──\n", (long)count);
+        if (![q commitOnlyQueuedPackages]) {
+            log_user("[INSTALLER] Could not apply right away; the change stays in the queue.\n");
+            [nav dismissViewControllerAnimated:YES completion:nil];
+        }
+    }];
 }
 
 - (void)installPackagesAndSourcesTabsIfNeeded
