@@ -55,6 +55,7 @@ the Cache Cleaner deletes what you select.
 | **Axon Lite** | Group Notification Center requests by app |
 | **App Switcher Grid** | Grid-style app switcher |
 | **iPad Dock** | iPad-style Dock with the App Library button |
+| **Locked App Previews** | Notification previews for apps locked with Face ID (iOS 18+) |
 | **SpringBoard Tools** | Apply the dock, folder and Control Center look from Settings → Lara with the other tweaks |
 | **Lock Screen Duration** | Keep the lock screen awake longer |
 | **QuickLoader** | Executes custom .js code |

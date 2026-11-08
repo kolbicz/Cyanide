@@ -44,6 +44,7 @@
 #import "tweaks/gravitylite.h"
 #import "tweaks/appswitchergrid.h"
 #import "tweaks/floatingdock.h"
+#import "tweaks/locked_previews.h"
 #import "tweaks/hide_home_bar.h"
 #import "tweaks/QuickLoader.h"
 #import "tweaks/RepoTweaks.h"
@@ -1206,6 +1207,7 @@ NSString * const kSettingsAxonLiteEnabled = @"AxonLiteEnabled";
 
 NSString * const kSettingsAppSwitcherGridEnabled = @"AppSwitcherGridEnabled";
 NSString * const kSettingsFloatingDockEnabled = @"FloatingDockEnabled";
+NSString * const kSettingsLockedPreviewsEnabled = @"LockedPreviewsEnabled";
 NSString * const kSettingsFastLockXLiteEnabled = @"FastLockXLiteEnabled";
 static NSString * const kSettingsFastLockXLiteBlockMusic = @"FastLockXLiteBlockMusic";
 static NSString * const kSettingsFastLockXLiteBlockFlashlight = @"FastLockXLiteBlockFlashlight";
@@ -1516,6 +1518,15 @@ static bool settings_stop_floatingdock_registered(BOOL springboardWillDie)
     return floatingdock_stop_in_session();
 }
 
+static bool settings_stop_lockedpreviews_registered(BOOL springboardWillDie)
+{
+    if (springboardWillDie) {
+        lockedpreviews_forget_remote_state();
+        return false;
+    }
+    return lockedpreviews_stop_in_session();
+}
+
 static bool settings_stop_gravitylite_registered(BOOL springboardWillDie)
 {
     (void)springboardWillDie;
@@ -1630,6 +1641,9 @@ static void settings_each_springboard_cleanup_entry(void (^block)(const Settings
         // the hijacked thread in SpringBoard; killing Cyanide then crashed it
         // at 0x401).
         { kSettingsFloatingDockEnabled, "iPad Dock", NULL, settings_stop_floatingdock_registered, floatingdock_forget_remote_state, NULL, NO, NO },
+        // BOTH NO: a one-time method swap plus settings the notification
+        // server saves itself; nothing needs the session kept open.
+        { kSettingsLockedPreviewsEnabled, "Locked App Previews", NULL, settings_stop_lockedpreviews_registered, lockedpreviews_forget_remote_state, NULL, NO, NO },
         { kSettingsGravityLiteEnabled, "Gravity Lite", settings_request_gravitylite_stop, settings_stop_gravitylite_registered, gravitylite_forget_remote_state, NULL, YES, YES },
         { kSettingsThemerEnabled, "Themer", settings_request_themer_stop, settings_stop_themer_registered, themer_forget_remote_state, settings_themer_running, YES, YES },
         { kSettingsSnowBoardLiteEnabled, "SnowBoard Lite", NULL, settings_stop_themer_registered, themer_forget_remote_state, NULL, YES, YES },
@@ -8323,6 +8337,11 @@ static BOOL settings_key_is_floatingdock(NSString *key)
     return [key isEqualToString:kSettingsFloatingDockEnabled];
 }
 
+static BOOL settings_key_is_lockedpreviews(NSString *key)
+{
+    return [key isEqualToString:kSettingsLockedPreviewsEnabled];
+}
+
 static BOOL settings_key_is_gravitylite(NSString *key)
 {
     return [key isEqualToString:kSettingsGravityLiteEnabled] ||
@@ -8922,6 +8941,36 @@ static void settings_schedule_live_apply_for_key(NSString *key)
         return;
     }
 
+    if (settings_key_is_lockedpreviews(key)) {
+        if ([d boolForKey:kSettingsLockedPreviewsEnabled] && g_springboard_rc_ready) {
+            dispatch_async(dispatch_get_global_queue(0, 0), ^{
+                @synchronized (settings_rc_lock()) {
+                    if (settings_cleanup_in_progress() ||
+                        ![d boolForKey:kSettingsLockedPreviewsEnabled] ||
+                        !g_springboard_rc_ready) return;
+                    bool ok = lockedpreviews_apply_in_session();
+                    settings_mark_tweak_applied(kSettingsLockedPreviewsEnabled,
+                                                ok && [d boolForKey:kSettingsLockedPreviewsEnabled]);
+                    printf("[SETTINGS] live Locked App Previews apply result=%d\n", ok);
+                }
+                settings_notify_package_queue_changed_async();
+            });
+        } else if (![d boolForKey:kSettingsLockedPreviewsEnabled]) {
+            settings_mark_tweak_applied(kSettingsLockedPreviewsEnabled, NO);
+            settings_notify_package_queue_changed_async();
+            if (g_springboard_rc_ready) {
+                dispatch_async(dispatch_get_global_queue(0, 0), ^{
+                    @synchronized (settings_rc_lock()) {
+                        if (g_springboard_rc_ready) lockedpreviews_stop_in_session();
+                    }
+                });
+            } else {
+                lockedpreviews_forget_remote_state();
+            }
+        }
+        return;
+    }
+
     if (settings_key_is_floatingdock(key)) {
         if ([d boolForKey:kSettingsFloatingDockEnabled] && g_springboard_rc_ready) {
             dispatch_async(dispatch_get_global_queue(0, 0), ^{
@@ -9445,6 +9494,7 @@ void settings_register_defaults(void)
 
         kSettingsAppSwitcherGridEnabled: @NO,
         kSettingsFloatingDockEnabled: @NO,
+        kSettingsLockedPreviewsEnabled: @NO,
 
         kSettingsQuickLoaderEnabled: @NO,
         kSettingsRepoTweaksEnabled: @NO,
@@ -9637,6 +9687,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             BOOL axonLiteEnabled = [d boolForKey:kSettingsAxonLiteEnabled];
             BOOL appSwitcherGridEnabled = [d boolForKey:kSettingsAppSwitcherGridEnabled];
             BOOL floatingDockEnabled = [d boolForKey:kSettingsFloatingDockEnabled];
+            BOOL lockedPreviewsEnabled = [d boolForKey:kSettingsLockedPreviewsEnabled];
             BOOL themerEnabled = [d boolForKey:kSettingsThemerEnabled];
             BOOL snowboardLiteEnabled = [d boolForKey:kSettingsSnowBoardLiteEnabled];
             BOOL liveWPEnabled = [d boolForKey:kSettingsLiveWPEnabled];
@@ -9651,6 +9702,8 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             BOOL runAxonLite = settings_enabled_tweak_should_run(d, kSettingsAxonLiteEnabled, springBoardPendingOnly);
             BOOL runAppSwitcherGrid = settings_enabled_tweak_should_run(d, kSettingsAppSwitcherGridEnabled, springBoardPendingOnly);
             BOOL runFloatingDock = settings_enabled_tweak_should_run(d, kSettingsFloatingDockEnabled, springBoardPendingOnly);
+            BOOL runLockedPreviews = settings_enabled_tweak_should_run(d, kSettingsLockedPreviewsEnabled, springBoardPendingOnly);
+            BOOL relockPreviews = !lockedPreviewsEnabled && lockedpreviews_relock_pending();
             BOOL runThemer = settings_enabled_tweak_should_run(d, kSettingsThemerEnabled, springBoardPendingOnly);
             BOOL runSnowBoardLite = settings_enabled_tweak_should_run(d, kSettingsSnowBoardLiteEnabled, springBoardPendingOnly);
             BOOL runLiveWP = settings_enabled_tweak_should_run(d, kSettingsLiveWPEnabled, springBoardPendingOnly);
@@ -9679,7 +9732,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             BOOL runSBTools = settings_enabled_tweak_should_run(d, kSettingsSBToolsWithTweaks, springBoardPendingOnly) &&
                               settings_sbtools_has_changes(d);
             BOOL cleanupDisabledSpringBoardTweaks = settings_disabled_applied_springboard_cleanup_needed(d);
-            BOOL needsSpringBoardWork = runSBTools || runSBC || runDarkTweaks || runStatBar || runNSBar || runNiceBarLite || runAxonLite || runGravityLite || runLayoutExtras || restoreLayoutExtras || runAppSwitcherGrid || runFloatingDock || runThemer || runSnowBoardLite || runLiveWP || runStageStrip || runFastLockXLite || runQuickLoader || runRepoTweaks || cleanupDisabledSpringBoardTweaks;
+            BOOL needsSpringBoardWork = runSBTools || runSBC || runDarkTweaks || runStatBar || runNSBar || runNiceBarLite || runAxonLite || runGravityLite || runLayoutExtras || restoreLayoutExtras || runAppSwitcherGrid || runFloatingDock || runLockedPreviews || relockPreviews || runThemer || runSnowBoardLite || runLiveWP || runStageStrip || runFastLockXLite || runQuickLoader || runRepoTweaks || cleanupDisabledSpringBoardTweaks;
             BOOL needsSpringBoard = needsSpringBoardWork || forceSpringBoardRefresh;
 
             BOOL hasRunWork = patchSandboxExt || runPowercuff || resetPowercuff || needsSpringBoard;
@@ -9708,6 +9761,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             if (runGravityLite) total++;
             if (runAppSwitcherGrid) total++;
             if (runFloatingDock) total++;
+            if (runLockedPreviews || relockPreviews) total++;
             if (runStageStrip) total++;
             if (runFastLockXLite) total++;
             if (runQuickLoader) total++;
@@ -9727,6 +9781,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             if (runAxonLite) [enabledTweaks addObject:@"axon"];
             if (runAppSwitcherGrid) [enabledTweaks addObject:@"app-switcher-grid"];
             if (runFloatingDock) [enabledTweaks addObject:@"ipad-dock"];
+            if (runLockedPreviews) [enabledTweaks addObject:@"locked-previews"];
             if (runGravityLite) [enabledTweaks addObject:[NSString stringWithFormat:@"gravity(%ld%%)", (long)[d integerForKey:kSettingsGravityLiteMagnitudePct]]];
             if (runPowercuff) [enabledTweaks addObject:[NSString stringWithFormat:@"power(%@)", [d stringForKey:kSettingsPowercuffLevel] ?: @"nominal"]];
             if (runDarkTweaks) [enabledTweaks addObject:@"dark"];
@@ -10051,6 +10106,19 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                         if (!ok) [runWarnings addObject:@"iPad Dock"];
                     } else if (!floatingDockEnabled) {
                         floatingdock_stop_in_session();
+                    }
+
+                    if (runLockedPreviews) {
+                        settings_progress(&step, total, "Restoring locked app previews");
+                        bool ok = lockedpreviews_apply_in_session();
+                        settings_mark_tweak_applied(kSettingsLockedPreviewsEnabled,
+                                                    ok && [d boolForKey:kSettingsLockedPreviewsEnabled]);
+                        printf("[SETTINGS] Locked App Previews result=%d\n", ok);
+                        if (!ok) [runWarnings addObject:@"Locked App Previews"];
+                    } else if (relockPreviews) {
+                        settings_progress(&step, total, "Hiding locked app previews again");
+                        lockedpreviews_stop_in_session();
+                        settings_mark_tweak_applied(kSettingsLockedPreviewsEnabled, NO);
                     }
 
                     if (runFastLockXLite) {

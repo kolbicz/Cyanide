@@ -136,6 +136,7 @@ extern NSString * const kSettingsAxonLiteEnabled;
 
 extern NSString * const kSettingsAppSwitcherGridEnabled;
 extern NSString * const kSettingsFloatingDockEnabled;
+extern NSString * const kSettingsLockedPreviewsEnabled;
 extern NSString * const kSettingsFastLockXLiteEnabled;
 
 extern NSString * const kSettingsGravityLiteEnabled;
