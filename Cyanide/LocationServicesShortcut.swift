@@ -59,5 +59,23 @@ struct CyanideAppShortcuts: AppShortcutsProvider {
             shortTitle: "Location Services",
             systemImageName: "location.fill"
         )
+        AppShortcut(
+            intent: RespringIntent(),
+            phrases: [
+                "Respring with \(.applicationName)",
+                "\(.applicationName) Respring",
+            ],
+            shortTitle: "Respring",
+            systemImageName: "arrow.clockwise.circle"
+        )
+        AppShortcut(
+            intent: RebootIntent(),
+            phrases: [
+                "Reboot with \(.applicationName)",
+                "\(.applicationName) Reboot",
+            ],
+            shortTitle: "Reboot",
+            systemImageName: "power"
+        )
     }
 }

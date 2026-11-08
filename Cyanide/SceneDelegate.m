@@ -147,6 +147,8 @@ static BOOL scene_request_launched_app(void)
 @property (nonatomic, assign) BOOL pendingActionCold;
 // A cyanide://location-services link arrived while links are off; told once active.
 @property (nonatomic, assign) BOOL blockedLinkNotice;
+// The blocked link was a respring/reboot one (different notice).
+@property (nonatomic, assign) BOOL blockedLinkWasPower;
 // Who asked for pendingActionURL, if it was the Control Center toggle.
 @property (nonatomic, copy) CYLocationRequestCompletion pendingActionCompletion;
 // A successful quiet run that couldn't go Home because Cyanide was inactive
@@ -262,7 +264,21 @@ static CYLocationRequestCompletion g_scene_intent_completion = nil;
 // Options → "Location Services links". Control Center and the Shortcuts
 // action are not links: they come in through +cy_runLocationURL:completion:,
 // which iOS only calls for the user's own controls and shortcuts.
+static BOOL scene_is_power_url(NSURL *url) {
+    NSString *host = url.host.lowercaseString;
+    return [host isEqualToString:@"respring"] || [host isEqualToString:@"reboot"];
+}
+
 - (BOOL)acceptLinkURL:(NSURL *)url {
+    if (scene_is_power_url(url)) {
+        // Same reasoning as Location Services: any app could restart the
+        // device, so these links are off unless the user turns them on.
+        if ([NSUserDefaults.standardUserDefaults boolForKey:kSettingsPowerLinksEnabled]) return YES;
+        printf("[URL] link ignored (respring and reboot links are off): %s\n", url.absoluteString.UTF8String);
+        self.blockedLinkNotice = YES;
+        self.blockedLinkWasPower = YES;
+        return NO;
+    }
     if (![url.host.lowercaseString isEqualToString:@"location-services"]) return YES;   // other links: unchanged
     if ([NSUserDefaults.standardUserDefaults boolForKey:kSettingsLocationServicesLinksEnabled]) return YES;
     printf("[LOCSVC] link ignored (Location Services links are off): %s\n", url.absoluteString.UTF8String);
@@ -273,6 +289,14 @@ static CYLocationRequestCompletion g_scene_intent_completion = nil;
 - (void)showBlockedLinkNoticeIfNeeded {
     if (!self.blockedLinkNotice) return;
     self.blockedLinkNotice = NO;
+    if (self.blockedLinkWasPower) {
+        self.blockedLinkWasPower = NO;
+        [self showAlertTitle:@"Respring / Reboot Link"
+                     message:@"A link asked Cyanide to respring or reboot. These links are off, so nothing happened. "
+                             @"Use the Control Center buttons or the Shortcuts actions instead, or turn on "
+                             @"Settings → Launch Options → Respring and reboot links."];
+        return;
+    }
     [self showAlertTitle:@"Location Services Link"
                  message:@"A link asked Cyanide to change Location Services. Links are off, so nothing was changed. "
                          @"Use the Control Center toggle or the Shortcuts action instead, or turn on "
@@ -667,6 +691,28 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     [self handleActionURL:url completion:nil coldLaunched:NO];
 }
 
+// cyanide://respring and cyanide://reboot (links, the Shortcuts actions and
+// the Control Center buttons). Nothing to return to afterwards: SpringBoard
+// or the whole device restarts.
+- (void)handlePowerURL:(NSURL *)url completion:(CYLocationRequestCompletion)requester {
+    BOOL reboot = [url.host.lowercaseString isEqualToString:@"reboot"];
+    NSString *title = reboot ? @"Reboot" : @"Respring";
+    if (self.actionInProgress) {
+        NSString *busy = @"Another Cyanide request is in progress.";
+        scene_announce(busy);
+        if (requester) requester(NO, busy);
+        return;
+    }
+    self.actionInProgress = YES;
+    __weak typeof(self) weakSelf = self;
+    settings_power_action_async(reboot, [self topViewController], ^(BOOL ok, NSString *message) {
+        typeof(self) me = weakSelf;
+        me.actionInProgress = NO;
+        if (requester) requester(ok, message ?: @"");
+        if (!ok) [me showAlertTitle:title message:message];
+    });
+}
+
 - (void)handleActionURL:(NSURL *)url completion:(CYLocationRequestCompletion)requester coldLaunched:(BOOL)cold {
     [self handleActionURL:url completion:requester coldLaunched:cold
            broughtToFront:cold || !g_scene_visit_user_owned];
@@ -709,6 +755,10 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
 
 - (void)handleActionURL:(NSURL *)url completion:(CYLocationRequestCompletion)requester coldLaunched:(BOOL)cold
          broughtToFront:(BOOL)broughtToFront {
+    if (scene_is_power_url(url)) {
+        [self handlePowerURL:url completion:requester];
+        return;
+    }
     if (![url.host.lowercaseString isEqualToString:@"location-services"]) {
         NSLog(@"[URL] unhandled %@", url);
         if (requester) requester(NO, @"Unsupported link.");

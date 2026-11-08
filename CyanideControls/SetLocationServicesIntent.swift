@@ -46,9 +46,17 @@ enum CyanideLocationRequest {
     /// action: "on", "off" or "toggle".
     @MainActor
     static func run(_ action: String) async throws {
+        try await runURL("cyanide://location-services/\(action)",
+                         timeoutMessage: "Location Services is taking longer than expected.")
+    }
+
+    /// Any cyanide:// request the app's SceneDelegate handles (Location
+    /// Services, respring, reboot), waiting for its outcome.
+    @MainActor
+    static func runURL(_ string: String, timeoutMessage: String) async throws {
         // App-side handler (SceneDelegate +cy_runLocationURL:completion:).
         // Looked up at run time: the class only exists in the app.
-        let url = URL(string: "cyanide://location-services/\(action)")! as NSURL
+        let url = URL(string: string)! as NSURL
         let selector = NSSelectorFromString("cy_runLocationURL:completion:")
         guard let handler = NSClassFromString("SceneDelegate") as? NSObject.Type,
               handler.responds(to: selector) else {
@@ -69,7 +77,7 @@ enum CyanideLocationRequest {
                 resolver.timeout = Task { @MainActor in
                     try? await Task.sleep(nanoseconds: UInt64(Self.timeout * 1_000_000_000))
                     if Task.isCancelled { return }
-                    resolver.finish(false, "Location Services is taking longer than expected.")
+                    resolver.finish(false, timeoutMessage)
                 }
                 if Task.isCancelled { resolver.finish(false, "Cancelled.") }
             }

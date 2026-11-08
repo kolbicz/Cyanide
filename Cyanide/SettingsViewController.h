@@ -292,6 +292,13 @@ BOOL settings_filesystem_access_available(void);
 extern NSString * const kSettingsFullExploitRequiredMessage;
 // cyanide://location-services links accepted (default NO: any app could open them).
 extern NSString * const kSettingsLocationServicesLinksEnabled;
+// cyanide://respring and cyanide://reboot links accepted (default NO).
+extern NSString * const kSettingsPowerLinksEnabled;
+// Respring or reboot without asking (links, Shortcuts, Control Center), with
+// the same cleanup as the Settings rows. Completion on the main queue once it
+// is under way or was refused.
+void settings_power_action_async(BOOL reboot, UIViewController *host,
+                                 void (^completion)(BOOL ok, NSString *message));
 void settings_unlock_filesystem_async(BOOL allowFullExploit,
                                       void (^completion)(BOOL ok, NSString *message));
 // Runs the exploit on its own (no tweaks applied) with the log window shown;

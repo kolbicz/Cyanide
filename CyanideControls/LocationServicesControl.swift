@@ -18,6 +18,8 @@ struct CyanideControlsBundle: WidgetBundle {
     var body: some Widget {
         if #available(iOS 18.0, *) {
             LocationServicesControl()
+            RespringControl()
+            RebootControl()
         }
     }
 }

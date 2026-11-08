@@ -4900,6 +4900,105 @@ void settings_present_respring_prompt(UIViewController *host, NSString *title, N
     settings_present_controller(ac, host);
 }
 
+static void settings_show_reboot_failed_alert(UIViewController *host)
+{
+    UIAlertController *ac = [UIAlertController
+        alertControllerWithTitle:@"Reboot Didn't Happen"
+                         message:@"Cyanide couldn't ask the system to reboot. It needs kernel access from an earlier Run; run Cyanide, then try again, or restart the device yourself. Details are in the log."
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    settings_present_controller(ac, host);
+}
+
+// Covers the app while the scheduled reboot runs. If the device is still up
+// after a while, the request didn't land: say so instead of leaving the cover.
+static void settings_show_rebooting_cover(UIViewController *host)
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *window = settings_active_window(host);
+        if (!window) return;
+        UIView *cover = [[UIView alloc] initWithFrame:window.bounds];
+        cover.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        cover.backgroundColor = UIColor.blackColor;
+        UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
+        spin.color = UIColor.whiteColor;
+        spin.translatesAutoresizingMaskIntoConstraints = NO;
+        [spin startAnimating];
+        UILabel *label = [UILabel new];
+        label.text = @"Rebooting…";
+        label.textColor = UIColor.whiteColor;
+        label.font = [UIFont systemFontOfSize:17.0 weight:UIFontWeightSemibold];
+        label.translatesAutoresizingMaskIntoConstraints = NO;
+        [cover addSubview:spin];
+        [cover addSubview:label];
+        [NSLayoutConstraint activateConstraints:@[
+            [spin.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],
+            [spin.centerYAnchor constraintEqualToAnchor:cover.centerYAnchor constant:-16.0],
+            [label.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],
+            [label.topAnchor constraintEqualToAnchor:spin.bottomAnchor constant:14.0],
+        ]];
+        [window addSubview:cover];
+        __weak UIView *weakCover = cover;
+        __weak UIViewController *weakHost = host;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (!weakCover.superview) return;
+            [weakCover removeFromSuperview];
+            log_user("[REBOOT] The device did not reboot within 25 s.\n");
+            settings_show_reboot_failed_alert(weakHost);
+        });
+    });
+}
+
+// Respring or reboot without a confirmation, for the cyanide://respring and
+// cyanide://reboot links, the Shortcuts actions and the Control Center
+// buttons. Same cleanup as the Settings rows. Completion on the main queue,
+// once the respring or reboot is under way (or refused).
+void settings_power_action_async(BOOL reboot, UIViewController *host,
+                                 void (^completion)(BOOL ok, NSString *message))
+{
+    __weak UIViewController *weakHost = host;
+    dispatch_async(dispatch_get_global_queue(0, 0), ^{
+        void (^finish)(BOOL, NSString *) = ^(BOOL ok, NSString *message) {
+            dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(ok, message); });
+        };
+        if (__sync_val_compare_and_swap(&g_settings_actions_running, kSettingsLockFree, kSettingsLockAction)) {
+            log_user("%s Another action is still running. Try again in a moment.\n",
+                     reboot ? "[REBOOT]" : "[RESPRING]");
+            finish(NO, @"Another Cyanide action is still running. Try again in a moment.");
+            return;
+        }
+        log_user("%s Requested from a link, shortcut or Control Center.\n", reboot ? "[REBOOT]" : "[RESPRING]");
+        if (reboot) {
+            __sync_lock_test_and_set(&g_settings_reboot_running, 1);
+        } else {
+            __sync_lock_test_and_set(&g_settings_respring_cleanup_running, 1);
+        }
+        settings_notify_cleanup_state_changed();
+        BOOL scheduled = NO;
+        @try {
+            scheduled = settings_prepare_for_restart_sync(reboot);
+        } @finally {
+            __sync_lock_release(&g_settings_actions_running);
+            if (reboot) __sync_lock_release(&g_settings_reboot_running);
+            else __sync_lock_release(&g_settings_respring_cleanup_running);
+            settings_notify_cleanup_state_changed();
+        }
+        if (!reboot) {
+            // The overlay respring has a fallback when no relaunch could be
+            // scheduled, so a respring always goes ahead.
+            settings_show_respring_overlay(weakHost);
+            finish(YES, @"Respringing.");
+            return;
+        }
+        if (scheduled) {
+            settings_show_rebooting_cover(weakHost);
+            finish(YES, @"Rebooting.");
+        } else {
+            finish(NO, @"Cyanide couldn't ask the system to reboot. It needs kernel access from an earlier Run.");
+        }
+    });
+}
+
 static BOOL settings_dark_tweaks_should_run(NSUserDefaults *d, BOOL pendingOnly)
 {
     NSArray<NSString *> *keys = @[
@@ -7663,6 +7762,7 @@ BOOL settings_filesystem_access_available(void)
 }
 
 NSString * const kSettingsLocationServicesLinksEnabled = @"LocationServicesLinksEnabled";
+NSString * const kSettingsPowerLinksEnabled = @"PowerLinksEnabled";
 NSString * const kSettingsFullExploitRequiredMessage =
     @"No saved kernel access — this needs a full exploit run first.";
 
@@ -9607,6 +9707,7 @@ void settings_register_defaults(void)
         kSettingsRunAutoRetry: @NO,
         kRepoSourcesEnabledKey: @YES,
         kSettingsLocationServicesLinksEnabled: @NO,
+        kSettingsPowerLinksEnabled: @NO,
         kSettingsRunAutoRetryMaxAttempts: @8,
         kRemoteCallControlledPanicOnWedge: @NO,
 
@@ -14108,51 +14209,14 @@ BOOL settings_root_remove_xattr(NSString *path, const char *name, NSString **err
     // and two respring controls on one page is redundant.
 }
 
-// Covers the app while the scheduled reboot runs. If the device is still up
-// after a while, the request didn't land: say so instead of leaving the cover.
 - (void)showRebootingCover
 {
-    UIWindow *window = self.view.window ?: UIApplication.sharedApplication.keyWindow;
-    if (!window) return;
-    UIView *cover = [[UIView alloc] initWithFrame:window.bounds];
-    cover.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    cover.backgroundColor = UIColor.blackColor;
-    UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
-    spin.color = UIColor.whiteColor;
-    spin.translatesAutoresizingMaskIntoConstraints = NO;
-    [spin startAnimating];
-    UILabel *label = [UILabel new];
-    label.text = @"Rebooting…";
-    label.textColor = UIColor.whiteColor;
-    label.font = [UIFont systemFontOfSize:17.0 weight:UIFontWeightSemibold];
-    label.translatesAutoresizingMaskIntoConstraints = NO;
-    [cover addSubview:spin];
-    [cover addSubview:label];
-    [NSLayoutConstraint activateConstraints:@[
-        [spin.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],
-        [spin.centerYAnchor constraintEqualToAnchor:cover.centerYAnchor constant:-16.0],
-        [label.centerXAnchor constraintEqualToAnchor:cover.centerXAnchor],
-        [label.topAnchor constraintEqualToAnchor:spin.bottomAnchor constant:14.0],
-    ]];
-    [window addSubview:cover];
-    __weak typeof(self) weakSelf = self;
-    __weak UIView *weakCover = cover;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (!weakCover.superview) return;
-        [weakCover removeFromSuperview];
-        log_user("[REBOOT] The device did not reboot within 25 s.\n");
-        [weakSelf showRebootFailedAlert];
-    });
+    settings_show_rebooting_cover(self);
 }
 
 - (void)showRebootFailedAlert
 {
-    UIAlertController *ac = [UIAlertController
-        alertControllerWithTitle:@"Reboot Didn't Happen"
-                         message:@"Cyanide couldn't ask the system to reboot. It needs kernel access from an earlier Run; run Cyanide, then try again, or restart the device yourself. Details are in the log."
-                  preferredStyle:UIAlertControllerStyleAlert];
-    [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-    settings_present_controller(ac, self);
+    settings_show_reboot_failed_alert(self);
 }
 
 - (void)presentRespringPromptWithTitle:(NSString *)title message:(NSString *)message
@@ -14544,6 +14608,8 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
            @"subtitle": @"Logs the full RemoteCall internals for every exploit run, tweak apply and Process Viewer action. Off keeps the log readable; turn it on before reproducing an issue, then share the log." },
         @{ @"key": kSettingsLocationServicesLinksEnabled, @"title": @"Location Services links",
            @"subtitle": @"Lets cyanide://location-services links turn Location Services on or off. Any app can open these links without asking, so this is off by default. The Control Center toggle and the Shortcuts action work without it." },
+        @{ @"key": kSettingsPowerLinksEnabled, @"title": @"Respring and reboot links",
+           @"subtitle": @"Lets cyanide://respring and cyanide://reboot links (for example Open URL in Shortcuts) respring or reboot the device. Any app can open these links without asking, so this is off by default. The Control Center buttons and the Shortcuts actions work without it." },
         @{ @"key": kRepoSourcesEnabledKey,      @"title": @"Repo sources",
            @"subtitle": @"Off hides the Sources tab and repo packages, stops refreshing sources, and skips repo tweaks when applying (running ones are stopped). Local QuickLoader .js files still work." },
         @{ @"key": kSettingsInstallRightAway,   @"title": @"Apply Installer changes right away",

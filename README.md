@@ -139,6 +139,11 @@ an Installer package: Activate and Deactivate on its Settings page.
 **Location Services** can also be switched from a Control Center control
 (iOS 18) or a Shortcuts / Action button action (iOS 17 and later).
 
+**Respring** and **Reboot** are also Control Center buttons (iOS 18) and
+Shortcuts / Siri / Action button actions (iOS 17 and later), and can be opened
+as `cyanide://respring` and `cyanide://reboot` links once "Respring and reboot
+links" is on. Reboot needs kernel access from an earlier run.
+
 ## Options
 
 Under **Settings → Launch Options**:
@@ -152,6 +157,7 @@ Under **Settings → Launch Options**:
 | **Tweak apply speed** | Compatible / Fast / Fastest. Higher settings cut the delay paid between the remote calls that apply a tweak. |
 | **Verbose logging** | Full RemoteCall internals in the log, for bug reports. |
 | **Location Services links** | Allow `cyanide://location-services` links (off by default). |
+| **Respring and reboot links** | Allow `cyanide://respring` and `cyanide://reboot` links (off by default). |
 | **Repo sources** | Show or hide the Sources tab and repo tweaks. |
 | **Apply Installer changes right away** | With saved kernel access, activating or deactivating a tweak applies just that tweak at once instead of queueing it (on by default). |
 | **Keep app alive in background** | Needed by tweaks that keep running while Cyanide is backgrounded. |
