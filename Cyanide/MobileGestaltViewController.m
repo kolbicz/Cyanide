@@ -14,7 +14,7 @@
 #import "tweaks/mobilegestalt.h"
 
 static NSString * const kMGCredit =
-    @"Ported from lara by rooootdev. Keys from Nugget by leminlimez and SparseBox by khanhduytran0.";
+    @"Ported from lara by rooootdev. Keys from Nugget by leminlimez and SparseBox by khanhduytran0; China restrictions from GestaltX by huamidev.";
 
 typedef NS_ENUM(NSInteger, MGRowKind) {
     MGRowApply,
