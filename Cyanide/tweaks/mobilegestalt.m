@@ -52,6 +52,13 @@ static const char *kMGIPadUIKeys[] = {
     NULL,
 };
 static const char *kMGIPadUIClassKey = "mtrAoWJ3gsq+I90ZnQ0vQw";   // CacheData: device class number
+// China-model restrictions ("green tea": FaceTime Audio, eSIM and others),
+// two booleans in CacheData. Idea and values from GestaltX by huamidev, which
+// hard-codes their offsets for one iOS 27.3 layout; here they are looked up.
+static const char *kMGGreenTeaKey = "iyfxmLogGVIaH7aEgqwcIA";
+static const char *kMGNotGreenTeaKey = "4snMZS8LJkSctKypt2m+xA";
+// More places the model name is cached (GestaltX writes them too).
+static NSString * const kMGModelNameKeys[] = { @"Z/dqyWS6OZTRy10UcmUAhw", @"bbtR9jQx50Fv5Af/affNtA" };
 static const char *kMGInternalKeys[] = {
     "EqrsVvjcYDdxHBiQmGhAWw",   // AppleInternalInstallCapability
     "Oji6HRoPi7rH7HPdWVakuw",   // HasInternalSettingsBundle
@@ -108,6 +115,10 @@ static const MGTweak kMGTweaks[] = {
       "globe", "Eligibility", MGTweakKindRegion,
       { NULL }, 0, MGTweakFlagConfirm,
       "Don't use this to get around restrictions your country requires by law (for example the camera shutter sound)." },
+    { "Remove China Restrictions (Experimental)", "For mainland China models: FaceTime Audio, eSIM and other features. Restart after applying. May have no effect.",
+      "flag.slash", "Eligibility", MGTweakKindGreenTea,
+      { NULL }, 0, MGTweakFlagConfirm,
+      "Experimental and untested on this iOS version. It only changes what MobileGestalt reports; the hardware, your carrier and Apple's servers can still block these features. Restart the device after applying. Turning it off puts the original values back." },
     { "Security Research Device UI", "Shows the Security Research Device settings.",
       "terminal", "Eligibility", MGTweakKindKeys,
       { "XYlJKKkj2hztRP1NWWnhlw", NULL }, 26.0, MGTweakFlagNone, NULL },
@@ -233,6 +244,21 @@ static NSDictionary *mg_original_extra(void)
     }
 }
 
+// The original backup's CacheData, read once.
+static NSData *mg_original_cachedata(void)
+{
+    static NSData *data;
+    @synchronized (NSNull.null) {
+        if (!data) {
+            NSDictionary *plist = mg_parse([NSData dataWithContentsOfFile:mg_original_backup_path()],
+                                           NSPropertyListImmutable);
+            id d = plist[kMGCacheData];
+            if ([d isKindOfClass:NSData.class]) data = d;
+        }
+        return data;
+    }
+}
+
 static void mg_keep_backup(NSData *current)
 {
     NSFileManager *fm = NSFileManager.defaultManager;
@@ -326,6 +352,27 @@ static BOOL mg_cachedata_set(NSMutableDictionary *mg, const char *key, int64_t v
     return YES;
 }
 
+// Both flags must be plain booleans (0/1 in an otherwise empty 8-byte slot)
+// and not overridden in CacheExtra, as GestaltX checks before writing.
+static BOOL mg_greentea_read(NSDictionary *mg, NSData *data, int64_t *greenTea, int64_t *notGreenTea)
+{
+    NSDictionary *extra = mg[kMGCacheExtra];
+    for (NSString *k in @[@(kMGGreenTeaKey), @(kMGNotGreenTeaKey), @"green-tea", @"not-green-tea"])
+        if (extra[k]) return NO;
+    if (![data isKindOfClass:NSData.class]) return NO;
+    long offs[2] = { ota_find_mobilegestalt_cachedata_offset(kMGGreenTeaKey),
+                     ota_find_mobilegestalt_cachedata_offset(kMGNotGreenTeaKey) };
+    int64_t vals[2];
+    for (int i = 0; i < 2; i++) {
+        if (offs[i] < 0 || (NSUInteger)offs[i] + 8 > data.length) return NO;
+        memcpy(&vals[i], (const uint8_t *)data.bytes + offs[i], 8);
+        if (vals[i] != 0 && vals[i] != 1) return NO;
+    }
+    *greenTea = vals[0];
+    *notGreenTea = vals[1];
+    return YES;
+}
+
 BOOL mg_tweak_is_on(NSDictionary *mg, const MGTweak *t)
 {
     NSDictionary *extra = mg[kMGCacheExtra];
@@ -340,12 +387,22 @@ BOOL mg_tweak_is_on(NSDictionary *mg, const MGTweak *t)
         }
         case MGTweakKindIPadUI:
             return [extra[@(kMGIPadUIKeys[0])] isEqual:@1];
+        case MGTweakKindGreenTea: {
+            int64_t g = 0, n = 0;
+            NSDictionary *original = @{ kMGCacheExtra: @{} };
+            BOOL restricted = mg_greentea_read(original, mg_original_cachedata(), &g, &n) && g == 1;
+            return restricted && mg_greentea_read(mg, mg[kMGCacheData], &g, &n) && g == 0 && n == 1;
+        }
     }
     return NO;
 }
 
 BOOL mg_tweak_builtin(const MGTweak *t)
 {
+    if (t->kind == MGTweakKindGreenTea) {
+        int64_t g = 0, n = 0;
+        return mg_greentea_read(@{ kMGCacheExtra: @{} }, mg_original_cachedata(), &g, &n) && g == 0;
+    }
     if (t->kind != MGTweakKindKeys || !t->keys[0]) return NO;
     return [mg_original_extra()[@(t->keys[0])] isEqual:mg_enable_value(t)];
 }
@@ -395,6 +452,23 @@ BOOL mg_tweak_set(NSMutableDictionary *mg, const MGTweak *t, BOOL on, NSString *
                 else mg_restore_key(extra, @(kMGIPadUIKeys[i]));
             }
             return YES;
+        case MGTweakKindGreenTea: {
+            int64_t g = 0, n = 0, og = 1, on0 = 0;
+            if (!mg_greentea_read(mg, mg[kMGCacheData], &g, &n)) {
+                if (error) *error = @"This cache doesn't have the restriction flags in the expected form; nothing was changed.";
+                return NO;
+            }
+            // Off: the device's original values (same iOS build), else restricted.
+            NSData *orig = mg_original_cachedata();
+            if (!(orig.length == [mg[kMGCacheData] length] &&
+                  mg_greentea_read(@{ kMGCacheExtra: @{} }, orig, &og, &on0))) { og = 1; on0 = 0; }
+            if (!mg_cachedata_set(mg, kMGGreenTeaKey, on ? 0 : og) ||
+                !mg_cachedata_set(mg, kMGNotGreenTeaKey, on ? 1 : on0)) {
+                if (error) *error = @"The restriction flags could not be found in this cache.";
+                return NO;
+            }
+            return YES;
+        }
     }
     return NO;
 }
@@ -438,6 +512,11 @@ void mg_set_device_name(NSMutableDictionary *mg, NSString *name)
     NSString *value = name.length ? name : mg_original_device_name();
     if (value) art[kMGArtworkName] = value;
     else [art removeObjectForKey:kMGArtworkName];
+    NSMutableDictionary *extra = mg[kMGCacheExtra];
+    for (size_t i = 0; i < sizeof(kMGModelNameKeys) / sizeof(kMGModelNameKeys[0]); i++) {
+        if (name.length) extra[kMGModelNameKeys[i]] = name;
+        else mg_restore_key(extra, kMGModelNameKeys[i]);
+    }
 }
 
 NSString *mg_product_type(NSDictionary *mg)

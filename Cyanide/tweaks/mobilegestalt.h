@@ -25,6 +25,7 @@ typedef NS_ENUM(NSInteger, MGTweakKind) {
     MGTweakKindRegion,     // region/model code US + LL/A
     MGTweakKindInternal,   // three internal flags in CacheData
     MGTweakKindIPadUI,     // iPadOS user interface on an iPhone (CacheData + keys)
+    MGTweakKindGreenTea,   // China-model restriction flags in CacheData (experimental)
 };
 
 typedef NS_OPTIONS(NSUInteger, MGTweakFlags) {

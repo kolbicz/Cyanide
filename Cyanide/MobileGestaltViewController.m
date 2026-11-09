@@ -315,7 +315,8 @@ static const MGModel kMGModels[] = {
             NSString *why = nil;
             BOOL available = mg_tweak_available(t, &why);
             BOOL builtin = mg_tweak_builtin(t);
-            c.secondaryText = !available ? why : (builtin ? @"Built into this device." : @(t->detail));
+            NSString *builtinText = t->kind == MGTweakKindGreenTea ? @"Not restricted on this device." : @"Built into this device.";
+            c.secondaryText = !available ? why : (builtin ? builtinText : @(t->detail));
             UISwitch *sw = [UISwitch new];
             sw.on = mg_tweak_is_on(self.mg, t);
             sw.enabled = available && !builtin && !self.busy;
