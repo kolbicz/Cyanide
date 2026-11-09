@@ -131,10 +131,10 @@ static const MGTweak kMGTweaks[] = {
     { "Internal Storage Info", "Internal storage details in Settings.",
       "externaldrive", "Internal", MGTweakKindKeys,
       { "LBJfwOEzExRxzlAnSuI7eg", NULL }, 0, MGTweakFlagNone, NULL },
-    { "Internal Features", "Apple-internal options in Settings. The OTA blocker turns these flags off again when it runs.",
+    { "Internal Features", "Apple-internal options in Settings. Turning OTA updates back on in Cyanide clears these flags again.",
       "gearshape", "Internal", MGTweakKindInternal,
       { NULL }, 0, MGTweakFlagNone, NULL },
-    { "Metal HUD in All Apps", "Allows the Metal performance overlay in every app.",
+    { "Metal HUD in All Apps", "Allows the Metal performance overlay in every app. Turning OTA updates back on in Cyanide clears it.",
       "cpu", "Internal", MGTweakKindKeys,
       { "EqrsVvjcYDdxHBiQmGhAWw", NULL }, 0, MGTweakFlagNone, NULL },
 
