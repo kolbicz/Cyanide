@@ -507,7 +507,7 @@ static bool ota_ensure_customer_catalog_preferences(void)
     return ok;
 }
 
-static long ota_find_mobilegestalt_cachedata_offset(const char *mgKey)
+long ota_find_mobilegestalt_cachedata_offset(const char *mgKey)
 {
     const char *mgName = "/usr/lib/libMobileGestalt.dylib";
     const struct mach_header_64 *header = NULL;

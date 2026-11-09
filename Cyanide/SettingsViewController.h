@@ -316,6 +316,12 @@ void settings_springboard_tool_async(const char *tag, BOOL (^work)(void),
                                      void (^completion)(BOOL ok, NSString *message));
 void settings_tool_needs_exploit(UIViewController *tool, UITableView *tableView, NSString *toolName,
                                  void (^retry)(void));
+// File work outside the sandbox for a tool screen (no SpringBoard): kernel
+// access as for Supervision, then `work` off the main thread; it may set
+// *message. Same allowFullExploit rules; completion(ok, message) on main.
+void settings_kernel_file_tool_async(const char *tag, BOOL allowFullExploit,
+                                     BOOL (^work)(NSString **message),
+                                     void (^completion)(BOOL ok, NSString *message));
 // Daemons screen (launchd disabled.plist). `disabled` maps label -> value as
 // stored (nil on failure, with `message`); `running` maps every catalog label
 // to @{ @"name": executable, @"pid": pid if running } (nil if the process

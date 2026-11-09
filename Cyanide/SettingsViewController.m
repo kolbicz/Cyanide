@@ -4,6 +4,7 @@
 //
 
 #import "SettingsViewController.h"
+#import "MobileGestaltViewController.h"
 #import "FileBrowserViewController.h"
 #import "DaemonsViewController.h"
 #import "SystemInfoViewController.h"
@@ -8484,6 +8485,35 @@ static void settings_supervision_async(int op, BOOL allowFullExploit,
     });
 }
 
+// A tool screen's file work outside the sandbox (MobileGestalt): kernel access
+// as for Supervision (live or parked; a full run only when allowed), then
+// `work` off the main thread. completion(ok, message) on main.
+void settings_kernel_file_tool_async(const char *tag, BOOL allowFullExploit,
+                                     BOOL (^work)(NSString **message),
+                                     void (^completion)(BOOL ok, NSString *message))
+{
+    NSString *name = [NSString stringWithUTF8String:tag ?: "Tool"];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        BOOL ok = NO;
+        NSString *message = nil;
+        NSString *busy = [NSString stringWithFormat:@"[%@] Another action is already running.", name];
+        if (!settings_try_claim_actions_lock(tag ?: "Tool", busy.UTF8String)) {
+            message = @"Another action is already running. Try again when it has finished.";
+        } else {
+            @try {
+                if (settings_daemons_kernel_ready(allowFullExploit, &message)) {
+                    ok = work(&message);
+                } else if (!message) {
+                    message = @"Kernel access isn't active. Run the chain first, then try again.";
+                }
+            } @finally {
+                settings_release_actions_lock();
+            }
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(ok, message); });
+    });
+}
+
 void settings_application_did_become_active(void)
 {
     // Round 31: same reorder as will_enter_foreground — the gate re-open must
@@ -15510,6 +15540,7 @@ UIViewController *settings_make_daemons_viewer(void)
         @{ @"title": @"App Decrypt",      @"icon": @"lock.open.display",     @"color": [UIColor systemBlueColor],   @"section": @(-1), @"custom": @"lara", @"lara": @(LaraToolDecrypt) },
         @{ @"title": @"SpringBoard Tools", @"icon": @"dock.rectangle",       @"color": [UIColor systemTealColor],   @"section": @(-1), @"custom": @"lara", @"lara": @(LaraToolSpringBoard) },
         @{ @"title": @"Font Overwrite",   @"icon": @"textformat",            @"color": [UIColor systemPurpleColor], @"section": @(-1), @"custom": @"lara", @"lara": @(LaraToolFonts) },
+        @{ @"title": @"MobileGestalt",    @"icon": @"cpu.fill",              @"color": [UIColor systemRedColor],    @"section": @(-1), @"custom": @"lara", @"lara": @(-1), @"mg": @YES },
     ];
 }
 
@@ -19655,6 +19686,10 @@ void cyanide_present_contact(UIViewController *host)
             case RootSectionWarning:
                 return;
             case RootSectionLara: {
+                if ([self.laraRows[indexPath.row][@"mg"] boolValue]) {
+                    [self.navigationController pushViewController:[MobileGestaltViewController new] animated:YES];
+                    return;
+                }
                 LaraTool tool = (LaraTool)[self.laraRows[indexPath.row][@"lara"] integerValue];
                 [self.navigationController pushViewController:[[LaraViewController alloc] initWithTool:tool]
                                                      animated:YES];

@@ -23,6 +23,9 @@ void darksword_ota_retry_pending_dir_restore(void);
 // Gives this app read/write access to /private/var (launchd token, sandbox
 // patch or a borrowed daemon extension). Needs live kernel access.
 bool darksword_prepare_var_rw(void);
+// Byte offset of a MobileGestalt key's value inside the cache's CacheData
+// blob, found through libMobileGestalt's own key table; -1 if not found.
+long ota_find_mobilegestalt_cachedata_offset(const char *mgKey);
 
 #ifdef __OBJC__
 #import <Foundation/Foundation.h>
