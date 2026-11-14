@@ -27,6 +27,32 @@ activity, omit it.
 
 ## Pending
 
+
+## Released`
+after a successful build.
+
+Good bullets describe the behavior users will notice:
+
+- Reduced flicker when Dynamic Stage windows resize.
+- Fixed installer queue badges after changing package selection.
+- Added an iOS 17 fallback for Disable App Library.
+
+Use one bullet per user-facing tweak or fix. Do not combine unrelated tweak
+changes into the same bullet.
+
+Avoid vague bullets like "Update settings", "Change project files", or
+"Misc fixes".
+
+It is OK to mention user-visible beta or experimental tweaks when describing
+added or improved features. Credit original tweak or project authors alongside
+the Cyanide port author when known. Do not mention experimental source movement,
+non-public repository names, non-public implementation details, or commentary
+about which experimental pieces are working versus not wired. If the change
+cannot be phrased as a user-facing feature or fix without revealing internal
+activity, omit it.
+
+## Pending
+
 - Tendies Wallpapers (Settings → Lara → Tendies Wallpapers, #17): installs .tendies wallpaper files into the Lock Screen wallpaper gallery and removes them again. The format is Nugget's by leminlimez; installing follows Nugget and mond by rooootdev.
 - Icon themes and SnowBoard Lite on iOS 17 and 18 use much less battery: they check the Home Screen less often when it's idle and not at all while the device is locked (#19).
 
