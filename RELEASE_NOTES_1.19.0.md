@@ -17,6 +17,8 @@ Tendies wallpapers, and much less battery use for icon themes on iOS 17 and 18.
 
 - **Battery use of icon themes and SnowBoard Lite** on iOS 17 and 18 ([#19](https://github.com/kolbicz/Cyanide/issues/19)): they checked the Home Screen several times a second all day and redrew every icon every 12 seconds. Now they check much less often when nothing changes and not at all while the device is locked.
 
+- **Folder Size with Root Access** ([#18](https://github.com/kolbicz/Cyanide/issues/18)): folders only root can read now show their real size on disk instead of an estimate. Files that reserve far more space than they use (such as a system symbol cache) no longer make a folder look many gigabytes too large.
+
 ## About A18 / M4
 
 On A18 / M4 devices a run has about a 50/50 chance of rebooting the device (a

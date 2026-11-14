@@ -856,8 +856,10 @@ static NSString *fb_size_string(off_t size)
 
 // Folder Size: walks a folder without following symlinks or leaving its
 // volume, counting hard-linked files once. Folders mobile can't open are
-// listed through launchd when root access is on (their on-disk size is then
-// estimated from the file sizes, as root listings carry no block counts).
+// listed through launchd when root access is on; their files' on-disk size
+// comes from the block count launchd's lstat reports (estimated from the file
+// size only if that is missing). Sparse files, such as coresymbolicationd's
+// cache, can be far larger in size than on disk (issue #18).
 // Read-only; runs off the main thread and stops when the job is cancelled.
 @interface FBSizeJob : NSObject {
 @public
@@ -869,6 +871,7 @@ static NSString *fb_size_string(off_t size)
 @property (nonatomic, assign) unsigned long long folders;
 @property (nonatomic, assign) unsigned long long unreadable;  // folders that couldn't be listed
 @property (nonatomic, assign) unsigned long long viaRoot;     // folders listed as root
+@property (nonatomic, assign) unsigned long long estimated;   // root-listed files without a block count
 @property (nonatomic, assign) BOOL incomplete;                // a listing was cut short
 @end
 
@@ -953,7 +956,13 @@ static void fb_measure_folder(NSString *rootPath, BOOL rootOn, FBSizeJob *job,
                 unsigned long long size = (unsigned long long)MAX([info[@"size"] longLongValue], 0LL);
                 job.files++;
                 job.logical += size;
-                job.allocated += (size + 4095ULL) & ~4095ULL;
+                NSNumber *blocks = info[@"blocks"];
+                if (blocks) {
+                    job.allocated += (unsigned long long)MAX(blocks.longLongValue, 0LL) * 512ULL;
+                } else {
+                    job.allocated += (size + 4095ULL) & ~4095ULL;
+                    job.estimated++;
+                }
             }
         }
         if (progress && items - lastReport >= 2000) { lastReport = items; progress(items); }
@@ -3099,9 +3108,11 @@ static NSString *fb_related_title(FBAppContainer *c)
                 if (job.unreadable)
                     [msg appendFormat:@"\n\n%@ folder%@ could not be read%@.", count(job.unreadable), job.unreadable == 1 ? @"" : @"s",
                      rootOn ? @"" : @" (turn on Root Access in ⋯ to include them)"];
-                if (job.viaRoot)
-                    [msg appendFormat:@"\n\n%@ folder%@ read as root; their on-disk size is estimated.", count(job.viaRoot),
-                     job.viaRoot == 1 ? @"" : @"s"];
+                if (job.viaRoot && job.estimated)
+                    [msg appendFormat:@"\n\n%@ folder%@ read as root; the on-disk size of %@ file%@ is estimated.", count(job.viaRoot),
+                     job.viaRoot == 1 ? @"" : @"s", count(job.estimated), job.estimated == 1 ? @"" : @"s"];
+                else if (job.viaRoot)
+                    [msg appendFormat:@"\n\n%@ folder%@ read as root.", count(job.viaRoot), job.viaRoot == 1 ? @"" : @"s"];
                 if (job.incomplete) [msg appendString:@"\n\nSome folders could not be listed completely; the real size is larger."];
                 UIAlertController *done = [UIAlertController alertControllerWithTitle:path.lastPathComponent.length ? path.lastPathComponent : path
                                                                               message:msg

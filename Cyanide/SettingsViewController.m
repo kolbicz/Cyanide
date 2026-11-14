@@ -13310,7 +13310,7 @@ static NSDictionary *pm_root_entry_dict(NSString *name, const struct stat *lst,
     BOOL isLink = S_ISLNK(lst->st_mode);
     NSMutableDictionary *d = [@{
         @"name": name, @"mode": @(lst->st_mode), @"uid": @(lst->st_uid), @"gid": @(lst->st_gid),
-        @"size": @(lst->st_size), @"mtime": @(lst->st_mtimespec.tv_sec),
+        @"size": @(lst->st_size), @"blocks": @(lst->st_blocks), @"mtime": @(lst->st_mtimespec.tv_sec),
         @"isDirectory": @(isLink ? (haveSt && S_ISDIR(st->st_mode)) : S_ISDIR(lst->st_mode)),
     } mutableCopy];
     if (link) d[@"linkTarget"] = link;
