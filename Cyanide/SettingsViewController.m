@@ -5,6 +5,7 @@
 
 #import "SettingsViewController.h"
 #import "MobileGestaltViewController.h"
+#import "TendiesViewController.h"
 #import "FileBrowserViewController.h"
 #import "DaemonsViewController.h"
 #import "SystemInfoViewController.h"
@@ -15571,6 +15572,7 @@ UIViewController *settings_make_daemons_viewer(void)
         @{ @"title": @"SpringBoard Tools", @"icon": @"dock.rectangle",       @"color": [UIColor systemTealColor],   @"section": @(-1), @"custom": @"lara", @"lara": @(LaraToolSpringBoard) },
         @{ @"title": @"Font Overwrite",   @"icon": @"textformat",            @"color": [UIColor systemPurpleColor], @"section": @(-1), @"custom": @"lara", @"lara": @(LaraToolFonts) },
         @{ @"title": @"MobileGestalt",    @"icon": @"cpu.fill",              @"color": [UIColor systemRedColor],    @"section": @(-1), @"custom": @"lara", @"lara": @(-1), @"mg": @YES },
+        @{ @"title": @"Tendies Wallpapers", @"icon": @"photo.on.rectangle.angled", @"color": [UIColor systemCyanColor], @"section": @(-1), @"custom": @"lara", @"lara": @(-1), @"tendies": @YES },
     ];
 }
 
@@ -19718,6 +19720,10 @@ void cyanide_present_contact(UIViewController *host)
             case RootSectionLara: {
                 if ([self.laraRows[indexPath.row][@"mg"] boolValue]) {
                     [self.navigationController pushViewController:[MobileGestaltViewController new] animated:YES];
+                    return;
+                }
+                if ([self.laraRows[indexPath.row][@"tendies"] boolValue]) {
+                    [self.navigationController pushViewController:[TendiesViewController new] animated:YES];
                     return;
                 }
                 LaraTool tool = (LaraTool)[self.laraRows[indexPath.row][@"lara"] integerValue];
