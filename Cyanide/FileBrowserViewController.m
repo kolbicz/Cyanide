@@ -851,6 +851,116 @@ static NSString *fb_size_string(off_t size)
     return [NSByteCountFormatter stringFromByteCount:size countStyle:NSByteCountFormatterCountStyleFile];
 }
 
+
+#pragma mark - Folder size
+
+// Folder Size: walks a folder without following symlinks or leaving its
+// volume, counting hard-linked files once. Folders mobile can't open are
+// listed through launchd when root access is on (their on-disk size is then
+// estimated from the file sizes, as root listings carry no block counts).
+// Read-only; runs off the main thread and stops when the job is cancelled.
+@interface FBSizeJob : NSObject {
+@public
+    atomic_bool cancelled;
+}
+@property (nonatomic, assign) unsigned long long logical;     // file sizes
+@property (nonatomic, assign) unsigned long long allocated;   // blocks on disk
+@property (nonatomic, assign) unsigned long long files;
+@property (nonatomic, assign) unsigned long long folders;
+@property (nonatomic, assign) unsigned long long unreadable;  // folders that couldn't be listed
+@property (nonatomic, assign) unsigned long long viaRoot;     // folders listed as root
+@property (nonatomic, assign) BOOL incomplete;                // a listing was cut short
+@end
+
+@implementation FBSizeJob
+@end
+
+static const unsigned long long kFBSizeMaxItems = 5000000ULL;
+
+static void fb_measure_folder(NSString *rootPath, BOOL rootOn, FBSizeJob *job,
+                              void (^progress)(unsigned long long items))
+{
+    struct stat rootSt;
+    if (lstat(rootPath.fileSystemRepresentation, &rootSt) != 0 || !S_ISDIR(rootSt.st_mode)) {
+        // A folder only root can stat: measure it entirely through launchd.
+        if (!rootOn) { job.unreadable++; return; }
+        rootSt.st_dev = 0;
+    }
+    dev_t rootDev = rootSt.st_dev;
+    NSMutableSet<NSNumber *> *seenLinks = [NSMutableSet set];
+    NSMutableArray<NSString *> *stack = [NSMutableArray arrayWithObject:rootPath];
+    NSMutableArray<NSString *> *rootStack = [NSMutableArray array];
+    unsigned long long items = 0, lastReport = 0;
+
+    while ((stack.count || rootStack.count) && !atomic_load(&job->cancelled) && items < kFBSizeMaxItems) {
+        if (stack.count) {
+            NSString *dirPath = stack.lastObject;
+            [stack removeLastObject];
+            int dfd = open(dirPath.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            DIR *dir = dfd >= 0 ? fdopendir(dfd) : NULL;
+            if (!dir) {
+                if (dfd >= 0) close(dfd);
+                if (rootOn && (errno == EACCES || errno == EPERM)) [rootStack addObject:dirPath];
+                else job.unreadable++;
+                continue;
+            }
+            job.folders++;
+            struct dirent *ent;
+            while ((ent = readdir(dir)) && !atomic_load(&job->cancelled)) {
+                if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, "..")) continue;
+                struct stat st;
+                if (fstatat(dirfd(dir), ent->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) continue;
+                items++;
+                if (S_ISDIR(st.st_mode)) {
+                    if (rootDev && st.st_dev != rootDev) continue;   // another volume mounted here
+                    NSString *child = [dirPath stringByAppendingPathComponent:
+                                       [[NSString alloc] initWithBytes:ent->d_name length:strlen(ent->d_name)
+                                                              encoding:NSUTF8StringEncoding] ?: @""];
+                    if (child.length > dirPath.length + 1) [stack addObject:child];
+                    continue;
+                }
+                if (st.st_nlink > 1 && S_ISREG(st.st_mode)) {
+                    NSNumber *key = @(((unsigned long long)st.st_dev << 40) ^ (unsigned long long)st.st_ino);
+                    if ([seenLinks containsObject:key]) continue;
+                    [seenLinks addObject:key];
+                }
+                job.files++;
+                job.logical += (unsigned long long)MAX(st.st_size, 0);
+                job.allocated += (unsigned long long)st.st_blocks * 512ULL;
+            }
+            closedir(dir);
+        } else {
+            NSString *dirPath = rootStack.lastObject;
+            [rootStack removeLastObject];
+            BOOL incomplete = NO;
+            NSString *err = nil;
+            NSArray<NSDictionary *> *entries = settings_root_list_directory(dirPath, &incomplete, &err);
+            if (!entries) { job.unreadable++; continue; }
+            if (incomplete) job.incomplete = YES;
+            job.folders++;
+            job.viaRoot++;
+            for (NSDictionary *info in entries) {
+                if (atomic_load(&job->cancelled)) break;
+                if (info[@"statFailed"]) continue;
+                items++;
+                NSString *name = info[@"name"];
+                if (!name.length) continue;
+                if ([info[@"isDirectory"] boolValue] && !info[@"linkTarget"]) {
+                    [rootStack addObject:[dirPath stringByAppendingPathComponent:name]];
+                    continue;
+                }
+                if (info[@"linkTarget"]) continue;
+                unsigned long long size = (unsigned long long)MAX([info[@"size"] longLongValue], 0LL);
+                job.files++;
+                job.logical += size;
+                job.allocated += (size + 4095ULL) & ~4095ULL;
+            }
+        }
+        if (progress && items - lastReport >= 2000) { lastReport = items; progress(items); }
+    }
+    if (items >= kFBSizeMaxItems) job.incomplete = YES;
+}
+
 static NSString *fb_date_string(NSDate *date)
 {
     static NSDateFormatter *fmt;
@@ -2157,6 +2267,8 @@ static NSString *fb_related_title(FBAppContainer *c)
                       options:UIMenuOptionsDisplayInline children:appItems],
         [UIAction actionWithTitle:@"Go to Folder…" image:[UIImage systemImageNamed:@"arrow.right.circle"]
                        identifier:nil handler:^(UIAction *x) { [weakOptions goToPath]; }],
+        [UIAction actionWithTitle:@"Size of This Folder" image:[UIImage systemImageNamed:@"chart.pie"]
+                       identifier:nil handler:^(UIAction *x) { [weakOptions showFolderSize:weakOptions.path]; }],
         [UIMenu menuWithTitle:@"Sort By" image:[UIImage systemImageNamed:@"arrow.up.arrow.down"] identifier:nil options:0 children:({
             NSMutableArray *sorts = [NSMutableArray array];
             NSArray *titles = @[ @"Name", @"Date Modified", @"Size" ];
@@ -2950,6 +3062,62 @@ static NSString *fb_related_title(FBAppContainer *c)
     return cfg;
 }
 
+// Folder Size: a progress alert with Cancel, then the totals.
+- (void)showFolderSize:(NSString *)path
+{
+    BOOL rootOn = [NSUserDefaults.standardUserDefaults boolForKey:kSettingsFileBrowserRootAccess];
+    FBSizeJob *job = [FBSizeJob new];
+    atomic_init(&job->cancelled, false);
+    UIAlertController *wait = [UIAlertController alertControllerWithTitle:path.lastPathComponent.length ? path.lastPathComponent : path
+                                                                  message:@"Counting…"
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    [wait addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction *a) {
+        atomic_store(&job->cancelled, true);
+    }]];
+    [self presentViewController:wait animated:YES completion:nil];
+    __weak typeof(self) weakSelf = self;
+    __weak UIAlertController *weakWait = wait;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        fb_measure_folder(path, rootOn, job, ^(unsigned long long items) {
+            NSString *text = [NSString stringWithFormat:@"Counting… %@ items, %@ so far",
+                              [NSNumberFormatter localizedStringFromNumber:@(items) numberStyle:NSNumberFormatterDecimalStyle],
+                              fb_size_string((off_t)job.allocated)];
+            dispatch_async(dispatch_get_main_queue(), ^{ weakWait.message = text; });
+        });
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (atomic_load(&job->cancelled)) return;
+            typeof(self) me = weakSelf;
+            UIAlertController *shown = weakWait;
+            void (^showResult)(void) = ^{
+                if (!me) return;
+                NSString *(^count)(unsigned long long) = ^NSString *(unsigned long long n) {
+                    return [NSNumberFormatter localizedStringFromNumber:@(n) numberStyle:NSNumberFormatterDecimalStyle];
+                };
+                NSMutableString *msg = [NSMutableString stringWithFormat:@"%@ on disk\n%@ of data\n%@ files in %@ folders",
+                    fb_size_string((off_t)job.allocated), fb_size_string((off_t)job.logical),
+                    count(job.files), count(job.folders)];
+                if (job.unreadable)
+                    [msg appendFormat:@"\n\n%@ folder%@ could not be read%@.", count(job.unreadable), job.unreadable == 1 ? @"" : @"s",
+                     rootOn ? @"" : @" (turn on Root Access in ⋯ to include them)"];
+                if (job.viaRoot)
+                    [msg appendFormat:@"\n\n%@ folder%@ read as root; their on-disk size is estimated.", count(job.viaRoot),
+                     job.viaRoot == 1 ? @"" : @"s"];
+                if (job.incomplete) [msg appendString:@"\n\nSome folders could not be listed completely; the real size is larger."];
+                UIAlertController *done = [UIAlertController alertControllerWithTitle:path.lastPathComponent.length ? path.lastPathComponent : path
+                                                                              message:msg
+                                                                       preferredStyle:UIAlertControllerStyleAlert];
+                [done addAction:[UIAlertAction actionWithTitle:@"Copy" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+                    UIPasteboard.generalPasteboard.string = [NSString stringWithFormat:@"%@\n%@", path, msg];
+                }]];
+                [done addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+                [me presentViewController:done animated:YES completion:nil];
+            };
+            if (shown.presentingViewController) [shown dismissViewControllerAnimated:YES completion:showResult];
+            else showResult();
+        });
+    });
+}
+
 // Long-press: copy the full path (and the write actions when enabled).
 - (UIContextMenuConfiguration *)tableView:(UITableView *)tableView
     contextMenuConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath
@@ -2972,6 +3140,9 @@ static NSString *fb_related_title(FBAppContainer *c)
             [self.navigationController pushViewController:vc animated:YES];
         }];
         NSMutableArray<UIMenuElement *> *items = [NSMutableArray arrayWithObject:copy];
+        if (e.isDirectory && !e.isSymlink && !e.statFailed)
+            [items addObject:[UIAction actionWithTitle:@"Folder Size" image:[UIImage systemImageNamed:@"chart.pie"]
+                                            identifier:nil handler:^(UIAction *a) { [self showFolderSize:e.path]; }]];
         if (!e.isDirectory) {
             [items addObject:info];
             // AirDrop, Mail, Save to Files … a copy, never the original.
