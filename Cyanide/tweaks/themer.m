@@ -595,14 +595,24 @@ static int themer_seed_iconservices_cache(const char *bundle,
     double scale = themer_screen_scale();
     if (pointSize < 20.0 || pointSize > 120.0) pointSize = 60.0;
 
-    double sizes[2] = { pointSize, 60.0 };
+    // Notifications (UserNotificationsUIKit, in SpringBoard) load their app
+    // icon once per request through _NCIconImageForApplicationIdentifierWithFormat:
+    // a plain initWithSize:scale: descriptor, appearance 0 (light) or 1 (dark),
+    // 38 pt for banners and the badge on a communication notification's
+    // avatar, 40 / 56 pt for other formats. IFImageBag prefers an exact size,
+    // so a 38 pt image cached before theming beat the 60 pt seed; seeding
+    // these sizes replaces it (insertImage: swaps an equal size). Plain
+    // descriptors only: that is what the notification code builds.
+    double sizes[5] = { pointSize, 60.0, 38.0, 40.0, 56.0 };
     int seeded = 0;
     int readbackHits = 0;
     bool checkedReadback = false;
-    for (int s = 0; s < 2; s++) {
-        if (s == 1 && sizes[1] == sizes[0]) continue;
+    for (int s = 0; s < 5; s++) {
+        bool duplicate = false;
+        for (int p = 0; p < s; p++) if (sizes[p] == sizes[s]) duplicate = true;
+        if (duplicate) continue;
         for (int appearance = 0; appearance <= 1; appearance++) {
-            for (int variant = 0; variant < 2; variant++) {
+            for (int variant = 0; variant < (s < 2 ? 2 : 1); variant++) {
                 uint64_t desc = themer_make_is_descriptor(sizes[s], scale,
                                                           appearance,
                                                           (uint64_t)variant,
