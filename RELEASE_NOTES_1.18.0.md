@@ -17,6 +17,10 @@ A MobileGestalt editor for device features, and folder sizes in the File Browser
   - Respring to see the changes; some only show after a restart.
 - **Folder Size** (File Browser: long-press a folder, or ••• → **Size of This Folder**): the size on disk, the size of the data and the number of files and folders. It runs in the background and can be cancelled. With Root Access on, folders only root can read are included.
 
+## Fixes
+
+- **SnowBoard Lite in notifications** ([#19](https://github.com/kolbicz/Cyanide/issues/19)): the small app icon on message notifications (on the sender's picture, e.g. WhatsApp or Instagram) and the icon in notification banners now use the theme too. Notifications that arrived before the theme was applied keep their old icon.
+
 ## About A18 / M4
 
 On A18 / M4 devices a run has about a 50/50 chance of rebooting the device (a

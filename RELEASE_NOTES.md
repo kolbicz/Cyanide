@@ -27,8 +27,6 @@ activity, omit it.
 
 ## Pending
 
-- [ ] SnowBoard Lite: themed icons also in notification banners and on the small app badge of message notifications (WhatsApp, Instagram …). Notifications that arrived before the theme was applied keep their old icon.
-
 
 ## Released
 
