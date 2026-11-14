@@ -20,10 +20,10 @@
       "tintColor": "#02D7E0",
       "versions": [
         {
-          "version": "1.17.0",
-          "date": "2026-11-08",
-          "size": 7159689,
-          "downloadURL": "https://github.com/kolbicz/Cyanide/releases/download/v1.17.0/Cyanide-1.17.0.ipa",
+          "version": "1.18.0",
+          "date": "2026-11-14",
+          "size": 7187638,
+          "downloadURL": "https://github.com/kolbicz/Cyanide/releases/download/v1.18.0/Cyanide-1.18.0.ipa",
           "localizedDescription": "",
           "minOSVersion": "17.0"
         }
