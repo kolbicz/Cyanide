@@ -27,6 +27,7 @@ activity, omit it.
 
 ## Pending
 
+- Icon themes and SnowBoard Lite on iOS 17 and 18 use much less battery: they check the Home Screen less often when it's idle and not at all while the device is locked (#19).
 
 ## Released
 

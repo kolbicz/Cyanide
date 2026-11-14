@@ -1863,6 +1863,13 @@ static const NSUInteger kThemerLegacyLiveMaxTicks = 1;
 // changes (a swipe), so each page themes as you swipe to it.
 static const NSUInteger kThemerLegacyPageMaxTicks = 200000;
 static const useconds_t kThemerLegacyPagePollUS   = 300000;   // 300ms cheap probe
+// The probe still costs a few RemoteCalls into SpringBoard (two on its main
+// thread), so back off once the Home Screen has been idle and while locked:
+// a 300ms probe all day showed up as all-day battery use (issue #19).
+static const useconds_t kThemerLegacyPageIdlePollUS   = 1500000;  // no swipe for a while
+static const useconds_t kThemerLegacyPageLockedPollUS = 2000000;  // locked: no probe
+static const NSUInteger kThemerLegacyPageIdleAfterTicks = 20;     // ~6s at 300ms
+static const uint64_t   kThemerLegacyFallbackRepaintUS = 120000000; // was every 12s
 static const useconds_t kThemerRepairInitialDelayUS = 900000;
 static const useconds_t kThemerRepairIntervalUS = 450000;
 NSString * const kSettingsRemoteCallStateDidChangeNotification = @"SettingsRemoteCallStateDidChangeNotification";
@@ -6952,6 +6959,9 @@ static void settings_start_themer_live_loop(void)
             : kThemerLiveMaxTicks;
         uint64_t lastPageToken = 0;   // legacy page-follow: re-theme on page change
         NSUInteger hotTicks = 0;      // brief burst after a swipe for late-built views
+        NSUInteger idleTicks = 0;     // probes since the last page change
+        BOOL lockedTick = NO;         // last tick skipped because the device is locked
+        uint64_t lastFallbackUS = 0;  // last occasional full repaint (time based)
 
         printf("[SETTINGS] Themer dynamic live loop started interval=%uus background=%uus sblSlow=%uus/%uus max=%lu iosMajor=%ld\n",
                kThemerLiveIntervalUS,
@@ -6992,16 +7002,29 @@ static void settings_start_themer_live_loop(void)
                             // when the current page changed (a swipe), plus a brief
                             // burst after and an occasional fallback. Idle ticks just
                             // read the page token, so a 300ms poll stays light.
-                            uint64_t token = sbcustomizer_current_page_token();
-                            if (token != lastPageToken) hotTicks = 5;
-                            if (token != lastPageToken || tick == 0 || hotTicks > 0 ||
-                                (tick % 40) == 0) {
-                                ok = themer_repaint_visible_theme_views_in_session();
-                            } else {
+                            // Locked: the Home Screen isn't visible, so don't
+                            // touch SpringBoard at all. Unlock fires a repair
+                            // burst, and the first tick after it probes again.
+                            lockedTick = settings_read_screen_locked() ||
+                                         !settings_read_screen_awake();
+                            if (lockedTick) {
                                 ok = true;
+                            } else {
+                                uint64_t nowUS = clock_gettime_nsec_np(CLOCK_MONOTONIC) / 1000ULL;
+                                uint64_t token = sbcustomizer_current_page_token();
+                                bool pageChanged = (token != lastPageToken);
+                                if (pageChanged) { hotTicks = 5; idleTicks = 0; }
+                                else idleTicks++;
+                                bool fallbackDue = (nowUS - lastFallbackUS) >= kThemerLegacyFallbackRepaintUS;
+                                if (pageChanged || tick == 0 || hotTicks > 0 || fallbackDue) {
+                                    ok = themer_repaint_visible_theme_views_in_session();
+                                    if (fallbackDue || tick == 0) lastFallbackUS = nowUS;
+                                } else {
+                                    ok = true;
+                                }
+                                if (hotTicks > 0) hotTicks--;
+                                lastPageToken = token;
                             }
-                            if (hotTicks > 0) hotTicks--;
-                            lastPageToken = token;
                         } else if (repairVisibleIcons) {
                             ok = themer_repaint_visible_theme_views_in_session();
                         } else {
@@ -7021,9 +7044,16 @@ static void settings_start_themer_live_loop(void)
                     g_themer_live_stop_requested ||
                     tick >= maxTicks) break;
 
-                useconds_t intervalUS = legacyPageMode
-                    ? kThemerLegacyPagePollUS
-                    : settings_themer_live_interval_for_tick(d, tick);
+                useconds_t intervalUS;
+                if (!legacyPageMode) {
+                    intervalUS = settings_themer_live_interval_for_tick(d, tick);
+                } else if (lockedTick) {
+                    intervalUS = kThemerLegacyPageLockedPollUS;
+                } else if (hotTicks == 0 && idleTicks >= kThemerLegacyPageIdleAfterTicks) {
+                    intervalUS = kThemerLegacyPageIdlePollUS;
+                } else {
+                    intervalUS = kThemerLegacyPagePollUS;
+                }
                 settings_live_loop_sleep_interruptible(0, intervalUS,
                                                        &g_themer_live_stop_requested);
             }
