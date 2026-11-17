@@ -53,6 +53,53 @@ static unsigned long long scan_path(NSString *path, BOOL *complete) {
 }
 '''
 SCENARIOS = r'''
+// Custom targets (#18): which paths may be added at all.
+check(cleaner_custom_target_valid_relative(@"Library/Application Support/Instagram/VideoUpload"), "custom: app folder allowed");
+check(cleaner_custom_target_valid_relative(@"Documents/drafts.db"), "custom: Documents file allowed");
+check(!cleaner_custom_target_valid_relative(@"Library"), "custom: Library itself refused");
+check(!cleaner_custom_target_valid_relative(@"Documents"), "custom: Documents itself refused");
+check(!cleaner_custom_target_valid_relative(@"Library/Preferences"), "custom: Preferences refused");
+check(!cleaner_custom_target_valid_relative(@"Library/Preferences/x.plist"), "custom: settings files refused");
+check(!cleaner_custom_target_valid_relative(@"Library/../tmp/x"), "custom: dot-dot refused");
+check(!cleaner_custom_target_valid_relative(@"/Library/Caches"), "custom: absolute refused");
+check(!cleaner_custom_target_valid_relative(@"SystemData/x"), "custom: other top folders refused");
+{
+    NSString *c = app();
+    put([c stringByAppendingPathComponent:@"Library/Application Support/IG/VideoUpload/a.mp4"], 1000);
+    put([c stringByAppendingPathComponent:@"Library/Application Support/IG/VideoUpload/sub/b.mp4"], 500);
+    put([c stringByAppendingPathComponent:@"Library/Application Support/IG/keep.db"], 10);
+    put([c stringByAppendingPathComponent:@"Documents/drafts.db"], 77);
+    int cfd = cleaner_open_container(c);
+    struct stat cst; check(cfd >= 0 && fstat(cfd, &cst) == 0, "custom: open container");
+    BOOL complete = NO;
+    CYCleanerTraversal w = cleaner_traversal(kCleanerMaxScanSeconds, NULL);
+    check(cleaner_custom_bytes_at(cfd, @"Library/Application Support/IG/VideoUpload", NO, cst.st_dev, &complete, &w) == 1500 && complete,
+          "custom: folder measured");
+    w = cleaner_traversal(kCleanerMaxScanSeconds, NULL);
+    check(cleaner_custom_bytes_at(cfd, @"Documents/drafts.db", YES, cst.st_dev, &complete, &w) == 77 && complete, "custom: file measured");
+    NSUInteger removed = 0, failed = 0;
+    w = cleaner_traversal(kCleanerMaxCleanSeconds, NULL);
+    cleaner_custom_clean_at(cfd, @"Library/Application Support/IG/VideoUpload", NO, cst.st_dev, &removed, &failed, &w);
+    check(failed == 0 && exists([c stringByAppendingPathComponent:@"Library/Application Support/IG/VideoUpload"]) &&
+          !exists([c stringByAppendingPathComponent:@"Library/Application Support/IG/VideoUpload/a.mp4"]) &&
+          !exists([c stringByAppendingPathComponent:@"Library/Application Support/IG/VideoUpload/sub"]) &&
+          exists([c stringByAppendingPathComponent:@"Library/Application Support/IG/keep.db"]), "custom: folder emptied, siblings kept");
+    w = cleaner_traversal(kCleanerMaxCleanSeconds, NULL);
+    check(cleaner_custom_clean_at(cfd, @"Documents/drafts.db", YES, cst.st_dev, &removed, &failed, &w) == 77 &&
+          !exists([c stringByAppendingPathComponent:@"Documents/drafts.db"]), "custom: file deleted");
+    // A link anywhere on the way is refused, for folders and files.
+    put([c stringByAppendingPathComponent:@"Documents/real/secret.txt"], 5);
+    check(symlink("real", [c stringByAppendingPathComponent:@"Documents/alias"].fileSystemRepresentation) == 0, "custom: alias link");
+    failed = 0;
+    w = cleaner_traversal(kCleanerMaxCleanSeconds, NULL);
+    cleaner_custom_clean_at(cfd, @"Documents/alias", NO, cst.st_dev, &removed, &failed, &w);
+    w = cleaner_traversal(kCleanerMaxCleanSeconds, NULL);
+    cleaner_custom_clean_at(cfd, @"Documents/alias/secret.txt", YES, cst.st_dev, &removed, &failed, &w);
+    check(failed == 2 && exists([c stringByAppendingPathComponent:@"Documents/real/secret.txt"]), "custom: links refused");
+    w = cleaner_traversal(kCleanerMaxCleanSeconds, NULL);
+    check(cleaner_custom_clean_at(cfd, @"Library/Preferences", NO, cst.st_dev, &removed, &failed, &w) == 0, "custom: invalid path refused at clean");
+    close(cfd);
+}
 // An intermediate Library symlink must be refused by scan AND clear.
 NSString *a = app();
 NSString *document = [a stringByAppendingPathComponent:@"Documents/Caches/valuable.txt"];
@@ -285,7 +332,9 @@ class CleanerHelperTests(unittest.TestCase):
             fb_source = FB_SOURCE.read_text()
             metadata = fb_source[fb_source.index("static BOOL fb_current_bundle_metadata_matches"):
                                  fb_source.index("static NSString *fb_app_in_container")]
-            code = PREAMBLE + constants + helpers + metadata + FIXTURES
+            custom = (ROOT / "Cyanide/CleanerCustomTargets.m").read_text().replace('#import "CleanerCustomTargets.h"', '')
+            custom_header = (ROOT / "Cyanide/CleanerCustomTargets.h").read_text()
+            code = PREAMBLE + custom_header + custom + constants + helpers + metadata + FIXTURES
             code += 'int main(void) { @autoreleasepool { mkdirp(kCleanerAppDataPrefix);\n' + SCENARIOS
             code += '\nputs("cleaner helper regressions: PASS"); } return 0; }\n'
             harness = base / "harness.m"

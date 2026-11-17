@@ -3,6 +3,7 @@
 //  Cyanide
 //
 
+#import "CleanerCustomTargets.h"
 #import "CleanerViewController.h"
 #import "FBAppContainers.h"
 #import "SettingsViewController.h"
@@ -475,6 +476,72 @@ static unsigned long long cleaner_clear_directory_at(int containerFD, NSString *
     return cleaner_clear_directory_fd(fd, device, removed, failed, walk);
 }
 
+// Custom targets (#18): a folder or file the user added, inside one app's
+// data container. Opened component by component from the verified container
+// descriptor like the fixed roots; the relative path is checked again here.
+static int cleaner_open_custom_dir_at(int containerFD, NSString *relative)
+{
+    if (!cleaner_custom_target_valid_relative(relative)) { errno = EINVAL; return -1; }
+    return cleaner_open_relative_directory(containerFD, relative.pathComponents);
+}
+
+// Its size: a folder's files, or the file itself (regular files only).
+static unsigned long long cleaner_custom_bytes_at(int containerFD, NSString *relative, BOOL isFile,
+                                                  dev_t device, BOOL *complete, CYCleanerTraversal *walk)
+{
+    if (complete) *complete = NO;
+    if (cleaner_traversal_should_stop(walk, 0)) return 0;
+    if (isFile) {
+        if (!cleaner_custom_target_valid_relative(relative)) return 0;
+        NSArray<NSString *> *parts = relative.pathComponents;
+        int parent = cleaner_open_relative_directory(containerFD, [parts subarrayWithRange:NSMakeRange(0, parts.count - 1)]);
+        if (parent < 0) { if (complete) *complete = (errno == ENOENT); return 0; }
+        struct stat st = {0};
+        BOOL found = fstatat(parent, parts.lastObject.fileSystemRepresentation, &st, AT_SYMLINK_NOFOLLOW) == 0;
+        int err = errno;
+        close(parent);
+        if (!found) { if (complete) *complete = (err == ENOENT); return 0; }
+        if (!S_ISREG(st.st_mode) || !cleaner_device_matches(st.st_dev, device)) return 0;
+        if (complete) *complete = YES;
+        return (unsigned long long)st.st_size;
+    }
+    int fd = cleaner_open_custom_dir_at(containerFD, relative);
+    if (fd < 0) { if (complete) *complete = (errno == ENOENT); return 0; }
+    struct stat st = {0};
+    if (fstat(fd, &st) != 0 || !cleaner_device_matches(st.st_dev, device)) { close(fd); return 0; }
+    BOOL finished = YES;
+    unsigned long long total = cleaner_scan_directory_fd(fd, device, 0, walk, &finished);
+    if (complete) *complete = finished;
+    return total;
+}
+
+// Empties a custom folder (it stays) or deletes a custom file.
+static unsigned long long cleaner_custom_clean_at(int containerFD, NSString *relative, BOOL isFile, dev_t device,
+                                                  NSUInteger *removed, NSUInteger *failed, CYCleanerTraversal *walk)
+{
+    if (cleaner_traversal_should_stop(walk, 0)) return 0;
+    if (isFile) {
+        if (!cleaner_custom_target_valid_relative(relative)) { if (failed) (*failed)++; return 0; }
+        NSArray<NSString *> *parts = relative.pathComponents;
+        int parent = cleaner_open_relative_directory(containerFD, [parts subarrayWithRange:NSMakeRange(0, parts.count - 1)]);
+        if (parent < 0) { if (errno != ENOENT && failed) (*failed)++; return 0; }
+        const char *name = parts.lastObject.fileSystemRepresentation;
+        struct stat st = {0};
+        unsigned long long bytes = 0;
+        if (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
+            if (S_ISREG(st.st_mode) && cleaner_device_matches(st.st_dev, device) && unlinkat(parent, name, 0) == 0) {
+                bytes = (unsigned long long)st.st_size;
+                if (removed) (*removed)++;
+            } else if (failed) (*failed)++;
+        } else if (errno != ENOENT && failed) (*failed)++;
+        close(parent);
+        return bytes;
+    }
+    int fd = cleaner_open_custom_dir_at(containerFD, relative);
+    if (fd < 0) { if (errno != ENOENT && failed) (*failed)++; return 0; }
+    return cleaner_clear_directory_fd(fd, device, removed, failed, walk);
+}
+
 @interface CYCleanerItem : NSObject <NSCopying>
 @property (nonatomic, strong) FBAppContainer *container;
 @property (nonatomic) dev_t containerDevice;
@@ -493,6 +560,9 @@ static unsigned long long cleaner_clear_directory_at(int containerFD, NSString *
 @property (nonatomic, copy) NSArray<NSString *> *logRoots;
 @property (nonatomic, copy) NSDictionary<NSString *, NSNumber *> *logRootBytes;
 @property (nonatomic) NSUInteger fileCount;
+// Non-nil only for a custom target (#18): its path in the container.
+@property (nonatomic, copy) NSString *customRelative;
+@property (nonatomic) BOOL customIsFile;
 @end
 
 @implementation CYCleanerItem
@@ -509,6 +579,7 @@ static unsigned long long cleaner_clear_directory_at(int containerFD, NSString *
 - (NSString *)key
 {
     if (self.logRoots) return @"__cyanide_crash_logs__";
+    if (self.customRelative) return [NSString stringWithFormat:@"%@#%@", self.container.path ?: self.name, self.customRelative];
     return self.container.path ?: self.name ?: @"";
 }
 
@@ -530,6 +601,8 @@ static unsigned long long cleaner_clear_directory_at(int containerFD, NSString *
     copy.logRoots = self.logRoots;
     copy.logRootBytes = self.logRootBytes;
     copy.fileCount = self.fileCount;
+    copy.customRelative = self.customRelative;
+    copy.customIsFile = self.customIsFile;
     return copy;
 }
 @end
@@ -673,6 +746,7 @@ static CYCleanerItem *cleaner_published_crash_logs(CYCleanerItem *existing,
 typedef NS_ENUM(NSInteger, CYCleanerSection) {
     CYCleanerSectionSummary,
     CYCleanerSectionApps,
+    CYCleanerSectionCustom,    // folders/files added from the File Browser
     CYCleanerSectionSystem,
     CYCleanerSectionLogs,
     CYCleanerSectionSkipped,
@@ -736,6 +810,7 @@ static BOOL cleaner_intro_accepted(void)
 // items, filter, sort and processListAvailable — all mutated on the main
 // queue — so the arrays are rebuilt lazily and invalidated at those points.
 @property (nonatomic, copy) NSArray<CYCleanerItem *> *cachedApps;
+@property (nonatomic, copy) NSArray<CYCleanerItem *> *cachedCustom;
 @property (nonatomic, copy) NSArray<CYCleanerItem *> *cachedSystem;
 @property (nonatomic, copy) NSArray<CYCleanerItem *> *cachedLogs;
 @property (nonatomic, copy) NSArray<CYCleanerItem *> *cachedSkipped;
@@ -985,6 +1060,7 @@ static BOOL cleaner_intro_accepted(void)
 {
     if (!self.sectionCacheValid) {
         NSMutableArray<CYCleanerItem *> *apps = [NSMutableArray array];
+        NSMutableArray<CYCleanerItem *> *custom = [NSMutableArray array];
         NSMutableArray<CYCleanerItem *> *system = [NSMutableArray array];
         NSMutableArray<CYCleanerItem *> *logs = [NSMutableArray array];
         NSMutableArray<CYCleanerItem *> *skipped = [NSMutableArray array];
@@ -993,6 +1069,7 @@ static BOOL cleaner_intro_accepted(void)
         for (CYCleanerItem *item in self.items) {
             if (![self matchesFilter:item]) continue;
             if (item.active || !self.processListAvailable) [skipped addObject:item];
+            else if (item.customRelative) [custom addObject:item];
             else if (item.systemApp) [system addObject:item];
             else [apps addObject:item];
         }
@@ -1003,9 +1080,11 @@ static BOOL cleaner_intro_accepted(void)
             return [a.name localizedCaseInsensitiveCompare:b.name];
         };
         [apps sortUsingComparator:cmp];
+        [custom sortUsingComparator:cmp];
         [system sortUsingComparator:cmp];
         [skipped sortUsingComparator:cmp];
         self.cachedApps = apps;
+        self.cachedCustom = custom;
         self.cachedSystem = system;
         self.cachedLogs = logs;
         self.cachedSkipped = skipped;
@@ -1016,6 +1095,7 @@ static BOOL cleaner_intro_accepted(void)
         case CYCleanerSectionLogs:    return self.cachedLogs;
         case CYCleanerSectionSystem:  return self.cachedSystem;
         case CYCleanerSectionApps:    return self.cachedApps;
+        case CYCleanerSectionCustom:  return self.cachedCustom;
         default:                      return @[];
     }
 }
@@ -1352,6 +1432,50 @@ static BOOL cleaner_intro_accepted(void)
                 [items addObject:item];
             }
 
+            // Custom targets (#18), in their app's current container. Never
+            // pre-selected; an app that isn't installed has nothing to show.
+            NSMutableDictionary<NSString *, FBAppContainer *> *byBundle = [NSMutableDictionary dictionary];
+            for (FBAppContainer *c in containers) if (c.identifier.length) byBundle[c.identifier] = c;
+            for (CYCleanerCustomTarget *target in cleaner_custom_targets()) {
+                if (__atomic_load_n(&scanCancelled, __ATOMIC_RELAXED)) { scanAborted = YES; break; }
+                FBAppContainer *container = byBundle[target.bundleID];
+                if (!container || !cleaner_path_is_app_data(container.path)) continue;
+                FBAppContainer *current = fb_current_container_for_path(container.path, NO);
+                BOOL metadataValid = current && current.kind == FBContainerKindData && current.executableName.length > 0 &&
+                                     [current.identifier isEqualToString:target.bundleID];
+                CYCleanerItem *item = [[CYCleanerItem alloc] init];
+                item.container = metadataValid ? current : container;
+                item.name = container.displayName.length ? container.displayName : target.appName;
+                item.icon = container.icon;
+                item.systemApp = container.systemApp;
+                item.customRelative = target.relativePath;
+                item.customIsFile = target.isFile;
+                item.active = !metadataValid || cleaner_process_is_active(item.container.executableName, active);
+                if (!metadataValid) {
+                    item.incomplete = YES;
+                } else {
+                    int containerFD = cleaner_open_container(current.path);
+                    struct stat containerStat = {0};
+                    if (containerFD < 0 || fstat(containerFD, &containerStat) != 0) {
+                        if (containerFD >= 0) close(containerFD);
+                        item.incomplete = YES;
+                        item.active = YES;
+                    } else {
+                        item.containerDevice = containerStat.st_dev;
+                        item.containerInode = containerStat.st_ino;
+                        item.hasContainerIdentity = YES;
+                        BOOL complete = NO;
+                        CYCleanerTraversal walk = cleaner_traversal(kCleanerMaxScanSeconds, &scanCancelled);
+                        item.cacheBytes = cleaner_custom_bytes_at(containerFD, target.relativePath, target.isFile,
+                                                                  containerStat.st_dev, &complete, &walk);
+                        item.incomplete = !complete;
+                        close(containerFD);
+                    }
+                }
+                item.selected = NO;
+                [items addObject:item];
+            }
+
             CYCleanerItem *crashLogs = nil;
             if (!scanAborted) {
                 setPhase(CYCleanerPhaseLogs, 0, 0);
@@ -1423,7 +1547,7 @@ static BOOL cleaner_intro_accepted(void)
     NSArray<CYCleanerItem *> *selectable = [self.items filteredArrayUsingPredicate:
         [NSPredicate predicateWithBlock:^BOOL(CYCleanerItem *item, NSDictionary *bindings) {
             (void)bindings;
-            return !item.active && !item.systemApp && item.totalBytes > 0;
+            return !item.active && !item.systemApp && !item.customRelative && item.totalBytes > 0;
         }]];
     BOOL allSelected = selectable.count > 0;
     for (CYCleanerItem *item in selectable) {
@@ -1441,7 +1565,7 @@ static BOOL cleaner_intro_accepted(void)
     (void)sender;
     if (self.loading || self.cleaning || !self.processListAvailable) return;
     for (CYCleanerItem *item in self.items) {
-        if (item.active || item.systemApp || item.totalBytes == 0) continue;
+        if (item.active || item.systemApp || item.customRelative || item.totalBytes == 0) continue;
         item.selected = item.totalBytes >= kCleanerLargeCacheBytes;
     }
     [self.tableView reloadData];
@@ -1458,6 +1582,18 @@ static BOOL cleaner_intro_accepted(void)
     CYCleanerFoldersViewController *vc = [[CYCleanerFoldersViewController alloc] init];
     vc.items = selected;
     [self.navigationController pushViewController:vc animated:YES];
+}
+
+// Takes a custom target off the list (nothing is deleted).
+- (void)removeCustomItem:(CYCleanerItem *)item
+{
+    if (self.cleaning || !item.customRelative) return;
+    cleaner_custom_target_remove(item.container.identifier ?: @"", item.customRelative);
+    NSMutableArray<CYCleanerItem *> *kept = [NSMutableArray array];
+    for (CYCleanerItem *other in self.items) if (![other.key isEqualToString:item.key]) [kept addObject:other];
+    self.items = kept;
+    [self.tableView reloadData];
+    [self updateControls];
 }
 
 - (void)openInFileBrowser:(NSString *)path
@@ -1485,11 +1621,19 @@ static BOOL cleaner_intro_accepted(void)
     NSUInteger count = [self selectedCount];
     if (count == 0) return;
 
+    BOOL anyCustom = NO;
+    for (CYCleanerItem *item in self.items) if (item.selected && item.customRelative) anyCustom = YES;
     NSMutableString *message = [NSMutableString stringWithFormat:
-        @"Remove the selected disposable data (%@ in logical file sizes)? Documents, settings and app data are not touched.",
+        anyCustom ? @"Remove the selected data (%@ in logical file sizes)? Apart from the items you added, documents, settings and app data are not touched."
+                  : @"Remove the selected disposable data (%@ in logical file sizes)? Documents, settings and app data are not touched.",
         cleaner_bytes([self selectedBytes])];
-    if (appCount > 0)
-        [message appendFormat:@" %lu app cache/temp folder%@.", (unsigned long)appCount, appCount == 1 ? @"" : @"s"];
+    NSUInteger customCount = 0;
+    for (CYCleanerItem *item in self.items) if (item.selected && item.customRelative) customCount++;
+    if (appCount > customCount)
+        [message appendFormat:@" %lu app cache/temp folder%@.", (unsigned long)(appCount - customCount), appCount - customCount == 1 ? @"" : @"s"];
+    if (customCount > 0)
+        [message appendFormat:@" %lu item%@ you added (folders are emptied, files deleted; anything the app keeps there, like drafts, is lost).",
+         (unsigned long)customCount, customCount == 1 ? @"" : @"s"];
     if (logsSelected) [message appendString:@" CrashReporter logs."];
     [message appendString:@" Apps may need to redownload content."];
     UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Clean Caches?"
@@ -1610,6 +1754,9 @@ static BOOL cleaner_intro_accepted(void)
                             if (cleaner_traversal_should_stop(&traversal, 0)) break;
                             appFreed += cleaner_clear_directory(root, &removed, &failed, &traversal);
                         }
+                    } else if (item.customRelative) {
+                        appFreed += cleaner_custom_clean_at(trustedContainerFD, item.customRelative, item.customIsFile,
+                                                            trustedContainerDevice, &removed, &failed, &traversal);
                     } else {
                         for (NSString *relativeRoot in @[ @"Library/Caches", @"tmp" ]) {
                             if (cleaner_traversal_should_stop(&traversal, 0)) break;
@@ -1641,6 +1788,12 @@ static BOOL cleaner_intro_accepted(void)
                         complete = complete && rootComplete;
                     }
                     item.cacheBytes = remaining;
+                    item.incomplete = !complete;
+                } else if (trustedContainerFD >= 0 && item.customRelative) {
+                    BOOL complete = NO;
+                    item.cacheBytes = cleaner_custom_bytes_at(trustedContainerFD, item.customRelative, item.customIsFile,
+                                                              trustedContainerDevice, &complete, &traversal);
+                    item.tempBytes = 0;
                     item.incomplete = !complete;
                 } else if (trustedContainerFD >= 0) {
                     // Shared traversal: rescans draw from the same 60 s budget
@@ -1723,7 +1876,7 @@ static BOOL cleaner_intro_accepted(void)
                     // Without the process list the apps can't be deselected
                     // (Not Checked); a leftover selection would block Clean.
                     if (processUnavailable) item.selected = NO;
-                    if (item.totalBytes > 0 || item.incomplete) [published addObject:item];
+                    if (item.totalBytes > 0 || item.incomplete || item.customRelative) [published addObject:item];
                 }
                 // Replace the model and reload together. Offscreen folder-review
                 // controllers keep their original stable item snapshots.
@@ -1758,6 +1911,7 @@ static BOOL cleaner_intro_accepted(void)
     if (!count) return nil;
     switch ((CYCleanerSection)section) {
         case CYCleanerSectionApps:   return [NSString stringWithFormat:@"Apps (%lu)", (unsigned long)count];
+        case CYCleanerSectionCustom: return [NSString stringWithFormat:@"Added by You (%lu)", (unsigned long)count];
         case CYCleanerSectionSystem: return [NSString stringWithFormat:@"Built-in Apps (%lu)", (unsigned long)count];
         case CYCleanerSectionLogs:   return [NSString stringWithFormat:@"Crash Logs (%lu)", (unsigned long)count];
         default: return nil;
@@ -1802,6 +1956,9 @@ static BOOL cleaner_intro_accepted(void)
         return !self.loading && self.items.count
             ? @"Tap an app or Crash Logs to select or deselect it. Touch and hold an app to open its cache folders in the File Browser."
             : nil;
+    if (section == CYCleanerSectionCustom && [self itemsInSection:section].count)
+        return @"Folders and files you added from the File Browser (touch and hold one there → Add to Cache Cleaner). "
+               @"A folder is emptied, a file deleted. They are never selected by default; touch and hold one here to remove it from this list.";
     if (section != CYCleanerSectionSkipped) return nil;
     return @"Only Library/Caches and tmp contents, plus the optional CrashReporter folders, are removed. "
            @"Documents, settings and app data are not touched. Active-app checks are best-effort; built-in apps and Crash Logs are not selected by default.";
@@ -1897,6 +2054,11 @@ static BOOL cleaner_intro_accepted(void)
         cell.detailLabel.text = [NSString stringWithFormat:@"%lu crash log file%@ · CrashReporter",
                                  (unsigned long)item.fileCount, item.fileCount == 1 ? @"" : @"s"];
         if (item.incomplete) cell.detailLabel.text = [cell.detailLabel.text stringByAppendingString:@" · incomplete scan"];
+    } else if (item.customRelative) {
+        NSMutableArray<NSString *> *parts = [NSMutableArray arrayWithObject:item.customRelative];
+        if (item.active) [parts addObject:@"in use"];
+        else if (item.incomplete) [parts addObject:@"incomplete scan"];
+        cell.detailLabel.text = [parts componentsJoinedByString:@" · "];
     } else {
         NSMutableArray<NSString *> *parts = [NSMutableArray array];
         if (item.cacheBytes > 0) [parts addObject:[NSString stringWithFormat:@"%@ cache", cleaner_bytes(item.cacheBytes)]];
@@ -1963,6 +2125,15 @@ static BOOL cleaner_intro_accepted(void)
                                                   identifier:nil
                                                      handler:^(UIAction *a) { [weakSelf openInFileBrowser:root]; }]];
             }
+        } else if (item.customRelative) {
+            NSString *full = [item.container.path stringByAppendingPathComponent:item.customRelative];
+            NSString *folder = item.customIsFile ? full.stringByDeletingLastPathComponent : full;
+            [actions addObject:[UIAction actionWithTitle:@"Show in File Browser" image:[UIImage systemImageNamed:@"folder"]
+                                              identifier:nil handler:^(UIAction *a) { [weakSelf openInFileBrowser:folder]; }]];
+            UIAction *remove = [UIAction actionWithTitle:@"Remove from Cache Cleaner" image:[UIImage systemImageNamed:@"minus.circle"]
+                                              identifier:nil handler:^(UIAction *a) { [weakSelf removeCustomItem:item]; }];
+            remove.attributes = UIMenuElementAttributesDestructive;
+            [actions addObject:remove];
         } else {
             NSString *caches = [item.container.path stringByAppendingPathComponent:@"Library/Caches"];
             NSString *tmp = [item.container.path stringByAppendingPathComponent:@"tmp"];
