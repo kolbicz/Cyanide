@@ -563,6 +563,7 @@ static unsigned long long cleaner_custom_clean_at(int containerFD, NSString *rel
 // Non-nil only for a custom target (#18): its path in the container.
 @property (nonatomic, copy) NSString *customRelative;
 @property (nonatomic) BOOL customIsFile;
+@property (nonatomic) BOOL customAutoSelect;   // treated like a cache: selected after a scan and by Select All
 @end
 
 @implementation CYCleanerItem
@@ -603,6 +604,7 @@ static unsigned long long cleaner_custom_clean_at(int containerFD, NSString *rel
     copy.fileCount = self.fileCount;
     copy.customRelative = self.customRelative;
     copy.customIsFile = self.customIsFile;
+    copy.customAutoSelect = self.customAutoSelect;
     return copy;
 }
 @end
@@ -1450,6 +1452,7 @@ static BOOL cleaner_intro_accepted(void)
                 item.systemApp = container.systemApp;
                 item.customRelative = target.relativePath;
                 item.customIsFile = target.isFile;
+                item.customAutoSelect = target.autoSelect;
                 item.active = !metadataValid || cleaner_process_is_active(item.container.executableName, active);
                 if (!metadataValid) {
                     item.incomplete = YES;
@@ -1472,7 +1475,8 @@ static BOOL cleaner_intro_accepted(void)
                         close(containerFD);
                     }
                 }
-                item.selected = NO;
+                // "Always Select" ones follow the same rule as app caches.
+                item.selected = target.autoSelect && item.totalBytes > 0 && processListAvailable && !item.active;
                 [items addObject:item];
             }
 
@@ -1547,7 +1551,7 @@ static BOOL cleaner_intro_accepted(void)
     NSArray<CYCleanerItem *> *selectable = [self.items filteredArrayUsingPredicate:
         [NSPredicate predicateWithBlock:^BOOL(CYCleanerItem *item, NSDictionary *bindings) {
             (void)bindings;
-            return !item.active && !item.systemApp && !item.customRelative && item.totalBytes > 0;
+            return !item.active && !item.systemApp && (!item.customRelative || item.customAutoSelect) && item.totalBytes > 0;
         }]];
     BOOL allSelected = selectable.count > 0;
     for (CYCleanerItem *item in selectable) {
@@ -1565,7 +1569,7 @@ static BOOL cleaner_intro_accepted(void)
     (void)sender;
     if (self.loading || self.cleaning || !self.processListAvailable) return;
     for (CYCleanerItem *item in self.items) {
-        if (item.active || item.systemApp || item.customRelative || item.totalBytes == 0) continue;
+        if (item.active || item.systemApp || (item.customRelative && !item.customAutoSelect) || item.totalBytes == 0) continue;
         item.selected = item.totalBytes >= kCleanerLargeCacheBytes;
     }
     [self.tableView reloadData];
@@ -1582,6 +1586,21 @@ static BOOL cleaner_intro_accepted(void)
     CYCleanerFoldersViewController *vc = [[CYCleanerFoldersViewController alloc] init];
     vc.items = selected;
     [self.navigationController pushViewController:vc animated:YES];
+}
+
+// Select Automatically on/off for an added folder/file; on also selects it now.
+- (void)toggleAutoSelect:(CYCleanerItem *)item
+{
+    if (self.cleaning || !item.customRelative) return;
+    BOOL on = !item.customAutoSelect;
+    cleaner_custom_target_set_auto_select(item.container.identifier ?: @"", item.customRelative, on);
+    for (CYCleanerItem *other in self.items) {
+        if (![other.key isEqualToString:item.key]) continue;
+        other.customAutoSelect = on;
+        if (on && [self itemSelectable:other]) other.selected = other.totalBytes > 0;
+    }
+    [self.tableView reloadData];
+    [self updateControls];
 }
 
 // Takes a custom target off the list (nothing is deleted).
@@ -1958,7 +1977,8 @@ static BOOL cleaner_intro_accepted(void)
             : nil;
     if (section == CYCleanerSectionCustom && [self itemsInSection:section].count)
         return @"Folders and files you added from the File Browser (touch and hold one there → Add to Cache Cleaner). "
-               @"A folder is emptied, a file deleted. They are never selected by default; touch and hold one here to remove it from this list.";
+               @"A folder is emptied, a file deleted. Those set to Select Automatically are selected like caches; "
+               @"the others only by hand. Touch and hold one here to change that or remove it from this list.";
     if (section != CYCleanerSectionSkipped) return nil;
     return @"Only Library/Caches and tmp contents, plus the optional CrashReporter folders, are removed. "
            @"Documents, settings and app data are not touched. Active-app checks are best-effort; built-in apps and Crash Logs are not selected by default.";
@@ -2130,6 +2150,10 @@ static BOOL cleaner_intro_accepted(void)
             NSString *folder = item.customIsFile ? full.stringByDeletingLastPathComponent : full;
             [actions addObject:[UIAction actionWithTitle:@"Show in File Browser" image:[UIImage systemImageNamed:@"folder"]
                                               identifier:nil handler:^(UIAction *a) { [weakSelf openInFileBrowser:folder]; }]];
+            UIAction *autoSelect = [UIAction actionWithTitle:@"Select Automatically" image:[UIImage systemImageNamed:@"checkmark.circle"]
+                                                  identifier:nil handler:^(UIAction *a) { [weakSelf toggleAutoSelect:item]; }];
+            autoSelect.state = item.customAutoSelect ? UIMenuElementStateOn : UIMenuElementStateOff;
+            [actions addObject:autoSelect];
             UIAction *remove = [UIAction actionWithTitle:@"Remove from Cache Cleaner" image:[UIImage systemImageNamed:@"minus.circle"]
                                               identifier:nil handler:^(UIAction *a) { [weakSelf removeCustomItem:item]; }];
             remove.attributes = UIMenuElementAttributesDestructive;

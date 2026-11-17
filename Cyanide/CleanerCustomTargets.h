@@ -6,8 +6,9 @@
 //  Browser (#18: e.g. Instagram's leftover video uploads). Each one lies
 //  inside one app's data container and is stored as that app's bundle ID plus
 //  the path relative to the container, so it survives the container moving
-//  (reinstall, restore). Folders are emptied, files deleted, only when the
-//  user selects them in the Cache Cleaner; they are never pre-selected.
+//  (reinstall, restore). Folders are emptied, files deleted, when selected in
+//  the Cache Cleaner: automatically like caches ("Always Select"), or only by
+//  hand, as the user chose when adding it (changeable there later).
 //
 
 #import <Foundation/Foundation.h>
@@ -19,6 +20,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy) NSString *relativePath;   // e.g. Library/Application Support/Instagram/VideoUpload
 @property (nonatomic) BOOL isFile;
 @property (nonatomic, copy) NSString *appName;        // for display when the app isn't installed
+@property (nonatomic) BOOL autoSelect;                // selected after a scan and by Select All, like caches
 @end
 
 // Whether `relative` may be a custom target: at least two path components,
@@ -30,7 +32,8 @@ NSArray<CYCleanerCustomTarget *> *cleaner_custom_targets(void);
 BOOL cleaner_custom_target_contains(NSString *bundleID, NSString *relative);
 // NO with *error when `relative` isn't allowed.
 BOOL cleaner_custom_target_add(NSString *bundleID, NSString *appName, NSString *relative, BOOL isFile,
-                               NSString *_Nullable *_Nullable error);
+                               BOOL autoSelect, NSString *_Nullable *_Nullable error);
+void cleaner_custom_target_set_auto_select(NSString *bundleID, NSString *relative, BOOL autoSelect);
 void cleaner_custom_target_remove(NSString *bundleID, NSString *relative);
 
 NS_ASSUME_NONNULL_END

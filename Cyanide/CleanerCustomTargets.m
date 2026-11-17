@@ -39,6 +39,7 @@ NSArray<CYCleanerCustomTarget *> *cleaner_custom_targets(void)
         t.relativePath = path;
         t.isFile = [entry[@"file"] isKindOfClass:NSNumber.class] && [entry[@"file"] boolValue];
         t.appName = [app isKindOfClass:NSString.class] && [(NSString *)app length] ? app : bundle;
+        t.autoSelect = [entry[@"auto"] isKindOfClass:NSNumber.class] && [entry[@"auto"] boolValue];
         [out addObject:t];
     }
     return out;
@@ -55,11 +56,13 @@ static void cleaner_custom_targets_store(NSArray<CYCleanerCustomTarget *> *targe
 {
     NSMutableArray *plain = [NSMutableArray array];
     for (CYCleanerCustomTarget *t in targets)
-        [plain addObject:@{ @"bundle": t.bundleID, @"path": t.relativePath, @"file": @(t.isFile), @"app": t.appName ?: t.bundleID }];
+        [plain addObject:@{ @"bundle": t.bundleID, @"path": t.relativePath, @"file": @(t.isFile), @"app": t.appName ?: t.bundleID,
+                            @"auto": @(t.autoSelect) }];
     [NSUserDefaults.standardUserDefaults setObject:plain forKey:kCleanerCustomTargetsKey];
 }
 
-BOOL cleaner_custom_target_add(NSString *bundleID, NSString *appName, NSString *relative, BOOL isFile, NSString **error)
+BOOL cleaner_custom_target_add(NSString *bundleID, NSString *appName, NSString *relative, BOOL isFile, BOOL autoSelect,
+                               NSString **error)
 {
     if (!bundleID.length || !cleaner_custom_target_valid_relative(relative)) {
         if (error) *error = @"Only folders and files inside an app's Library, Documents or tmp can be added, "
@@ -73,6 +76,7 @@ BOOL cleaner_custom_target_add(NSString *bundleID, NSString *appName, NSString *
     t.relativePath = relative;
     t.isFile = isFile;
     t.appName = appName.length ? appName : bundleID;
+    t.autoSelect = autoSelect;
     [targets addObject:t];
     cleaner_custom_targets_store(targets);
     return YES;
@@ -83,5 +87,13 @@ void cleaner_custom_target_remove(NSString *bundleID, NSString *relative)
     NSMutableArray *targets = [NSMutableArray array];
     for (CYCleanerCustomTarget *t in cleaner_custom_targets())
         if (!([t.bundleID isEqualToString:bundleID] && [t.relativePath isEqualToString:relative])) [targets addObject:t];
+    cleaner_custom_targets_store(targets);
+}
+
+void cleaner_custom_target_set_auto_select(NSString *bundleID, NSString *relative, BOOL autoSelect)
+{
+    NSArray<CYCleanerCustomTarget *> *targets = cleaner_custom_targets();
+    for (CYCleanerCustomTarget *t in targets)
+        if ([t.bundleID isEqualToString:bundleID] && [t.relativePath isEqualToString:relative]) t.autoSelect = autoSelect;
     cleaner_custom_targets_store(targets);
 }

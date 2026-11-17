@@ -3481,16 +3481,19 @@ static const NSUInteger kFBSizeShownItems = 100;
         ? [NSString stringWithFormat:@"The Cache Cleaner will offer to empty \"%@\" of %@ (the folder itself stays).", e.name, c.displayName]
         : [NSString stringWithFormat:@"The Cache Cleaner will offer to delete \"%@\" of %@.", e.name, c.displayName];
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Add to Cache Cleaner?"
-        message:[what stringByAppendingString:@" It's never selected by default; you choose it there each time. "
+        message:[what stringByAppendingString:@"\n\nAlways Select: it's selected after every scan and by Select All, like caches. "
+                 @"Select by Hand: you pick it each time. You can change this later by touching and holding it in the Cache Cleaner.\n\n"
                  @"Only add what the app can do without: anything it keeps there (drafts, downloads, logins) is gone once cleaned."]
         preferredStyle:UIAlertControllerStyleAlert];
-    [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     __weak typeof(self) weakSelf = self;
-    [ac addAction:[UIAlertAction actionWithTitle:@"Add" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+    void (^add)(BOOL) = ^(BOOL autoSelect) {
         NSString *error = nil;
-        if (!cleaner_custom_target_add(c.identifier, c.displayName, relative, !e.isDirectory, &error))
+        if (!cleaner_custom_target_add(c.identifier, c.displayName, relative, !e.isDirectory, autoSelect, &error))
             fb_alert(weakSelf, @"Not Added", error);
-    }]];
+    };
+    [ac addAction:[UIAlertAction actionWithTitle:@"Always Select" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) { add(YES); }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Select by Hand" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) { add(NO); }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:ac animated:YES completion:nil];
 }
 
