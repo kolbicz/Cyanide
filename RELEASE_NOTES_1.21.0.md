@@ -9,7 +9,7 @@ Clean what an app leaves behind, and get back to your folders faster.
 ## New
 
 - **Your own folders and files in the Cache Cleaner** ([#18](https://github.com/kolbicz/Cyanide/issues/18)): in the File Browser, long-press a folder or file inside an app's data and choose **Add to Cache Cleaner**. Instagram, for example, keeps uploaded videos in `Library/Application Support/Instagram/VideoUpload` long after they're posted.
-  - They appear in the Cache Cleaner under **Added by You**. They're never selected by default and Select All leaves them alone; you pick them each time.
+  - When adding one, choose **Always Select** (selected after every scan and by Select All, like caches) or **Select by Hand** (you pick it each time). Long-press it in the Cache Cleaner under **Added by You** to switch **Select Automatically** later.
   - A folder is emptied (the folder itself stays), a file is deleted. Skipped while the app is running, like caches.
   - Only add what the app can do without: anything it keeps there (drafts, downloads, logins) is gone once cleaned.
   - Only items under the app's Library, Documents or tmp can be added, not those folders themselves and not the app's settings.
