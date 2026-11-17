@@ -7,6 +7,7 @@
 #import "SettingsViewController.h"
 #import "PlistEditorViewController.h"
 #import "FBAppContainers.h"
+#import "CleanerCustomTargets.h"
 #import "installer/MainTabBarController.h"
 
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -2172,6 +2173,58 @@ static NSArray<FBEntry *> *fb_search_tree(NSString *root, NSString *query, BOOL 
     return found;
 }
 
+#pragma mark - Favorites and recent folders
+
+static NSString * const kFBFavoritesKey = @"FileBrowserFavorites";
+static NSString * const kFBRecentsKey = @"FileBrowserRecents";
+static const NSUInteger kFBMaxRecents = 15;
+
+static NSArray<NSString *> *fb_path_list(NSString *key)
+{
+    id stored = [NSUserDefaults.standardUserDefaults objectForKey:key];
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    if ([stored isKindOfClass:NSArray.class])
+        for (id p in stored) if ([p isKindOfClass:NSString.class] && [p hasPrefix:@"/"]) [out addObject:p];
+    return out;
+}
+
+static NSArray<NSString *> *fb_favorites(void) { return fb_path_list(kFBFavoritesKey); }
+static NSArray<NSString *> *fb_recents(void) { return fb_path_list(kFBRecentsKey); }
+
+static BOOL fb_is_favorite(NSString *path)
+{
+    return [fb_favorites() containsObject:fb_canonical_path(path)];
+}
+
+static void fb_set_favorite(NSString *path, BOOL on)
+{
+    NSString *canonical = fb_canonical_path(path);
+    NSMutableArray<NSString *> *list = [fb_favorites() mutableCopy];
+    [list removeObject:canonical];
+    if (on) [list addObject:canonical];
+    [NSUserDefaults.standardUserDefaults setObject:list forKey:kFBFavoritesKey];
+}
+
+// Most recent first; the top level itself isn't worth a row.
+static void fb_note_recent(NSString *path)
+{
+    NSString *canonical = fb_canonical_path(path);
+    if ([canonical isEqualToString:@"/"]) return;
+    NSMutableArray<NSString *> *list = [fb_recents() mutableCopy];
+    [list removeObject:canonical];
+    [list insertObject:canonical atIndex:0];
+    while (list.count > kFBMaxRecents) [list removeLastObject];
+    [NSUserDefaults.standardUserDefaults setObject:list forKey:kFBRecentsKey];
+}
+
+// A folder's row title in the menus: its app's name inside a container.
+static NSString *fb_place_title(NSString *path)
+{
+    NSString *name = path.lastPathComponent.length ? path.lastPathComponent : path;
+    NSString *parent = path.stringByDeletingLastPathComponent.lastPathComponent;
+    return parent.length ? [NSString stringWithFormat:@"%@ — %@", name, parent] : name;
+}
+
 #pragma mark - Directory list
 
 @interface FileBrowserViewController () <UISearchResultsUpdating, UISearchBarDelegate, UIDocumentPickerDelegate>
@@ -2639,7 +2692,47 @@ static const NSUInteger kFBSizeShownItems = 100;
 - (void)viewDidAppear:(BOOL)animated
 {
     [super viewDidAppear:animated];
+    fb_note_recent(self.path);
+    [self updateBarButtons];   // Recent and the favorite state
     [self notifyLeftoverBackupsIfNeeded];
+}
+
+- (void)openPlace:(NSString *)path
+{
+    [self.navigationController pushViewController:[[FileBrowserViewController alloc] initWithPath:path] animated:YES];
+}
+
+- (UIMenu *)placesMenu
+{
+    __weak typeof(self) weakSelf = self;
+    NSMutableArray<UIMenuElement *> *items = [NSMutableArray array];
+    BOOL favorite = fb_is_favorite(self.path);
+    if (![fb_canonical_path(self.path) isEqualToString:@"/"]) {
+        NSString *path = self.path;
+        [items addObject:[UIAction actionWithTitle:favorite ? @"Remove from Favorites" : @"Add to Favorites"
+                                             image:[UIImage systemImageNamed:favorite ? @"star.slash" : @"star"] identifier:nil
+                                           handler:^(UIAction *a) { fb_set_favorite(path, !favorite); [weakSelf updateBarButtons]; }]];
+    }
+    NSArray<UIMenuElement *> *(^list)(NSArray<NSString *> *) = ^NSArray<UIMenuElement *> *(NSArray<NSString *> *paths) {
+        NSMutableArray<UIMenuElement *> *rows = [NSMutableArray array];
+        for (NSString *p in paths) {
+            UIAction *row = [UIAction actionWithTitle:fb_place_title(p) image:nil identifier:nil
+                                              handler:^(UIAction *a) { [weakSelf openPlace:p]; }];
+            row.subtitle = p;
+            [rows addObject:row];
+        }
+        return rows;
+    };
+    NSArray<NSString *> *favorites = fb_favorites();
+    if (favorites.count)
+        [items addObject:[UIMenu menuWithTitle:@"Favorites" image:[UIImage systemImageNamed:@"star.fill"] identifier:nil
+                                       options:0 children:list(favorites)]];
+    NSMutableArray<NSString *> *recents = [fb_recents() mutableCopy];
+    [recents removeObject:fb_canonical_path(self.path)];
+    if (recents.count)
+        [items addObject:[UIMenu menuWithTitle:@"Recent" image:[UIImage systemImageNamed:@"clock"] identifier:nil
+                                       options:0 children:list(recents)]];
+    return [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:items];
 }
 
 // Once per app launch: if a save was interrupted (crash mid-write), say which
@@ -2725,6 +2818,7 @@ static const NSUInteger kFBSizeShownItems = 100;
     UIMenu *optionsMenu = [UIMenu menuWithChildren:@[
         [UIMenu menuWithTitle:self.container.displayName ?: @"" image:nil identifier:nil
                       options:UIMenuOptionsDisplayInline children:appItems],
+        [self placesMenu],
         [UIAction actionWithTitle:@"Go to Folder…" image:[UIImage systemImageNamed:@"arrow.right.circle"]
                        identifier:nil handler:^(UIAction *x) { [weakOptions goToPath]; }],
         [UIAction actionWithTitle:@"Size of This Folder" image:[UIImage systemImageNamed:@"chart.pie"]
@@ -3361,6 +3455,45 @@ static const NSUInteger kFBSizeShownItems = 100;
     });
 }
 
+// e's path inside the app data container this folder belongs to, when the
+// Cache Cleaner may take it as a custom target; nil otherwise.
+- (NSString *)cleanerRelativePathFor:(FBEntry *)e
+{
+    FBAppContainer *c = self.container;
+    if (!c || c.kind != FBContainerKindData || !c.identifier.length || e.isSymlink || e.viaRoot) return nil;
+    if (!e.isDirectory && !S_ISREG(e.mode)) return nil;
+    NSString *base = [fb_canonical_path(c.path) stringByAppendingString:@"/"];
+    NSString *path = fb_canonical_path(e.path);
+    if (![path hasPrefix:base]) return nil;
+    NSString *relative = [path substringFromIndex:base.length];
+    return cleaner_custom_target_valid_relative(relative) ? relative : nil;
+}
+
+- (void)toggleCleanerTarget:(FBEntry *)e relative:(NSString *)relative added:(BOOL)added
+{
+    FBAppContainer *c = self.container;
+    if (added) {
+        cleaner_custom_target_remove(c.identifier, relative);
+        fb_alert(self, @"Removed from Cache Cleaner", [NSString stringWithFormat:@"%@ is no longer offered in the Cache Cleaner. Nothing was deleted.", e.name]);
+        return;
+    }
+    NSString *what = e.isDirectory
+        ? [NSString stringWithFormat:@"The Cache Cleaner will offer to empty \"%@\" of %@ (the folder itself stays).", e.name, c.displayName]
+        : [NSString stringWithFormat:@"The Cache Cleaner will offer to delete \"%@\" of %@.", e.name, c.displayName];
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Add to Cache Cleaner?"
+        message:[what stringByAppendingString:@" It's never selected by default; you choose it there each time. "
+                 @"Only add what the app can do without: anything it keeps there (drafts, downloads, logins) is gone once cleaned."]
+        preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    __weak typeof(self) weakSelf = self;
+    [ac addAction:[UIAlertAction actionWithTitle:@"Add" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        NSString *error = nil;
+        if (!cleaner_custom_target_add(c.identifier, c.displayName, relative, !e.isDirectory, &error))
+            fb_alert(weakSelf, @"Not Added", error);
+    }]];
+    [self presentViewController:ac animated:YES completion:nil];
+}
+
 - (void)goToPath
 {
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Go to Folder"
@@ -3564,6 +3697,23 @@ static const NSUInteger kFBSizeShownItems = 100;
         if (e.isDirectory && !e.isSymlink && !e.statFailed)
             [items addObject:[UIAction actionWithTitle:@"Folder Size" image:[UIImage systemImageNamed:@"chart.pie"]
                                             identifier:nil handler:^(UIAction *a) { [self showFolderSize:e.path]; }]];
+        if (e.isDirectory && !e.isSymlink) {
+            BOOL favorite = fb_is_favorite(e.path);
+            [items addObject:[UIAction actionWithTitle:favorite ? @"Remove from Favorites" : @"Add to Favorites"
+                                                 image:[UIImage systemImageNamed:favorite ? @"star.slash" : @"star"] identifier:nil
+                                               handler:^(UIAction *a) { fb_set_favorite(e.path, !favorite); [self updateBarButtons]; }]];
+        }
+        // Inside an app's data container: let the Cache Cleaner empty this
+        // folder / delete this file on request (#18).
+        NSString *relative = [self cleanerRelativePathFor:e];
+        if (relative) {
+            FBAppContainer *owner = self.container;
+            BOOL added = cleaner_custom_target_contains(owner.identifier, relative);
+            UIAction *cleaner = [UIAction actionWithTitle:added ? @"Remove from Cache Cleaner" : @"Add to Cache Cleaner"
+                                                    image:[UIImage systemImageNamed:added ? @"minus.circle" : @"sparkles"] identifier:nil
+                                                  handler:^(UIAction *a) { [self toggleCleanerTarget:e relative:relative added:added]; }];
+            [items addObject:cleaner];
+        }
         if (!e.isDirectory) {
             [items addObject:info];
             // AirDrop, Mail, Save to Files … a copy, never the original.
