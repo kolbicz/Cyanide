@@ -20,6 +20,7 @@ struct CyanideControlsBundle: WidgetBundle {
             LocationServicesControl()
             RespringControl()
             RebootControl()
+            CarPlayControl()
         }
     }
 }

@@ -371,6 +371,11 @@ typedef void (^SettingsProgressBlock)(float fraction, NSString *step, NSTimeInte
 void settings_power_action_async(BOOL reboot, UIViewController *host,
                                  SettingsProgressBlock progress,
                                  void (^completion)(BOOL ok, NSString *message));
+// CarPlay without Siri (button, Shortcuts action, cyanide://carplay). Needs
+// live or parked kernel access; never starts the full exploit. Completion on
+// the main queue with the result. progress as above (target -1).
+void settings_carplay_unlock_async(SettingsProgressBlock progress,
+                                   void (^completion)(BOOL ok, NSString *message));
 // allowFullExploit: as for settings_unlock_filesystem_async -- NO never starts
 // a fresh exploit run and fails with kSettingsFullExploitRequiredMessage instead.
 // resolveOrigin: on a SpringBoard success, also record where the user was

@@ -77,5 +77,14 @@ struct CyanideAppShortcuts: AppShortcutsProvider {
             shortTitle: "Reboot",
             systemImageName: "power"
         )
+        AppShortcut(
+            intent: UnlockCarPlayIntent(),
+            phrases: [
+                "Unlock CarPlay with \(.applicationName)",
+                "\(.applicationName) CarPlay",
+            ],
+            shortTitle: "CarPlay without Siri",
+            systemImageName: "car.fill"
+        )
     }
 }

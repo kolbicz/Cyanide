@@ -40,3 +40,18 @@ struct RebootControl: ControlWidget {
         .description("Reboots the device through Cyanide. Needs kernel access from an earlier run.")
     }
 }
+
+@available(iOS 18.0, *)
+struct CarPlayControl: ControlWidget {
+    static let kind = "com.zeroxjf.ios-cyanide1.controls.carplay"
+
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: Self.kind) {
+            ControlWidgetButton(action: UnlockCarPlayIntent()) {
+                Label("CarPlay", systemImage: "car.fill")
+            }
+        }
+        .displayName("CarPlay without Siri")
+        .description("Lets CarPlay start while Siri is off, for the current connection.")
+    }
+}

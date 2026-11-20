@@ -56,7 +56,7 @@ the Cache Cleaner deletes what you select.
 | **App Switcher Grid** | Grid-style app switcher |
 | **iPad Dock** | iPad-style Dock with the App Library button |
 | **Locked App Previews** | Notification previews for apps locked with Face ID (iOS 18+) |
-| **CarPlay without Siri** | Lifts iOS 18's "To use CarPlay, enable Siri" lock-out while Siri stays off; apply while the car is connected |
+| **CarPlay without Siri** | Lifts iOS 18's "To use CarPlay, enable Siri" lock-out while Siri stays off, per connection: Control Center button, Shortcuts action (for a "When CarPlay connects" automation), `cyanide://carplay` or Run |
 | **SpringBoard Tools** | Apply the dock, folder and Control Center look from Settings → Lara with the other tweaks |
 | **Lock Screen Duration** | Keep the lock screen awake longer |
 | **QuickLoader** | Executes custom .js code |
@@ -144,6 +144,12 @@ an Installer package: Activate and Deactivate on its Settings page.
 Shortcuts / Siri / Action button actions (iOS 17 and later), and can be opened
 as `cyanide://respring` and `cyanide://reboot` links once "Respring and reboot
 links" is on. Reboot needs kernel access from an earlier run.
+
+**CarPlay without Siri** is also a Control Center button (iOS 18), a Shortcuts
+action and a `cyanide://carplay` link. For hands-free use, create a personal
+automation in Shortcuts: **CarPlay → Connects → Run Immediately**, with the
+"CarPlay without Siri" action. It needs the package turned on and kernel
+access from an earlier run.
 
 ## Options
 

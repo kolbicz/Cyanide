@@ -264,6 +264,10 @@ static CYLocationRequestCompletion g_scene_intent_completion = nil;
 // Options → "Location Services links". Control Center and the Shortcuts
 // action are not links: they come in through +cy_runLocationURL:completion:,
 // which iOS only calls for the user's own controls and shortcuts.
+static BOOL scene_is_carplay_url(NSURL *url) {
+    return [url.host.lowercaseString isEqualToString:@"carplay"];
+}
+
 static BOOL scene_is_power_url(NSURL *url) {
     NSString *host = url.host.lowercaseString;
     return [host isEqualToString:@"respring"] || [host isEqualToString:@"reboot"];
@@ -688,6 +692,39 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     scene_announce(self.quietTitle.text);
 }
 
+// The progress screen for CarPlay without Siri (button, Shortcuts action,
+// cyanide://carplay).
+- (void)beginCarPlayCover {
+    if (!self.quietCover) [self buildQuietCover];
+    self.quietRun++;
+    self.quietFinished = NO;
+    self.quietPendingPhase = nil;
+    self.quietTitle.text = @"CarPlay without Siri";
+    self.quietStatus.text = @"Starting…";
+    self.quietPhaseShownNs = 0;
+    if (@available(iOS 17.0, *)) [self.quietIcon removeAllSymbolEffects];
+    self.quietIcon.image = [UIImage systemImageNamed:@"car.fill" withConfiguration:scene_quiet_symbol_config()];
+    self.quietIcon.tintColor = UIColor.systemBlueColor;
+    if (!UIAccessibilityIsReduceMotionEnabled()) {
+        if (@available(iOS 17.0, *)) [self.quietIcon addSymbolEffect:[NSSymbolPulseEffect effect]];
+    }
+    [self.quietProgress.layer removeAllAnimations];
+    [self.quietProgress setProgress:0.05f animated:NO];
+    scene_announce(self.quietTitle.text);
+}
+
+- (void)finishCarPlayCover {
+    if (!self.quietCover) return;
+    self.quietFinished = YES;
+    self.quietPendingPhase = nil;
+    if (@available(iOS 17.0, *)) [self.quietIcon removeAllSymbolEffects];
+    self.quietIcon.image = [UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:scene_quiet_symbol_config()];
+    self.quietIcon.tintColor = UIColor.systemGreenColor;
+    self.quietStatus.text = @"CarPlay is unlocked.";
+    [self.quietProgress setProgress:1.0f animated:YES];
+    scene_announce(self.quietStatus.text);
+}
+
 // The request is under way: SpringBoard (or the device) goes down next.
 - (void)finishPowerCover:(BOOL)reboot {
     if (!self.quietCover) return;
@@ -706,6 +743,10 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     if (self.actionInProgress) return;   // the running request owns the screen
     if (url && scene_is_power_url(url)) {
         [self beginPowerCover:[url.host.lowercaseString isEqualToString:@"reboot"]];
+        return;
+    }
+    if (url && scene_is_carplay_url(url)) {
+        [self beginCarPlayCover];
         return;
     }
     if (!url || ![url.host.lowercaseString isEqualToString:@"location-services"]) return;
@@ -764,6 +805,55 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
     });
 }
 
+// cyanide://carplay (the Control Center button and the Shortcuts action use
+// it too): lifts the CarPlay Siri lock-out, then goes back Home when the
+// request brought Cyanide to the front.
+- (void)handleCarPlayURL:(NSURL *)url completion:(CYLocationRequestCompletion)requester
+          broughtToFront:(BOOL)broughtToFront {
+    if (self.actionInProgress) {
+        NSString *busy = @"Another Cyanide request is in progress.";
+        scene_announce(busy);
+        if (requester) requester(NO, busy);
+        return;
+    }
+    self.actionInProgress = YES;
+    self.actionGeneration++;
+    [self beginCarPlayCover];
+    __weak typeof(self) weakSelf = self;
+    NSUInteger run = self.quietRun;
+    SettingsProgressBlock progress = ^(float fraction, NSString *step, NSTimeInterval over, int target) {
+        typeof(self) me = weakSelf;
+        // The result is shown by finishCarPlayCover, not as a phase.
+        if (me && me.quietRun == run) [me quietPhase:MIN(fraction, 0.95f) step:step over:over target:-1];
+    };
+    settings_carplay_unlock_async(progress, ^(BOOL ok, NSString *message) {
+        typeof(self) me = weakSelf;
+        if (!me) { if (requester) requester(ok, message ?: @""); return; }
+        me.actionInProgress = NO;
+        if (requester) requester(ok, message ?: @"");
+        if (!ok) {
+            [me hideQuietCover];
+            [me showAlertTitle:@"CarPlay without Siri" message:message];
+            return;
+        }
+        [me finishCarPlayCover];
+        if (!broughtToFront) return;
+        NSUInteger generation = me.actionGeneration;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            typeof(self) again = weakSelf;
+            if (!again || again.actionGeneration != generation || again.actionInProgress) return;
+            // Like leaveToApp: let live tweaks' calls finish before leaving.
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                settings_quiesce_remote_calls_before_leaving("CarPlay return");
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [weakSelf hideQuietCover];
+                    scene_suspend_to_home();
+                });
+            });
+        });
+    });
+}
+
 - (void)handleActionURL:(NSURL *)url completion:(CYLocationRequestCompletion)requester coldLaunched:(BOOL)cold {
     [self handleActionURL:url completion:requester coldLaunched:cold
            broughtToFront:cold || !g_scene_visit_user_owned];
@@ -808,6 +898,10 @@ static const double kQuietMinPhase = 0.35;   // a phase stays readable at least 
          broughtToFront:(BOOL)broughtToFront {
     if (scene_is_power_url(url)) {
         [self handlePowerURL:url completion:requester];
+        return;
+    }
+    if (scene_is_carplay_url(url)) {
+        [self handleCarPlayURL:url completion:requester broughtToFront:broughtToFront];
         return;
     }
     if (![url.host.lowercaseString isEqualToString:@"location-services"]) {

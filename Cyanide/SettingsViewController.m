@@ -5042,6 +5042,92 @@ void settings_power_action_async(BOOL reboot, UIViewController *host,
     });
 }
 
+// The last run's CarPlay step: -1 = didn't run, else a CarPlaySiriResult.
+static volatile int g_carplay_last_result = -1;
+
+// CarPlay without Siri from the Control Center button, the Shortcuts action
+// or a cyanide://carplay link (e.g. a "When CarPlay connects" automation).
+// Never starts the full exploit: kernel access must already be live or
+// parked. Waits a few seconds for the CarPlay process (the automation can fire
+// before it's up), then runs Apply scoped to this tweak, which pauses live
+// tweaks for the switch and reapplies them afterwards.
+void settings_carplay_unlock_async(SettingsProgressBlock progress,
+                                   void (^completion)(BOOL ok, NSString *message))
+{
+    void (^step)(float, NSString *, NSTimeInterval) = ^(float f, NSString *text, NSTimeInterval over) {
+        if (progress) dispatch_async(dispatch_get_main_queue(), ^{ progress(f, text, over, -1); });
+    };
+    void (^finish)(BOOL, NSString *) = ^(BOOL ok, NSString *message) {
+        if (!ok) log_user("[CARPLAY] %s\n", message.UTF8String);
+        dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(ok, message ?: @""); });
+    };
+    if (![NSUserDefaults.standardUserDefaults boolForKey:kSettingsCarPlayWithoutSiriEnabled]) {
+        finish(NO, @"Turn on CarPlay without Siri in Cyanide's Packages first.");
+        return;
+    }
+    if (!settings_device_supported()) {
+        finish(NO, settings_unsupported_message());
+        return;
+    }
+    dispatch_async(dispatch_get_global_queue(0, 0), ^{
+        if (!settings_try_claim_actions_lock("CarPlay without Siri",
+                                             "[CARPLAY] Another action is already running.")) {
+            finish(NO, @"Another Cyanide action is running. Try again in a moment.");
+            return;
+        }
+        BOOL kernelReady = NO;
+        BOOL connected = NO;
+        @try {
+            log_user("[CARPLAY] Requested from a link, shortcut or Control Center.\n");
+            step(0.1f, @"Getting kernel ready", 0);
+            kernelReady = settings_ensure_kexploit_for_read();
+            if (kernelReady) {
+                step(0.3f, @"Waiting for CarPlay", 8.0);
+                for (int i = 0; i < 16 && !(connected = carplaysiri_connected()); i++) usleep(500000);
+            }
+        } @finally {
+            settings_release_actions_lock();
+        }
+        if (!kernelReady) {
+            finish(NO, @"Cyanide needs kernel access from an earlier Run. Open Cyanide, tap Run once, then try again.");
+            return;
+        }
+        if (!connected) {
+            finish(NO, @"CarPlay isn't connected.");
+            return;
+        }
+        step(0.5f, @"Lifting the Siri lock-out", 4.0);
+        g_carplay_last_result = -1;
+        __block id observer = nil;
+        observer = [NSNotificationCenter.defaultCenter addObserverForName:kSettingsActionsDidCompleteNotification
+                                                                   object:nil
+                                                                    queue:NSOperationQueue.mainQueue
+                                                               usingBlock:^(NSNotification *note) {
+            if (!observer) return;
+            [NSNotificationCenter.defaultCenter removeObserver:observer];
+            observer = nil;
+            int result = g_carplay_last_result;
+            BOOL ok = result == (int)CarPlaySiriApplied;
+            NSString *message = note.userInfo[kSettingsActionsDidCompleteMessageKey];
+            if (ok) step(1.0f, @"Done", 0.2);
+            finish(ok, ok ? @"CarPlay works without Siri until the car disconnects."
+                   : result == (int)CarPlaySiriNotConnected ? @"CarPlay isn't connected."
+                   : result == (int)CarPlaySiriUnsupported ? @"This iOS version has no CarPlay Siri check Cyanide knows."
+                   : (message.length && result < 0 ? message : @"CarPlay didn't change. Check the Log."));
+        }];
+        // A run already in progress only queues a follow-up: don't wait forever.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (!observer) return;
+            [NSNotificationCenter.defaultCenter removeObserver:observer];
+            observer = nil;
+            finish(NO, @"CarPlay is taking longer than expected. Check the Log.");
+        });
+        dispatch_async(dispatch_get_main_queue(), ^{
+            settings_run_pending_actions_for_keys([NSSet setWithObject:kSettingsCarPlayWithoutSiriEnabled]);
+        });
+    });
+}
+
 static BOOL settings_dark_tweaks_should_run(NSUserDefaults *d, BOOL pendingOnly)
 {
     NSArray<NSString *> *keys = @[
@@ -10025,8 +10111,11 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                                   [d stringForKey:kSettingsPowercuffAppliedLevel].length > 0;
             // CarPlay without Siri: patches the running CarPlay process (it
             // starts for each connection), so it's applied on every run.
-            // Never marked applied, so pending runs include it too.
-            BOOL runCarPlaySiri = settings_enabled_tweak_should_run(d, kSettingsCarPlayWithoutSiriEnabled, pendingOnly);
+            // A full Run, or a run scoped to it (the CarPlay button and
+            // Shortcuts action). Other pending runs (the installer queue)
+            // leave it out: switching to CarPlay forces a SpringBoard refresh.
+            BOOL runCarPlaySiri = [d boolForKey:kSettingsCarPlayWithoutSiriEnabled] &&
+                                  (!pendingOnly || [settings_run_only_keys() containsObject:kSettingsCarPlayWithoutSiriEnabled]);
             BOOL forceSpringBoardRefresh = (runPowercuff || runCarPlaySiri) &&
                                            settings_has_persistent_springboard_remote_call_user();
             BOOL springBoardPendingOnly = pendingOnly && !forceSpringBoardRefresh;
@@ -10218,6 +10307,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             if (runCarPlaySiri && !carplaysiri_connected()) {
                 // Nothing to patch: keep the SpringBoard channel as it is.
                 settings_progress(&step, total, "CarPlay not connected");
+                g_carplay_last_result = (int)CarPlaySiriNotConnected;
                 log_user("[CARPLAY] CarPlay isn't connected; run again while the car shows \"CarPlay Not Available\".\n");
             } else if (runCarPlaySiri) {
                 settings_progress(&step, total, "Lifting the CarPlay Siri lock-out");
@@ -10230,6 +10320,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                     // enabled SpringBoard tweaks are reapplied below.
                     settings_destroy_springboard_remote_call_locked_internal("switching to CarPlay", NO);
                     CarPlaySiriResult result = carplaysiri_apply();
+                    g_carplay_last_result = (int)result;
                     // Applied only for this connection: not marked applied,
                     // so every run tries again.
                     settings_mark_tweak_applied(kSettingsCarPlayWithoutSiriEnabled, NO);

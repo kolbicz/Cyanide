@@ -42,3 +42,22 @@ struct RebootIntent: AppIntent {
         return .result()
     }
 }
+
+// CarPlay without Siri: lifts iOS 18's "To use CarPlay, enable Siri" lock-out
+// for the current connection. Meant for a "When CarPlay connects" automation
+// in Shortcuts, or the Control Center button. The tweak must be on in
+// Cyanide, and kernel access from an earlier run must be live or parked.
+struct UnlockCarPlayIntent: AppIntent {
+    static let title: LocalizedStringResource = "CarPlay without Siri"
+    static let description = IntentDescription("Opens Cyanide to let CarPlay start while Siri is off, for the current connection.")
+    static let openAppWhenRun: Bool = true
+
+    init() {}
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        try await CyanideLocationRequest.runURL("cyanide://carplay",
+                                                timeoutMessage: "CarPlay is taking longer than expected.")
+        return .result()
+    }
+}
