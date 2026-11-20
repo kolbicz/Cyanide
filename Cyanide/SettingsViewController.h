@@ -94,6 +94,7 @@ extern NSString * const kSettingsSBCAutoDockApp;
 extern NSString * const kSettingsSBCDockAppBundleID;
 
 extern NSString * const kSettingsPowercuffEnabled;
+extern NSString * const kSettingsCarPlayWithoutSiriEnabled;
 extern NSString * const kSettingsPowercuffLevel;
 
 extern NSString * const kSettingsDSDisableAppLibrary;

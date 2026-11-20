@@ -56,6 +56,7 @@ the Cache Cleaner deletes what you select.
 | **App Switcher Grid** | Grid-style app switcher |
 | **iPad Dock** | iPad-style Dock with the App Library button |
 | **Locked App Previews** | Notification previews for apps locked with Face ID (iOS 18+) |
+| **CarPlay without Siri** | Lifts iOS 18's "To use CarPlay, enable Siri" lock-out while Siri stays off; apply while the car is connected |
 | **SpringBoard Tools** | Apply the dock, folder and Control Center look from Settings → Lara with the other tweaks |
 | **Lock Screen Duration** | Keep the lock screen awake longer |
 | **QuickLoader** | Executes custom .js code |

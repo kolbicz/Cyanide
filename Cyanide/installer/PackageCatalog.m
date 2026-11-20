@@ -218,6 +218,18 @@ static const NSInteger kSecOTA              = SectionOTA;
                                           isNew:NO];
         powercuff.settingsSection = kSecPowercuff;
 
+        Package *carPlayWithoutSiri = [[Package alloc] initWithIdentifier:@"com.darksword.carplay-without-siri"
+                                           name:@"CarPlay without Siri"
+                               shortDescription:@"Use CarPlay while Siri is turned off"
+                                longDescription:@"Since iOS 18, CarPlay shows \"CarPlay Not Available — To use CarPlay, enable Siri\" while Siri is off. That screen is drawn by the iPhone itself; this lifts it, and Siri stays off.\n\nCarPlay restarts with every connection, so apply while the car is connected and shows the message, each time you connect. Applying without a car connected does nothing.\n\nThe car's voice button does nothing while Siri is off. Not tested in many cars yet: if it doesn't work, send the Log right after applying."
+                                        version:version
+                                         author:@"kolbicz"
+                                       category:@"System"
+                                     symbolName:@"car.fill"
+                                           kind:PackageInstallKindToggle
+                                     enabledKey:kSettingsCarPlayWithoutSiriEnabled
+                                          isNew:YES];
+
         Package *axon = [[Package alloc] initWithIdentifier:@"com.darksword.axonlite"
                                            name:@"Axon Lite"
                                shortDescription:@"Group Notification Center requests by app"
@@ -617,6 +629,7 @@ static const NSInteger kSecOTA              = SectionOTA;
             appSwitcherGrid,
             floatingDock,
             lockedPreviews,
+            carPlayWithoutSiri,
             quickLoader,
         ];
     });

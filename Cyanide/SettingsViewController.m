@@ -27,6 +27,7 @@
 #import "tweaks/app_switcher.h"
 #import "tweaks/respring.h"
 #import "tweaks/powercuff.h"
+#import "tweaks/carplay_siri.h"
 #import "tweaks/statbar.h"
 #import "tweaks/experimental_tweaks.h"
 #import "tweaks/nsbar.h"
@@ -1067,6 +1068,7 @@ NSString * const kSettingsSBCAutoDockApp = @"SBCAutoDockApp";
 NSString * const kSettingsSBCDockAppBundleID = @"SBCDockAppBundleID";
 
 NSString * const kSettingsPowercuffEnabled = @"PowercuffEnabled";
+NSString * const kSettingsCarPlayWithoutSiriEnabled = @"CarPlayWithoutSiriEnabled";
 NSString * const kSettingsPowercuffLevel   = @"PowercuffLevel";
 // Level thermalmonitord was last set to by Powercuff (absent: never / "off").
 // Turning Powercuff off sends "off" while this is set: thermalmonitord keeps
@@ -9728,6 +9730,7 @@ void settings_register_defaults(void)
         kSettingsSBCDockAppBundleID: kSBCDefaultDockAppBundleID,
 
         kSettingsPowercuffEnabled: @NO,
+        kSettingsCarPlayWithoutSiriEnabled: @NO,
         kSettingsPowercuffLevel:   @"nominal",
 
         kSettingsDSDisableAppLibrary: @NO,
@@ -10020,7 +10023,11 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             // Removed after it was applied: put thermalmonitord back to "off".
             BOOL resetPowercuff = !runPowercuff && ![d boolForKey:kSettingsPowercuffEnabled] &&
                                   [d stringForKey:kSettingsPowercuffAppliedLevel].length > 0;
-            BOOL forceSpringBoardRefresh = runPowercuff &&
+            // CarPlay without Siri: patches the running CarPlay process (it
+            // starts for each connection), so it's applied on every run.
+            // Never marked applied, so pending runs include it too.
+            BOOL runCarPlaySiri = settings_enabled_tweak_should_run(d, kSettingsCarPlayWithoutSiriEnabled, pendingOnly);
+            BOOL forceSpringBoardRefresh = (runPowercuff || runCarPlaySiri) &&
                                            settings_has_persistent_springboard_remote_call_user();
             BOOL springBoardPendingOnly = pendingOnly && !forceSpringBoardRefresh;
             BOOL statBarEnabled = [d boolForKey:kSettingsStatBarEnabled];
@@ -10079,16 +10086,17 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             BOOL needsSpringBoardWork = runSBTools || runSBC || runDarkTweaks || runStatBar || runNSBar || runNiceBarLite || runAxonLite || runGravityLite || runLayoutExtras || restoreLayoutExtras || runAppSwitcherGrid || runFloatingDock || runLockedPreviews || relockPreviews || runThemer || runSnowBoardLite || runLiveWP || runStageStrip || runFastLockXLite || runQuickLoader || runRepoTweaks || cleanupDisabledSpringBoardTweaks || undoDarkTweaks;
             BOOL needsSpringBoard = needsSpringBoardWork || forceSpringBoardRefresh;
 
-            BOOL hasRunWork = patchSandboxExt || runPowercuff || resetPowercuff || needsSpringBoard;
+            BOOL hasRunWork = patchSandboxExt || runPowercuff || resetPowercuff || runCarPlaySiri || needsSpringBoard;
             BOOL skipKernelForVPhoneSpringBoardOnly =
                 cyanide_vphone_debug_build() &&
                 needsSpringBoard &&
                 !patchSandboxExt &&
-                !runPowercuff && !resetPowercuff;
+                !runPowercuff && !resetPowercuff && !runCarPlaySiri;
             BOOL needsKernelPrimitiveStage = hasRunWork && !skipKernelForVPhoneSpringBoardOnly;
             NSUInteger total = needsKernelPrimitiveStage ? 1 : 0;
             if (patchSandboxExt) total++;
             if (runPowercuff || resetPowercuff) total++;
+            if (runCarPlaySiri) total++;
             if (needsSpringBoard) total++;
             if (runSBC) total++;
             if (runDarkTweaks) total++;
@@ -10128,6 +10136,7 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             if (runFloatingDock) [enabledTweaks addObject:@"ipad-dock"];
             if (runLockedPreviews) [enabledTweaks addObject:@"locked-previews"];
             if (runGravityLite) [enabledTweaks addObject:[NSString stringWithFormat:@"gravity(%ld%%)", (long)[d integerForKey:kSettingsGravityLiteMagnitudePct]]];
+            if (runCarPlaySiri) [enabledTweaks addObject:@"carplay-without-siri"];
             if (runPowercuff) [enabledTweaks addObject:[NSString stringWithFormat:@"power(%@)", [d stringForKey:kSettingsPowercuffLevel] ?: @"nominal"]];
             if (runDarkTweaks) [enabledTweaks addObject:@"dark"];
             if (runThemer) [enabledTweaks addObject:@"themer"];
@@ -10204,6 +10213,31 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                              ok ? "[OK]" : "[WARN]",
                              ok ? (resetPowercuff ? "turned off" : "applied") : "did not apply cleanly", lvl.UTF8String);
                     if (!ok) [runWarnings addObject:@"Powercuff"];
+                }
+            }
+            if (runCarPlaySiri && !carplaysiri_connected()) {
+                // Nothing to patch: keep the SpringBoard channel as it is.
+                settings_progress(&step, total, "CarPlay not connected");
+                log_user("[CARPLAY] CarPlay isn't connected; run again while the car shows \"CarPlay Not Available\".\n");
+            } else if (runCarPlaySiri) {
+                settings_progress(&step, total, "Lifting the CarPlay Siri lock-out");
+                if (g_springboard_rc_ready || settings_any_registered_live_loop_running()) {
+                    settings_request_all_live_loops_stop("CarPlay process switch");
+                    settings_wait_live_loops_stopped_for_switch("CarPlay process switch");
+                }
+                @synchronized (settings_rc_lock()) {
+                    // Transient RemoteCall target switch, as for Powercuff:
+                    // enabled SpringBoard tweaks are reapplied below.
+                    settings_destroy_springboard_remote_call_locked_internal("switching to CarPlay", NO);
+                    CarPlaySiriResult result = carplaysiri_apply();
+                    // Applied only for this connection: not marked applied,
+                    // so every run tries again.
+                    settings_mark_tweak_applied(kSettingsCarPlayWithoutSiriEnabled, NO);
+                    if (result == CarPlaySiriApplied) {
+                        log_user("[OK] CarPlay lock-out lifted.\n");
+                    } else if (result != CarPlaySiriNotConnected) {
+                        [runWarnings addObject:@"CarPlay without Siri"];
+                    }
                 }
             }
 
