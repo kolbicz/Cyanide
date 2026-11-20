@@ -51,24 +51,18 @@ static uint64_t cps_true_imp(void)
     return cps_imp(cps_method("NSObject", "allowsWeakReference"));
 }
 
-// The NSString behind an exported notification-name constant.
-static uint64_t cps_string_constant(const char *symbol)
-{
-    uint64_t name = r_alloc_str(symbol);
-    uint64_t addr = name ? r_dlsym_call(R_TIMEOUT, "dlsym", (uint64_t)-2, name, 0, 0, 0, 0, 0, 0) : 0;
-    if (name) r_free(name);
-    if (!addr) return 0;
-    uint64_t str = 0;
-    if (!remote_read(addr, &str, sizeof(str))) return 0;
-    return r_is_objc_ptr(str) ? str : 0;
-}
+// AFPreferencesDidChangeNotification's value is the string of the same name
+// (iOS 18.0.1 shared cache). Notification names compare by value, so a fresh
+// string works; reading the constant itself fails (its shared-cache data page
+// can't be mapped from Cyanide).
+static const char *const kCPSPreferencesNotification = "AFPreferencesDidChangeNotification";
 
 static CarPlaySiriResult cps_apply_in_session(void)
 {
     uint64_t monitorGetter = cps_method("DBSiriMonitor", "siriEnabled");
     uint64_t assistantEnabled = cps_method("AFPreferences", "assistantIsEnabled");
     uint64_t trueImp = cps_true_imp();
-    uint64_t notificationName = cps_string_constant("AFPreferencesDidChangeNotification");
+    uint64_t notificationName = r_nsstr_retained(kCPSPreferencesNotification);
     printf("[CARPLAY] siriEnabled=0x%llx assistantIsEnabled=0x%llx yes=0x%llx note=0x%llx\n",
            monitorGetter, assistantEnabled, trueImp, notificationName);
     if (!monitorGetter || !assistantEnabled || !trueImp || !notificationName) {
@@ -98,14 +92,18 @@ static CarPlaySiriResult cps_apply_in_session(void)
     uint64_t center = r_msg2(r_class("NSNotificationCenter"), "defaultCenter", 0, 0, 0, 0);
     bool posted = false;
     if (r_is_objc_ptr(center)) {
-        r_msg2_main(center, "postNotificationName:object:", notificationName, 0, 0, 0);
-        posted = r_last_main_ok();
+        // On the borrowed thread, not the main one (it may be the main thread
+        // itself): the monitor's handler runs here, and the lock-out
+        // controller moves its update to the main queue on its own.
+        r_msg2(center, "postNotificationName:object:", notificationName, 0, 0, 0);
+        posted = r_last_call_ok();
     }
-    // The monitor and the lock-out controller may finish on the main queue.
+    // Let a main-queue follow-up start before assistantIsEnabled is restored.
     usleep(1500000);
     if (originalAssistant != trueImp) {
         r_dlsym_call(R_TIMEOUT, "method_setImplementation", assistantEnabled, originalAssistant, 0, 0, 0, 0, 0, 0);
     }
+    if (notificationName) r_release(notificationName);
     printf("[CARPLAY] notification posted=%d, assistantIsEnabled restored\n", posted);
     if (!posted) {
         log_user("[CARPLAY] CarPlay was patched, but it didn't re-check Siri. Apply again.\n");
@@ -121,7 +119,10 @@ bool carplaysiri_connected(void)
 
 CarPlaySiriResult carplaysiri_apply(void)
 {
-    if (init_remote_call(kCPSProcess, false) != 0) {
+    // Original thread only: CarPlay refuses to resume a new thread (KERN_DENIED,
+    // 1.21.0 build 1021002 log), and the fallback's teardown of that orphaned
+    // thread killed CarPlay every time, which brought the lock-out back.
+    if (init_remote_call_original_thread_only_with_first_exception_timeout(kCPSProcess, false, 10000) != 0) {
         if (remote_call_last_init_failure() == RemoteCallInitFailureProcessMissing) {
             log_user("[CARPLAY] CarPlay isn't connected right now. Apply again while the car shows "
                      "\"CarPlay Not Available\".\n");
