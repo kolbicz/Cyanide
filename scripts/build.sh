@@ -95,27 +95,27 @@ fi
 mkdir -p build
 
 echo "==> xcodebuild ($SCHEME / $CONFIG / $SDK)"
-xcodebuild \
-    -project "$PROJECT" \
-    -scheme "$SCHEME" \
-    -sdk "$SDK" \
-    -configuration "$CONFIG" \
-    "${DESTINATION[@]}" \
-    -derivedDataPath "$DERIVED" \
-    CODE_SIGNING_ALLOWED=NO \
-    ${XCODEBUILD_EXTRA[@]+"${XCODEBUILD_EXTRA[@]}"} \
-    build \
-    | xcbeautify --quiet 2>/dev/null \
-    || xcodebuild \
-         -project "$PROJECT" \
-         -scheme "$SCHEME" \
-         -sdk "$SDK" \
-         -configuration "$CONFIG" \
-         "${DESTINATION[@]}" \
-         -derivedDataPath "$DERIVED" \
-         CODE_SIGNING_ALLOWED=NO \
-         ${XCODEBUILD_EXTRA[@]+"${XCODEBUILD_EXTRA[@]}"} \
-         build
+XCODEBUILD_ARGS=(
+    -project "$PROJECT"
+    -scheme "$SCHEME"
+    -sdk "$SDK"
+    -configuration "$CONFIG"
+    "${DESTINATION[@]}"
+    -derivedDataPath "$DERIVED"
+    CODE_SIGNING_ALLOWED=NO
+    ${XCODEBUILD_EXTRA[@]+"${XCODEBUILD_EXTRA[@]}"}
+    build
+)
+# One build, piped through xcbeautify when it is installed. The earlier
+# "pretty build || plain build" form also ran the whole build a second time
+# whenever the first one failed for a real reason (a compile error), doubling
+# the wait for the error message. pipefail (set above) keeps xcodebuild's own
+# exit status.
+if command -v xcbeautify >/dev/null 2>&1; then
+    xcodebuild "${XCODEBUILD_ARGS[@]}" | xcbeautify --quiet
+else
+    xcodebuild "${XCODEBUILD_ARGS[@]}"
+fi
 
 APP_PATH="$PRODUCT_DIR/$APP_NAME"
 if [ ! -d "$APP_PATH" ]; then

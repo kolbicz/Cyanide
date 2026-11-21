@@ -8,6 +8,12 @@
 NS_ASSUME_NONNULL_BEGIN
 
 UIImage *CYIconBadgeImage(NSString *sfSymbol, UIColor *color, CGFloat size);
+// Badge bitmaps are drawn for table cells, so the same few images were rendered
+// again for every cell on every reload. This returns the cached image for
+// (style, symbol, colour as resolved for the current appearance, size, scale)
+// and calls `render` only on a miss. Main thread, like the drawing itself.
+UIImage *CYIconBadgeCached(NSString *style, NSString *_Nullable sfSymbol, UIColor *color, CGFloat size,
+                           UIImage * (NS_NOESCAPE ^render)(void));
 UIColor *CYSpectrumColor(NSUInteger index);
 UIView *CYSectionHeaderView(NSString *title);
 

@@ -25,6 +25,16 @@ static const NSTimeInterval kRepoTweaksDefaultRefreshRetryInterval = 10 * 60;
 static NSString * const kRepoTweaksDefaultRepoURL = @"https://raw.githubusercontent.com/MinePlayer16/MinePlayer16.github.io/refs/heads/main/repotweaks.json";
 static NSString * const kRepoTweaksDefaultReposSeedVersionKey = @"RepoTweaksDefaultReposSeedVersion";
 static NSString * const kRepoTweaksDefaultReposSeedVersion = @"6";
+// What a source refresh reports when a newer refresh of the same source took
+// over. Not a failure of the source: the newer refresh reports the real result.
+static NSString * const kRepoTweaksSupersededMessage = @"A newer refresh of this source replaced this one.";
+// The default source URL the user deleted, if they did (see the seeding).
+static NSString * const kRepoTweaksDefaultRepoRemovedURLKey = @"RepoTweaksDefaultRepoRemovedURL";
+
+void repotweaks_note_source_removed_by_user(NSString *repoURL) {
+    if (![repoURL isEqualToString:kRepoTweaksDefaultRepoURL]) return;
+    [[NSUserDefaults standardUserDefaults] setObject:repoURL forKey:kRepoTweaksDefaultRepoRemovedURLKey];
+}
 static NSString * const kRepoTweaksHideHomeBarMaterialKitAssets =
     @"/System/Library/PrivateFrameworks/MaterialKit.framework/Assets.car";
 
@@ -637,7 +647,13 @@ void repotweaks_seed_default_repos(void) {
         }
     }
 
-    if (firstSeedForVersion && ![urls containsObject:kRepoTweaksDefaultRepoURL]) {
+    // A new seed version adds the default source for everyone who does not
+    // have it -- except someone who removed this very URL themselves. Without
+    // that check every seed bump put a third-party source back, and fetched
+    // from it, after the user had deleted it. A default that moves to a new
+    // URL is still offered once.
+    BOOL removedByUser = [[d stringForKey:kRepoTweaksDefaultRepoRemovedURLKey] isEqualToString:kRepoTweaksDefaultRepoURL];
+    if (firstSeedForVersion && !removedByUser && ![urls containsObject:kRepoTweaksDefaultRepoURL]) {
         [urls addObject:kRepoTweaksDefaultRepoURL];
         changed = YES;
     }
@@ -841,6 +857,14 @@ bool repotweaks_run_isolated_js(NSString *tweakID, NSString *tweakName, NSString
                 return @(NO);
             }
             uint64_t offset = offsetValue ? repo_js_to_uint64(offsetValue) : 0;
+            // And only the page Hide Home Bar zeroes (hide_home_bar_apply uses
+            // offset 0). The path check alone let a script zero any other page
+            // of this system file through the same kernel-backed call.
+            if (offset != 0) {
+                log_user("[RepoTweaks][%s] dz_zero_system_file_page refused: only offset 0 is allowed.\n",
+                         safeName.UTF8String);
+                return @(NO);
+            }
             log_user("[RepoTweaks][%s] Stable page-zero request: %s offset=%llu\n",
                      safeName.UTF8String,
                      path.UTF8String,
@@ -1118,7 +1142,14 @@ static BOOL repotweaks_fetch_generation_is_current(NSString *repoURL, uint64_t g
     }
 }
 
-NSString *repotweaks_native_enabled_key(NSString *tweakID) {
+// The lightsaber.* ids stand for built-in tweaks: installing such a package
+// runs no script, it switches the built-in tweak on and writes its settings
+// from the package's option defaults. Only the built-in source may claim them.
+// Matching on the id alone let any added source do it, for example list
+// "lightsaber.powercuff" with a default of "heavy" and underclock the device
+// on Install. From another source the id is an ordinary script package.
+NSString *repotweaks_native_enabled_key(NSString *repoURL, NSString *tweakID) {
+    if (![repoURL isEqualToString:kRepoTweaksDefaultRepoURL]) return nil;
     if ([tweakID isEqualToString:@"lightsaber.sbcustomizer"]) return kSettingsSBCEnabled;
     if ([tweakID isEqualToString:@"lightsaber.statbar"]) return kSettingsStatBarEnabled;
     if ([tweakID isEqualToString:@"lightsaber.powercuff"]) return kSettingsPowercuffEnabled;
@@ -1138,7 +1169,7 @@ void repotweaks_forget_tweak(NSString *repoURL, NSString *tweakID) {
     // A package backed by a built-in tweak (SBCustomizer, StatBar, Powercuff)
     // turns that off too -- but only when this package is what installed it,
     // not when the built-in tweak was switched on by itself.
-    NSString *nativeKey = repotweaks_native_enabled_key(tweakID);
+    NSString *nativeKey = repotweaks_native_enabled_key(repoURL, tweakID);
     if (nativeKey.length && [d boolForKey:nativeKey] &&
         [d objectForKey:[@"RepoTweakInstalledVersion_" stringByAppendingString:storageKey]]) {
         [d setBool:NO forKey:nativeKey];
@@ -1211,7 +1242,7 @@ static void repotweaks_fetch_repo(NSString *repoURL, BOOL addIfMissing,
         // dictionaries, so serialize them all there.
         dispatch_async(dispatch_get_main_queue(), ^{
             if (!repotweaks_fetch_generation_is_current(repoURL, fetchGeneration)) {
-                finish(NO, @"A newer refresh of this source replaced this one.");
+                finish(NO, kRepoTweaksSupersededMessage);
                 return;
             }
             NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
@@ -1331,7 +1362,7 @@ static void repotweaks_fetch_repo(NSString *repoURL, BOOL addIfMissing,
             });
             dispatch_group_notify(group, dispatch_get_main_queue(), ^{
                 if (!repotweaks_fetch_generation_is_current(repoURL, fetchGeneration)) {
-                    finish(NO, @"A newer refresh of this source replaced this one.");
+                    finish(NO, kRepoTweaksSupersededMessage);
                     return;
                 }
                 finish(scriptsOK, scriptsOK ? @"Refreshed." : @"Refreshed, but one or more scripts failed to download.");
@@ -1631,7 +1662,8 @@ NSUInteger repotweaks_available_update_count(void) {
             if (!installedVersion.length) continue;
 
             NSString *repoVersion = repotweaks_string_or_empty(tweak[@"version"]);
-            if (repoVersion.length && repotweaks_compare_versions(repoVersion, installedVersion) == NSOrderedDescending) {
+            if ((repoVersion.length && repotweaks_compare_versions(repoVersion, installedVersion) == NSOrderedDescending) ||
+                quickloader_repo_tweak_has_changed_script(url, tweakID)) {
                 count++;
             }
         }
@@ -1674,6 +1706,12 @@ void repotweaks_refresh_all_sources(void (^completion)(RepoTweaksRefreshStatus s
         repotweaks_refresh_repo(url, ^(BOOL success, NSString *message) {
             if (success) {
                 successes++;
+            } else if ([message isEqualToString:kRepoTweaksSupersededMessage]) {
+                // Refresh tapped twice, or a manual refresh during the launch
+                // or timed one: the older batch used to count every source as
+                // failed and raise a "Source Failed" alert listing all of
+                // them while the newer batch was succeeding. Neither a
+                // success nor a failure of this batch.
             } else {
                 failures++;
                 if (message.length > 0) {

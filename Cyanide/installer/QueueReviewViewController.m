@@ -105,8 +105,12 @@ static BOOL QueuePackageIsHideHomeBar(Package *pkg)
         attrs[NSFontAttributeName] = [UIFont systemFontOfSize:17.0 weight:UIFontWeightSemibold];
         return attrs;
     };
+    // self owns both buttons, and a button owns its action: a handler that
+    // captured self strongly kept every Queue screen alive after it was
+    // closed, still reloading itself on each queue-change notification.
+    __weak typeof(self) weakReview = self;
     self.confirmButton = [UIButton buttonWithConfiguration:confirmCfg primaryAction:[UIAction actionWithHandler:^(UIAction *_) {
-        [self didTapConfirm];
+        [weakReview didTapConfirm];
     }]];
     self.confirmButton.translatesAutoresizingMaskIntoConstraints = NO;
     [container addSubview:self.confirmButton];
@@ -120,7 +124,7 @@ static BOOL QueuePackageIsHideHomeBar(Package *pkg)
         return attrs;
     };
     self.clearButton = [UIButton buttonWithConfiguration:clearCfg primaryAction:[UIAction actionWithHandler:^(UIAction *_) {
-        [self didTapClear];
+        [weakReview didTapClear];
     }]];
     self.clearButton.translatesAutoresizingMaskIntoConstraints = NO;
     [container addSubview:self.clearButton];

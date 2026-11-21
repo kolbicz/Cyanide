@@ -104,7 +104,9 @@ jobs:
 
             function issueMentionsIos17(issue) {
               const text = `${issue.title || ""}\n${issue.body || ""}`;
-              return /\bios\s*17\b|\bios\s*17[.\d]*\b|\bipados\s*17\b|\b17\.\d+\b/i.test(text);
+              // An OS name must precede the 17. A bare "17.x" also matched
+              // Cyanide's own version ("v1.17.0") and any other number.
+              return /\b(?:ios|ipados)\s*17(?:\.\d+)*\b/i.test(text);
             }
 
             function maintainerAskedForTesting(text) {

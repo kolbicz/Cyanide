@@ -259,7 +259,9 @@ static NSData *mg_original_cachedata(void)
     }
 }
 
-static void mg_keep_backup(NSData *current)
+// NO when the dated copy of the current file could not be written: the caller
+// must then not write, or "every write is backed up" would not be true.
+static BOOL mg_keep_backup(NSData *current)
 {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *dir = [mg_backup_dir() stringByAppendingPathComponent:@"Backups"];
@@ -271,11 +273,12 @@ static void mg_keep_backup(NSData *current)
                       [[fmt stringFromDate:NSDate.date] stringByAppendingPathExtension:@"plist"]];
     if (![current writeToFile:path atomically:YES]) {
         printf("[MG] backup of the current file failed\n");
-        return;
+        return NO;
     }
     NSArray *all = [[fm contentsOfDirectoryAtPath:dir error:nil] sortedArrayUsingSelector:@selector(compare:)];
     for (NSUInteger i = 0; all.count > kMGMaxBackups && i < all.count - kMGMaxBackups; i++)
         [fm removeItemAtPath:[dir stringByAppendingPathComponent:all[i]] error:nil];
+    return YES;
 }
 
 #pragma mark - Reading
@@ -696,7 +699,17 @@ static BOOL mg_write_data_checked(NSDictionary *plist, NSString **error)
     }
     NSData *data = mg_checked_data(plist, current, error);
     if (!data) return NO;
-    mg_keep_backup(current);
+    // Both backups must exist before the cache is touched. mg_load only logs
+    // when keeping the original fails, so check here, where it matters: a
+    // write without an original cannot be undone from the app.
+    if (!mg_has_original_backup()) {
+        if (error) *error = @"The original cache could not be backed up, so nothing was written. Check free space and try again.";
+        return NO;
+    }
+    if (!mg_keep_backup(current)) {
+        if (error) *error = @"The current cache could not be backed up, so nothing was written. Check free space and try again.";
+        return NO;
+    }
     if (!mg_replace_file(data)) {
         if (error) *error = @"Writing the cache failed. See the [MG] lines in the log.";
         return NO;

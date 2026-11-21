@@ -108,8 +108,9 @@ static BOOL sources_tweak_has_update(NSString *url, NSDictionary *tweak)
     NSString *installed = [NSUserDefaults.standardUserDefaults stringForKey:repotweaks_installed_version_key(url, tweakID)];
     if (!installed.length) return NO;
     NSString *repoVersion = sources_string_or_empty(tweak[@"version"]);
-    if (!repoVersion.length) return NO;
-    return repotweaks_compare_versions(repoVersion, installed) == NSOrderedDescending;
+    if (repoVersion.length && repotweaks_compare_versions(repoVersion, installed) == NSOrderedDescending) return YES;
+    // Same version number, different code: still an update the user decides on.
+    return quickloader_repo_tweak_has_changed_script(url, tweakID);
 }
 
 static NSUInteger sources_update_count_for_url(NSString *url)
@@ -731,6 +732,7 @@ static UIColor *category_color(NSString *cat)
 
     NSMutableArray *urls = [sources_urls() mutableCopy];
     [urls removeObject:url];
+    repotweaks_note_source_removed_by_user(url);
     [d setObject:urls forKey:@"RepoTweaksURLs"];
 
     NSMutableDictionary *caches = [sources_caches() mutableCopy];

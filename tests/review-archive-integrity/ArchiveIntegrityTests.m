@@ -299,6 +299,138 @@ static void expect_cancellation(NSData *archive, NSString *root, NSString *caseN
     }
 }
 
+// ---- .deb / tar fixtures ----------------------------------------------------
+
+static NSData *tar_header(NSString *name, NSUInteger size, char type)
+{
+    uint8_t h[512] = {0};
+    NSData *n = [name dataUsingEncoding:NSUTF8StringEncoding];
+    memcpy(h, n.bytes, MIN(n.length, (NSUInteger)100));
+    snprintf((char *)h + 100, 8, "%07o", 0644);
+    snprintf((char *)h + 108, 8, "%07o", 0);
+    snprintf((char *)h + 116, 8, "%07o", 0);
+    snprintf((char *)h + 124, 12, "%011lo", (unsigned long)size);
+    snprintf((char *)h + 136, 12, "%011o", 0);
+    memset(h + 148, ' ', 8);
+    h[156] = (uint8_t)type;
+    memcpy(h + 257, "ustar", 5);
+    memcpy(h + 263, "00", 2);
+    unsigned sum = 0;
+    for (int i = 0; i < 512; i++) sum += h[i];
+    snprintf((char *)h + 148, 8, "%06o", sum);
+    return [NSData dataWithBytes:h length:512];
+}
+
+static void tar_append(NSMutableData *tar, NSString *name, NSData *data, char type)
+{
+    [tar appendData:tar_header(name, data.length, type)];
+    [tar appendData:data];
+    NSUInteger pad = (512 - data.length % 512) % 512;
+    if (pad) [tar increaseLengthBy:pad];
+}
+
+static NSData *tar_finish(NSMutableData *tar)
+{
+    [tar increaseLengthBy:1024];
+    return tar;
+}
+
+static NSData *make_deb(NSData *dataTar)
+{
+    NSMutableData *deb = [NSMutableData dataWithBytes:"!<arch>\n" length:8];
+    void (^member)(NSString *, NSData *) = ^(NSString *name, NSData *body) {
+        char header[61];
+        snprintf(header, sizeof(header), "%-16s%-12d%-6d%-6d%-8o%-10lu`\n",
+                 name.UTF8String, 0, 0, 0, 0100644, (unsigned long)body.length);
+        [deb appendBytes:header length:60];
+        [deb appendData:body];
+        if (body.length & 1) [deb appendBytes:"\n" length:1];
+    };
+    member(@"debian-binary", [@"2.0\n" dataUsingEncoding:NSUTF8StringEncoding]);
+    member(@"data.tar", dataTar);
+    return deb;
+}
+
+static void expect_deb_file(NSData *deb, NSString *root, NSString *caseName,
+                            NSString *entryName, NSData *expected)
+{
+    NSString *archiveName = [caseName stringByAppendingString:@".deb"];
+    NSString *destination = [root stringByAppendingPathComponent:
+                              [caseName stringByAppendingString:@"-output"]];
+    write_archive(deb, root, archiveName);
+    NSError *error = nil;
+    BOOL ok = SBLExtractArchiveToDirectory([NSURL fileURLWithPath:
+                                            [root stringByAppendingPathComponent:archiveName]],
+                                           destination, &error);
+    require_condition(ok, [NSString stringWithFormat:@"%@ should extract: %@", caseName,
+                            error.localizedDescription]);
+    NSData *actual = [NSData dataWithContentsOfFile:
+                      [destination stringByAppendingPathComponent:entryName]];
+    require_condition([actual isEqualToData:expected],
+                      [NSString stringWithFormat:@"%@: %@ missing or wrong", caseName, entryName]);
+}
+
+static void expect_deb_failure(NSData *deb, NSString *root, NSString *caseName)
+{
+    NSString *archiveName = [caseName stringByAppendingString:@".deb"];
+    NSString *destination = [root stringByAppendingPathComponent:
+                              [caseName stringByAppendingString:@"-output"]];
+    write_archive(deb, root, archiveName);
+    NSError *error = nil;
+    BOOL ok = SBLExtractArchiveToDirectory([NSURL fileURLWithPath:
+                                            [root stringByAppendingPathComponent:archiveName]],
+                                           destination, &error);
+    require_condition(!ok, [NSString stringWithFormat:@"%@ should be rejected", caseName]);
+    require_condition(![[NSFileManager defaultManager] fileExistsAtPath:destination],
+                      [NSString stringWithFormat:@"%@ left a destination behind", caseName]);
+}
+
+static void run_tar_long_name_cases(NSString *root)
+{
+    NSData *payload = [@"long path payload" dataUsingEncoding:NSUTF8StringEncoding];
+    // 120+ bytes: does not fit the 100-byte ustar name field.
+    NSString *longPath = [NSString stringWithFormat:@"Library/Themes/Example.theme/IconBundles/%@-large.png",
+                          [@"" stringByPaddingToLength:90 withString:@"com.example.application." startingAtIndex:0]];
+    require_condition([longPath dataUsingEncoding:NSUTF8StringEncoding].length > 100, @"fixture path must exceed 100 bytes");
+    NSString *cutPath = [longPath substringToIndex:100];
+
+    // A short name still works.
+    NSMutableData *plain = [NSMutableData data];
+    tar_append(plain, @"short.txt", payload, '0');
+    expect_deb_file(make_deb(tar_finish(plain)), root, @"tar-short", @"short.txt", payload);
+
+    // GNU: an 'L' record carries the full name of the next entry.
+    NSMutableData *gnu = [NSMutableData data];
+    NSMutableData *nameRecord = [[longPath dataUsingEncoding:NSUTF8StringEncoding] mutableCopy];
+    [nameRecord increaseLengthBy:1];
+    tar_append(gnu, @"././@LongLink", nameRecord, 'L');
+    tar_append(gnu, cutPath, payload, '0');
+    expect_deb_file(make_deb(tar_finish(gnu)), root, @"tar-gnu-long", longPath, payload);
+
+    // pax: an 'x' record with "<len> path=<name>\n".
+    NSMutableData *pax = [NSMutableData data];
+    NSString *body = [NSString stringWithFormat:@" path=%@\n", longPath];
+    NSUInteger total = [body dataUsingEncoding:NSUTF8StringEncoding].length;
+    NSUInteger withDigits = total + [NSString stringWithFormat:@"%lu", (unsigned long)total].length;
+    withDigits = total + [NSString stringWithFormat:@"%lu", (unsigned long)withDigits].length;
+    NSString *record = [NSString stringWithFormat:@"%lu%@", (unsigned long)withDigits, body];
+    require_condition([record dataUsingEncoding:NSUTF8StringEncoding].length == withDigits, @"pax record length must be self-consistent");
+    tar_append(pax, @"PaxHeader/entry", [record dataUsingEncoding:NSUTF8StringEncoding], 'x');
+    tar_append(pax, cutPath, payload, '0');
+    expect_deb_file(make_deb(tar_finish(pax)), root, @"tar-pax-long", longPath, payload);
+
+    // A long name is checked like a header name: it cannot leave the destination.
+    NSMutableData *escape = [NSMutableData data];
+    NSMutableData *evil = [[@"../../outside.txt" dataUsingEncoding:NSUTF8StringEncoding] mutableCopy];
+    [evil increaseLengthBy:1];
+    tar_append(escape, @"././@LongLink", evil, 'L');
+    tar_append(escape, @"inside.txt", payload, '0');
+    expect_deb_failure(make_deb(tar_finish(escape)), root, @"tar-long-escape");
+    require_condition(![[NSFileManager defaultManager] fileExistsAtPath:
+                        [root.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"outside.txt"]],
+                      @"a long name escaped the destination");
+}
+
 int main(void)
 {
     @autoreleasepool {
@@ -390,6 +522,8 @@ int main(void)
             require_condition(![name hasPrefix:@".rollback-output.extract-"],
                               @"rollback left a staging directory behind");
         }
+
+        run_tar_long_name_cases(root);
 
         [fm removeItemAtPath:root error:nil];
         puts("archive integrity native fixtures: PASS");

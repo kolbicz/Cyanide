@@ -825,16 +825,38 @@ static FBEntry *fb_entry_from_root_dict(NSString *dir, NSDictionary *info)
     return e;
 }
 
+// Names are looked up once per id: these run for every visible row, and
+// getpwuid/getgrgid go through the directory service each time.
 static NSString *fb_user_name(uid_t uid)
 {
-    struct passwd *pw = getpwuid(uid);
-    return pw && pw->pw_name ? @(pw->pw_name) : [NSString stringWithFormat:@"%u", uid];
+    static NSMutableDictionary<NSNumber *, NSString *> *names;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ names = [NSMutableDictionary dictionary]; });
+    @synchronized (names) {
+        NSString *name = names[@(uid)];
+        if (!name) {
+            struct passwd *pw = getpwuid(uid);
+            name = pw && pw->pw_name ? @(pw->pw_name) : [NSString stringWithFormat:@"%u", uid];
+            names[@(uid)] = name;
+        }
+        return name;
+    }
 }
 
 static NSString *fb_group_name(gid_t gid)
 {
-    struct group *gr = getgrgid(gid);
-    return gr && gr->gr_name ? @(gr->gr_name) : [NSString stringWithFormat:@"%u", gid];
+    static NSMutableDictionary<NSNumber *, NSString *> *names;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ names = [NSMutableDictionary dictionary]; });
+    @synchronized (names) {
+        NSString *name = names[@(gid)];
+        if (!name) {
+            struct group *gr = getgrgid(gid);
+            name = gr && gr->gr_name ? @(gr->gr_name) : [NSString stringWithFormat:@"%u", gid];
+            names[@(gid)] = name;
+        }
+        return name;
+    }
 }
 
 static NSString *fb_mode_string(mode_t mode, BOOL isSymlink)
@@ -1187,6 +1209,9 @@ typedef NS_ENUM(NSInteger, FBViewMode) { FBViewText, FBViewImage, FBViewHex, FBV
 @property (nonatomic, strong) NSData *plistTextFor;
 @property (nonatomic, copy) NSString *plistTextCached;
 @property (nonatomic, assign) NSInteger plistFormatCached;
+// utf8Text for `utf8TextFor`.
+@property (nonatomic, strong) NSData *utf8TextFor;
+@property (nonatomic, copy) NSString *utf8TextCached;
 @property (nonatomic, assign) BOOL editingText;
 @property (nonatomic, assign) FBFileIdentity identity;   // file as it was when loaded
 @property (nonatomic, assign) BOOL notRegular;           // FIFO/device/socket: Info only
@@ -1362,9 +1387,9 @@ static const NSUInteger kFBMaxHexBytes = 64 * 1024;
 }
 
 // Writes in place (not atomically) so the file keeps its inode, owner and
-// mode; a failed write puts the original bytes back. A plist must still parse
-// and is saved back in its original format (OpenStep, which Foundation can't
-// write, as XML — same as the structured editor).
+// mode; a failed write puts the original bytes back. A binary or XML plist
+// must still parse and is saved back in its original format; anything else,
+// old-style (OpenStep) text included, is saved as the text it is.
 - (void)saveEdit
 {
     [self saveEditOverwriting:NO];
@@ -1455,7 +1480,19 @@ static const NSUInteger kFBMaxHexBytes = 64 * 1024;
     return FBViewHex;
 }
 
+// Decoded once per loaded data (like plistText): canEdit, bestMode and every
+// mode switch ask for it, and each call used to decode up to 2 MB again.
 - (NSString *)utf8Text
+{
+    if (!self.data) return nil;
+    if (self.utf8TextFor == self.data) return self.utf8TextCached;
+    NSString *text = [self decodeUTF8Text];
+    self.utf8TextFor = self.data;
+    self.utf8TextCached = text;
+    return text;
+}
+
+- (NSString *)decodeUTF8Text
 {
     if (!self.data.length) return self.data ? @"" : nil;
     NSString *s = [[NSString alloc] initWithData:self.data encoding:NSUTF8StringEncoding];
@@ -1488,8 +1525,15 @@ static const NSUInteger kFBMaxHexBytes = 64 * 1024;
 - (NSString *)parsePlistText
 {
     NSPropertyListFormat format = 0;
+    self.plistFormat = -1;
     id plist = [NSPropertyListSerialization propertyListWithData:self.data options:0 format:&format error:nil];
     if (!plist) return nil;
+    // Only binary and XML count as a plist here. Foundation's old-style
+    // (OpenStep) parser also accepts ordinary text -- a lone UUID, hostname or
+    // number, an all-whitespace file, "key = value;" -- and such a file would
+    // be shown as generated XML and saved back as an XML plist over its real
+    // contents. Old-style files are already readable text: edit them as text.
+    if (format != NSPropertyListBinaryFormat_v1_0 && format != NSPropertyListXMLFormat_v1_0) return nil;
     self.plistFormat = format;
     if (format == NSPropertyListXMLFormat_v1_0) return [self utf8Text];
     NSData *xml = [NSPropertyListSerialization dataWithPropertyList:plist
@@ -3629,9 +3673,23 @@ static const NSUInteger kFBSizeShownItems = 100;
         }
         UIImage *image = nil;
         if (!doc && fb_is_image_path(path) && (e.readable || viaRoot) && e.size <= (off_t)kFBMaxImageBytes) {
-            NSData *data = viaRoot ? settings_root_read_file(path, kFBMaxImageBytes, NULL, NULL)
-                                   : [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:nil];
-            image = data ? [UIImage imageWithData:data] : nil;
+            NSData *data = nil;
+            if (viaRoot) {
+                data = settings_root_read_file(path, kFBMaxImageBytes, NULL, NULL);
+            } else {
+                // Through the regular-file opener, like every other read here:
+                // a FIFO or device node named *.png would block this worker
+                // forever while the list is frozen.
+                int fd = filebrowser_open_regular(path);
+                if (fd >= 0) {
+                    data = filebrowser_read_fd(fd, (NSUInteger)MAX(e.size, 0), NULL, NULL);
+                    close(fd);
+                }
+            }
+            // Downsampled, as the file viewer's own Image mode does: a small
+            // file can declare huge dimensions, and a full-size decode of it
+            // is hundreds of MB at first draw.
+            image = fb_display_image(data);
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             tableView.userInteractionEnabled = YES;

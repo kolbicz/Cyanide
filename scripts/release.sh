@@ -507,6 +507,10 @@ if data.get("featuredApps"):
     data["featuredApps"][0] = "$BUNDLE_IDENTIFIER"
 ver = app["versions"][0]
 ver["version"]     = "$VERSION"
+# AltStore/SideStore compare version + buildVersion: without it a re-released
+# IPA under the same version (a replaced build) is never offered to people
+# who already have that version.
+ver["buildVersion"] = "$BUILD_VERSION"
 ver["date"]        = "$RELEASE_DATE"
 ver["size"]        = $IPA_BYTES
 ver["downloadURL"] = "$DOWNLOAD_URL"

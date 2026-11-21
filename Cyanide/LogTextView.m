@@ -44,6 +44,17 @@ static FILE *log_file                = NULL;
 // and buys resolution exactly where it matters.
 #define LOG_FSYNC_INTERVAL_NS 50000000ULL
 static uint64_t log_last_fsync_ns = 0;
+// The 50 ms cadence above is for a run in progress, where a panic can land at
+// any line. Once the run has finished (log_session_run_finished) the file stays
+// open for the background tail, but that tail can last for days with Keep
+// Alive on: syncing it every 50 ms is the flash wear the live log's comment
+// below describes, and the file had no size limit at all. So the tail syncs at
+// the live log's 1 s cadence and is closed after LOG_SESSION_TAIL_MAX_BYTES;
+// later lines are still kept, in live.log (capped and rotated).
+#define LOG_SESSION_TAIL_FSYNC_INTERVAL_NS 1000000000ULL
+#define LOG_SESSION_TAIL_MAX_BYTES         (4 * 1024 * 1024)
+static uint64_t log_fsync_interval_ns = LOG_FSYNC_INTERVAL_NS;
+static off_t    log_tail_limit_bytes  = 0;   // 0 = a run is in progress: no limit
 static char  log_file_path_c[1024]   = {0};
 
 // Always-open "live" log. The chain-session file (log_file) only exists during
@@ -183,12 +194,21 @@ static void log_write_raw_internal(const char *msg, int skipTimestamp) {
                 // is not perturbed by a flash write per line -- worst case we
                 // lose the last LOG_FSYNC_INTERVAL_NS of output.
                 uint64_t nowNS = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-                if (nowNS - log_last_fsync_ns >= LOG_FSYNC_INTERVAL_NS) {
+                if (nowNS - log_last_fsync_ns >= log_fsync_interval_ns) {
                     // fsync() is NOT enough on Apple platforms -- it only pushes
                     // to the drive, which is why chain logs were still 0 bytes
                     // after panics. F_FULLFSYNC is the one that reaches media.
                     fcntl(fileno(log_file), F_FULLFSYNC, 0);
                     log_last_fsync_ns = nowNS;
+                }
+                // After the run: stop the tail at its limit. The path is kept,
+                // so View Log and Share Log still find this session's file.
+                if (log_tail_limit_bytes > 0 && ftello(log_file) > log_tail_limit_bytes) {
+                    fprintf(log_file, "# --- session tail limit reached; later output continues in live.log ---\n");
+                    fflush(log_file);
+                    fcntl(fileno(log_file), F_FULLFSYNC, 0);
+                    fclose(log_file);
+                    log_file = NULL;
                 }
             }
 
@@ -384,6 +404,8 @@ void log_session_begin(void) {
     if (log_file) fclose(log_file);
     log_file = newFile;
     strlcpy(log_file_path_c, newPath.fileSystemRepresentation, sizeof(log_file_path_c));
+    log_fsync_interval_ns = LOG_FSYNC_INTERVAL_NS;
+    log_tail_limit_bytes  = 0;
     {
         time_t t = time(NULL);
         struct tm tm; localtime_r(&t, &tm);
@@ -492,6 +514,44 @@ void log_session_flush(void) {
         log_last_fsync_ns = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     }
     pthread_mutex_unlock(&log_mutex);
+}
+
+// The run this session file was opened for is over. Everything so far is made
+// durable; from here on the file only collects the background tail (idle-park
+// worker, live-tweak loops), at the slower cadence and up to the tail limit.
+// The next log_session_begin() puts the run cadence back.
+void log_session_run_finished(void) {
+    pthread_mutex_lock(&log_mutex);
+    if (log_file) {
+        fflush(log_file);
+        fcntl(fileno(log_file), F_FULLFSYNC, 0);
+        log_last_fsync_ns = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        off_t size = ftello(log_file);
+        if (size < 0) size = 0;
+        log_fsync_interval_ns = LOG_SESSION_TAIL_FSYNC_INTERVAL_NS;
+        log_tail_limit_bytes  = size + LOG_SESSION_TAIL_MAX_BYTES;
+    }
+    pthread_mutex_unlock(&log_mutex);
+}
+
+// A full exploit run started outside the main run pipeline (Run Exploit, a
+// tool that needs kernel access) while the session file is in its tail mode:
+// give that window the run cadence back, since it is exactly where a panic can
+// eat the last lines. Returns YES when it switched, for log_session_critical_end.
+BOOL log_session_critical_begin(void) {
+    BOOL switched = NO;
+    pthread_mutex_lock(&log_mutex);
+    if (log_file && log_tail_limit_bytes > 0) {
+        log_fsync_interval_ns = LOG_FSYNC_INTERVAL_NS;
+        log_tail_limit_bytes  = 0;
+        switched = YES;
+    }
+    pthread_mutex_unlock(&log_mutex);
+    return switched;
+}
+
+void log_session_critical_end(BOOL switched) {
+    if (switched) log_session_run_finished();
 }
 
 NSString *log_current_session_path(void) {

@@ -101,6 +101,10 @@ static NSMutableDictionary *nano_registry_read_plist(BOOL *outExisted)
         printf("[NANO] read %s failed: %s\n",
                kNanoRegistryPlistPath.UTF8String,
                readError ? readError.description.UTF8String : "empty file");
+        // Unreadable or empty is not "absent": only a missing file (above) is.
+        // Left as NO, callers took a failed read for "no override" -- Clear
+        // then reported success while the override was still in place.
+        if (outExisted) *outExisted = YES;
         return nil;
     }
 
@@ -926,93 +930,6 @@ bool nano_registry_probe_pairing_assets(void)
 // proximity daemons to force a live cache refresh. That is too much work for a
 // settings toggle and can panic 26.x devices while KRW is otherwise healthy.
 // A respring/reboot is the stable boundary for making the new plist visible.
-
-// sysctl(KERN_PROC_ALL) is denied to non-privileged apps even after our
-// sandbox patch, so we walk the kernel proc list via KRW instead. The uid
-// lives inside struct ucred at an offset that varies by iOS version. We
-// avoid hardcoding by probing: read our own ucred and scan small offsets
-// for a 32-bit value matching geteuid(). The matching offset is cr_uid.
-static int32_t nano_probe_ucred_uid_offset(uint64_t my_proc)
-{
-    if (!my_proc) return -1;
-    uint64_t p_proc_ro = kread64(my_proc + off_proc_p_proc_ro);
-    if (!is_kaddr_valid(p_proc_ro)) return -1;
-    uint64_t ucred = kread64(p_proc_ro + off_proc_ro_p_ucred);
-    if (!is_kaddr_valid(ucred)) return -1;
-
-    uid_t expected = geteuid();
-    // Plausible offsets for cr_uid in struct ucred across xnu revisions.
-    // First field is typically TAILQ_ENTRY or cr_ref; posix_cred begins
-    // somewhere in [0x08, 0x20]. cr_uid is the first uid_t in posix_cred.
-    static const int32_t kCandidates[] = {
-        0x04, 0x08, 0x0C, 0x10, 0x14, 0x18, 0x1C, 0x20, 0x24, 0x28, -1,
-    };
-    for (int i = 0; kCandidates[i] >= 0; i++) {
-        uint32_t v = kread32(ucred + (uint64_t)kCandidates[i]);
-        if (v == expected) {
-            return kCandidates[i];
-        }
-    }
-    return -1;
-}
-
-static uint32_t nano_proc_uid(uint64_t proc, int32_t cr_uid_offset)
-{
-    uint64_t p_proc_ro = kread64(proc + off_proc_p_proc_ro);
-    if (!is_kaddr_valid(p_proc_ro)) return UINT32_MAX;
-    uint64_t ucred = kread64(p_proc_ro + off_proc_ro_p_ucred);
-    if (!is_kaddr_valid(ucred)) return UINT32_MAX;
-    return kread32(ucred + (uint64_t)cr_uid_offset);
-}
-
-// Walk the proc list and collect pids whose p_name matches any of the given
-// names. Returns the number collected (capped at out_capacity).
-static int nano_collect_pids_by_names(const char * const *target_names,
-                                      int target_name_count,
-                                      pid_t *out, int out_capacity)
-{
-    __block int n = 0;
-    uint64_t self_proc = proc_self();
-    int32_t uid_off = nano_probe_ucred_uid_offset(self_proc);
-    if (uid_off >= 0) {
-        printf("[NANO-PUSH] probed ucred cr_uid offset = 0x%x\n", uid_off);
-    }
-
-    void (^consider)(uint64_t) = ^(uint64_t proc) {
-        if (n >= out_capacity) return;
-        char *name = proc_get_p_name(proc);
-        if (!name) return;
-        name[31] = '\0';
-        bool matched = false;
-        for (int i = 0; i < target_name_count; i++) {
-            if (strcmp(name, target_names[i]) == 0) { matched = true; break; }
-        }
-        if (!matched) return;
-        pid_t pid = (pid_t)kread32(proc + off_proc_p_pid);
-        for (int j = 0; j < n; j++) {
-            if (out[j] == pid) return;
-        }
-        uint32_t uid = (uid_off >= 0) ? nano_proc_uid(proc, uid_off) : UINT32_MAX;
-        log_user("[NANO-PUSH] %s pid=%d uid=%u proc=0x%llx\n", name, pid, uid, proc);
-        out[n++] = pid;
-    };
-
-    uint64_t proc = self_proc;
-    for (int i = 0; i < 4096 && is_kaddr_valid(proc) && n < out_capacity; i++) {
-        consider(proc);
-        uint64_t next = kread64(proc + off_proc_p_list_le_next);
-        if (!is_kaddr_valid(next) || next == proc) break;
-        proc = next;
-    }
-    proc = self_proc;
-    for (int i = 0; i < 4096 && is_kaddr_valid(proc) && n < out_capacity; i++) {
-        consider(proc);
-        uint64_t prev = kread64(proc + off_proc_p_list_le_prev);
-        if (!is_kaddr_valid(prev) || prev == proc) break;
-        proc = prev;
-    }
-    return n;
-}
 
 bool nano_registry_push_to_cfprefsd(const nano_registry_values *values, bool apply)
 {

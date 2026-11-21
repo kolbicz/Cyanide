@@ -182,22 +182,6 @@ static uint64_t gl_subviews(uint64_t view)
     return gl_safe_msg(view, "subviews", 0, 0, 0, 0);
 }
 
-static uint64_t gl_subview_count(uint64_t view)
-{
-    return gl_array_count(gl_subviews(view));
-}
-
-static uint64_t gl_subview_at(uint64_t view, uint64_t index)
-{
-    return gl_array_object(gl_subviews(view), index);
-}
-
-static bool gl_is_member_of_class(uint64_t obj, uint64_t cls)
-{
-    if (!r_is_objc_ptr(obj) || !r_is_objc_ptr(cls)) return false;
-    return (r_msg2_main(obj, "isMemberOfClass:", cls, 0, 0, 0) & 0xff) != 0;
-}
-
 static bool gl_ptr_seen(uint64_t ptr, const uint64_t *items, int count)
 {
     for (int i = 0; i < count; i++) {
@@ -493,53 +477,6 @@ static uint64_t gl_overlay_for_list_view_ios26_legacy(uint64_t listView, GL_CGRe
     return overlay;
 }
 
-static uint64_t gl_snapshot_for_icon_ios26_legacy(uint64_t icon, uint64_t overlay)
-{
-    if (!r_is_objc_ptr(icon) ||
-        !r_is_objc_ptr(overlay) ||
-        !r_responds_main(icon, "snapshotViewAfterScreenUpdates:")) {
-        return 0;
-    }
-
-    uint8_t no = 0;
-    uint64_t snapshot = r_msg2_main_raw(icon, "snapshotViewAfterScreenUpdates:",
-                                        &no, sizeof(no),
-                                        NULL, 0, NULL, 0, NULL, 0);
-    if (!r_is_objc_ptr(snapshot)) return 0;
-
-    GL_CGRect iconBounds;
-    GL_CGRect snapshotFrame;
-    if (!gl_get_rect(icon, "bounds", &iconBounds) || !gl_rect_valid(iconBounds)) return 0;
-    if (!gl_convert_rect_to_view(icon, iconBounds, overlay, &snapshotFrame) ||
-        !gl_rect_valid(snapshotFrame)) {
-        return 0;
-    }
-
-    gl_reset_transform(snapshot);
-    gl_set_rect(snapshot, "setFrame:", snapshotFrame);
-    r_msg2_main(overlay, "addSubview:", snapshot, 0, 0, 0);
-    return snapshot;
-}
-
-static void gl_normalize_icon_frame_ios26_legacy(uint64_t icon)
-{
-    uint64_t imageView = gl_safe_msg(icon, "_iconImageView", 0, 0, 0, 0);
-    if (!r_is_objc_ptr(imageView)) return;
-
-    GL_CGRect frame;
-    GL_CGRect imageFrame;
-    if (!gl_get_rect(icon, "frame", &frame) ||
-        !gl_get_rect(imageView, "frame", &imageFrame) ||
-        !gl_rect_valid(frame) ||
-        !gl_rect_valid(imageFrame)) {
-        return;
-    }
-
-    frame.w = imageFrame.w;
-    frame.h = imageFrame.h;
-    gl_set_rect(icon, "setFrame:", frame);
-}
-
 static void gl_set_array_views_alpha(uint64_t views, double alpha)
 {
     uint64_t count = gl_array_count(views);
@@ -593,13 +530,6 @@ static int gl_restore_live_items(uint64_t items, uint64_t parents, uint64_t fram
         restored++;
     }
     return restored;
-}
-
-static bool gl_view_is_legacy_gravity_overlay(uint64_t view, uint64_t uiViewCls)
-{
-    (void)view;
-    (void)uiViewCls;
-    return false;
 }
 
 static int gl_cleanup_gravity_overlays_in_window(uint64_t window, uint64_t uiViewCls)

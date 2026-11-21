@@ -199,7 +199,11 @@ typedef NS_ENUM(NSInteger, CyanideNiceBarTrafficRange) {
 {
     NSDateFormatter *df = [[NSDateFormatter alloc] init];
     df.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
-    df.dateFormat = @"yyyy-MM-dd";
+    df.timeZone = NSTimeZone.localTimeZone;
+    // The key format the history is stored under (nbl_traffic_date_key_for_date
+    // in nicebarlite.m). This screen looked days up as "yyyy-MM-dd", which no
+    // stored key has, so every day read as 0.
+    df.dateFormat = @"yyyyMMdd";
     return df;
 }
 

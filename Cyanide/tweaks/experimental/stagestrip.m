@@ -1755,94 +1755,6 @@ static void stagestrip_clear_live_rendering_state(void)
     gStripLiveScene = 0;
 }
 
-// Pick the first non-Cyanide application scene from [mgr allScenes] and
-// resolve it to an SBApplicationSceneHandle via -existingSceneHandleForScene:.
-// allScenes proves to contain backgrounded application scenes on iOS 26
-// (e.g. Gmail, Tweetie2 in our test run), so this is more reliable than
-// the recents-string-matching path.
-static uint64_t stagestrip_first_live_app_handle(char *outBid, size_t outBidLen,
-                                                 uint64_t *outScene)
-{
-    if (outBid && outBidLen) outBid[0] = '\0';
-    if (outScene) *outScene = 0;
-
-    uint64_t mgr = stagestrip_main_scene_manager();
-    if (!r_is_objc_ptr(mgr)) return 0;
-    if (!r_responds(mgr, "allScenes")) return 0;
-    uint64_t scenesSet = r_msg2_main(mgr, "allScenes", 0, 0, 0, 0);
-    if (!r_is_objc_ptr(scenesSet)) return 0;
-    uint64_t arr = r_msg2_main(scenesSet, "allObjects", 0, 0, 0, 0);
-    if (!r_is_objc_ptr(arr)) return 0;
-    uint64_t cnt = r_msg2_main(arr, "count", 0, 0, 0, 0);
-    if (cnt == 0 || cnt > 64) return 0;
-
-    if (!r_responds(mgr, "existingSceneHandleForScene:")) {
-        printf("[STAGE] live: mgr lacks -existingSceneHandleForScene:\n");
-        return 0;
-    }
-
-    for (uint64_t i = 0; i < cnt; i++) {
-        uint64_t scene = r_msg2_main(arr, "objectAtIndex:", i, 0, 0, 0);
-        if (!r_is_objc_ptr(scene)) continue;
-        if (!r_responds(scene, "identifier")) continue;
-
-        uint64_t idObj = r_msg2_main(scene, "identifier", 0, 0, 0, 0);
-        if (!r_is_objc_ptr(idObj)) continue;
-        uint64_t cstr = r_msg2_main(idObj, "UTF8String", 0, 0, 0, 0);
-        if (!cstr) continue;
-        char idBuf[160] = {0};
-        if (!stagestrip_read_remote_cstr(cstr, idBuf, sizeof(idBuf))) continue;
-
-        // Only application scenes have ids of the form "sceneID:<bid>-<suffix>".
-        // System scenes use names like "com.apple.springboard" or "searchScreen".
-        if (strncmp(idBuf, "sceneID:", 8) != 0) continue;
-        const char *bidStart = idBuf + 8;
-        const char *dash = strrchr(bidStart, '-');
-        if (!dash) continue;
-        char bidBuf[128] = {0};
-        size_t bidLen = (size_t)(dash - bidStart);
-        if (bidLen == 0 || bidLen >= sizeof(bidBuf)) continue;
-        memcpy(bidBuf, bidStart, bidLen);
-        bidBuf[bidLen] = '\0';
-
-        if (stagestrip_bid_is_self(bidBuf)) {
-            printf("[STAGE] live:   skip self id=%s\n", idBuf);
-            continue;
-        }
-        // Skip extension/service scenes — we want full app scenes only.
-        if (strstr(bidBuf, "UIService") || strstr(bidBuf, ".extension") ||
-            strstr(bidBuf, ".Extension") || strstr(bidBuf, "ViewService")) {
-            printf("[STAGE] live:   skip service id=%s\n", idBuf);
-            continue;
-        }
-
-        uint64_t handle = r_msg2_main(mgr, "existingSceneHandleForScene:", scene, 0, 0, 0);
-        if (!r_is_objc_ptr(handle)) {
-            printf("[STAGE] live:   no handle for scene=0x%llx id=%s\n", scene, idBuf);
-            continue;
-        }
-        if (outBid && outBidLen) {
-            strncpy(outBid, bidBuf, outBidLen - 1);
-            outBid[outBidLen - 1] = '\0';
-        }
-        if (outScene) *outScene = scene;
-        printf("[STAGE] live: picked scene=0x%llx handle=0x%llx bid=%s\n",
-               scene, handle, bidBuf);
-        return handle;
-    }
-    printf("[STAGE] live: no non-self application scene found\n");
-    return 0;
-}
-
-static bool stagestrip_pick_has_bid(const StripScenePick *picks, int count, const char *bid)
-{
-    if (!picks || !bid || !*bid) return false;
-    for (int i = 0; i < count; i++) {
-        if (strcmp(picks[i].bid, bid) == 0) return true;
-    }
-    return false;
-}
-
 static bool stagestrip_bid_short_name(const char *bid, char *out, size_t outLen)
 {
     if (!out || outLen == 0) return false;
@@ -1871,62 +1783,6 @@ static bool stagestrip_scene_id_bid_hint(const char *sceneID, char *out, size_t 
     memcpy(out, bidStart, bidLen);
     out[bidLen] = '\0';
     return true;
-}
-
-static int stagestrip_collect_live_app_picks(StripScenePick *out, int maxOut)
-{
-    if (!out || maxOut <= 0) return 0;
-    memset(out, 0, sizeof(out[0]) * (size_t)maxOut);
-
-    uint64_t mgr = stagestrip_main_scene_manager();
-    if (!r_is_objc_ptr(mgr) || !r_responds(mgr, "allScenes") ||
-        !r_responds(mgr, "existingSceneHandleForScene:")) {
-        return 0;
-    }
-    uint64_t scenesSet = r_msg2_main(mgr, "allScenes", 0, 0, 0, 0);
-    uint64_t arr = r_is_objc_ptr(scenesSet)
-        ? r_msg2_main(scenesSet, "allObjects", 0, 0, 0, 0) : 0;
-    if (!r_is_objc_ptr(arr)) return 0;
-
-    uint64_t cnt = r_msg2_main(arr, "count", 0, 0, 0, 0);
-    if (cnt == 0 || cnt > 64) return 0;
-
-    int written = 0;
-    for (uint64_t i = 0; i < cnt && written < maxOut; i++) {
-        uint64_t scene = r_msg2_main(arr, "objectAtIndex:", i, 0, 0, 0);
-        if (!r_is_objc_ptr(scene) || !r_responds(scene, "identifier")) continue;
-
-        uint64_t idObj = r_msg2_main(scene, "identifier", 0, 0, 0, 0);
-        uint64_t cstr = r_is_objc_ptr(idObj)
-            ? r_msg2_main(idObj, "UTF8String", 0, 0, 0, 0) : 0;
-        if (!cstr) continue;
-
-        char idBuf[160] = {0};
-        if (!stagestrip_read_remote_cstr(cstr, idBuf, sizeof(idBuf))) continue;
-        if (strncmp(idBuf, "sceneID:", 8) != 0) continue;
-
-        uint64_t handle = r_msg2_main(mgr, "existingSceneHandleForScene:", scene, 0, 0, 0);
-        if (!r_is_objc_ptr(handle)) continue;
-
-        char bidBuf[128] = {0};
-        stagestrip_handle_bundle_id(handle, bidBuf, sizeof(bidBuf));
-        if (!bidBuf[0])
-            stagestrip_scene_id_bid_hint(idBuf, bidBuf, sizeof(bidBuf));
-
-        if (stagestrip_bid_is_self(bidBuf) || !stagestrip_bid_is_user_app(bidBuf) ||
-            stagestrip_pick_has_bid(out, written, bidBuf)) {
-            continue;
-        }
-
-        out[written].handle = handle;
-        out[written].scene = scene;
-        strncpy(out[written].bid, bidBuf, sizeof(out[written].bid) - 1);
-        printf("[STAGE] live[%d]: scene=0x%llx handle=0x%llx bid=%s\n",
-               written, scene, handle, bidBuf);
-        written++;
-    }
-    printf("[STAGE] live: collected %d app scene(s)\n", written);
-    return written;
 }
 
 static bool stagestrip_find_live_pick_for_bid(const char *wantedBid, StripScenePick *out)
@@ -2045,122 +1901,6 @@ static void stagestrip_dump_all_scenes(void)
     }
 }
 
-// Walk SBMainSwitcherControllerCoordinator.sharedInstance.recentAppLayouts.
-// For each recent SBAppLayout, walk its display items, take the first one
-// that isn't Cyanide itself, resolve its persistence identifier to a scene
-// handle via the main scene manager. Returns the first such handle, or 0.
-//
-// This is the App-Switcher-recents source-of-truth: it persists across apps
-// being suspended/backgrounded, unlike layoutStateApplicationSceneHandles
-// which only lists what's currently "laid out" (i.e. just Cyanide when we
-// run from the Cyanide app).
-static uint64_t stagestrip_first_recent_non_self_handle(char *outBid, size_t outBidLen)
-{
-    if (outBid && outBidLen) outBid[0] = '\0';
-
-    uint64_t cls = r_class("SBMainSwitcherControllerCoordinator");
-    if (!r_is_objc_ptr(cls)) {
-        printf("[STAGE] recents: SBMainSwitcherControllerCoordinator class missing\n");
-        return 0;
-    }
-    uint64_t coord = r_msg2_main(cls, "sharedInstance", 0, 0, 0, 0);
-    if (!r_is_objc_ptr(coord)) {
-        printf("[STAGE] recents: sharedInstance nil\n");
-        return 0;
-    }
-    if (!r_responds(coord, "recentAppLayouts")) {
-        printf("[STAGE] recents: -recentAppLayouts missing\n");
-        return 0;
-    }
-    // On iOS 26 the coordinator's -recentAppLayouts already returns the
-    // NSArray<SBAppLayout> directly (it wraps mainSwitcherModel
-    // -appLayoutsIncludingHiddenAppLayouts:0 internally). Earlier iOS
-    // versions returned an SBRecentAppLayouts model; we no longer need to
-    // call -recentsIncludingHiddenAppLayouts: on the result.
-    uint64_t layoutsArr = r_msg2_main(coord, "recentAppLayouts", 0, 0, 0, 0);
-    if (!r_is_objc_ptr(layoutsArr)) {
-        printf("[STAGE] recents: recentAppLayouts nil\n");
-        return 0;
-    }
-    uint64_t layoutsCount = r_msg2_main(layoutsArr, "count", 0, 0, 0, 0);
-    printf("[STAGE] recents: %llu recent layouts\n", layoutsCount);
-    if (layoutsCount == 0 || layoutsCount > 128) return 0;
-
-    uint64_t mgr = stagestrip_main_scene_manager();
-    if (!r_is_objc_ptr(mgr)) return 0;
-
-    int handleProbes = 0;
-    for (uint64_t i = 0; i < layoutsCount; i++) {
-        uint64_t layout = r_msg2_main(layoutsArr, "objectAtIndex:", i, 0, 0, 0);
-        if (!r_is_objc_ptr(layout)) continue;
-        if (!r_responds(layout, "allItems")) continue;
-
-        uint64_t items = r_msg2_main(layout, "allItems", 0, 0, 0, 0);
-        if (!r_is_objc_ptr(items)) continue;
-        uint64_t itemCount = r_msg2_main(items, "count", 0, 0, 0, 0);
-        if (itemCount == 0 || itemCount > 32) continue;
-
-        for (uint64_t j = 0; j < itemCount; j++) {
-            uint64_t item = r_msg2_main(items, "objectAtIndex:", j, 0, 0, 0);
-            if (!r_is_objc_ptr(item)) continue;
-
-            char bidBuf[128] = {0};
-            uint64_t bidObj = r_responds(item, "bundleIdentifier")
-                ? r_msg2_main(item, "bundleIdentifier", 0, 0, 0, 0) : 0;
-            if (r_is_objc_ptr(bidObj)) {
-                uint64_t cstr = r_msg2_main(bidObj, "UTF8String", 0, 0, 0, 0);
-                if (cstr) stagestrip_read_remote_cstr(cstr, bidBuf, sizeof(bidBuf));
-            }
-            if (stagestrip_bid_is_self(bidBuf)) {
-                printf("[STAGE] recents: layout[%llu] item[%llu] bid=%s (self, skip)\n",
-                       i, j, bidBuf);
-                continue;
-            }
-            if (!stagestrip_bid_is_user_app(bidBuf)) continue;
-            if (outBid && outBidLen && outBid[0] == '\0') {
-                strncpy(outBid, bidBuf, outBidLen - 1);
-                outBid[outBidLen - 1] = '\0';
-            }
-
-            uint64_t persistObj = r_responds(item, "uniqueIdentifier")
-                ? r_msg2_main(item, "uniqueIdentifier", 0, 0, 0, 0) : 0;
-            char persistBuf[128] = {0};
-            if (r_is_objc_ptr(persistObj)) {
-                uint64_t pcstr = r_msg2_main(persistObj, "UTF8String", 0, 0, 0, 0);
-                if (pcstr) stagestrip_read_remote_cstr(pcstr, persistBuf, sizeof(persistBuf));
-            }
-            printf("[STAGE] recents: layout[%llu] item[%llu] bid=%s persist=%s\n",
-                   i, j, bidBuf[0] ? bidBuf : "(none)",
-                   persistBuf[0] ? persistBuf : "(none)");
-
-            if (!r_is_objc_ptr(persistObj)) continue;
-            if (handleProbes >= kStripRecentProbeLimit) {
-                printf("[STAGE] recents: capped handle probes at %d; candidate bid=%s\n",
-                       kStripRecentProbeLimit, outBid && outBid[0] ? outBid : "(none)");
-                return 0;
-            }
-            handleProbes++;
-
-            if (!r_responds(mgr, "existingSceneHandleForPersistenceIdentifier:")) {
-                printf("[STAGE] recents: mgr lacks existingSceneHandleForPersistenceIdentifier:\n");
-                return 0;
-            }
-            uint64_t handle = r_msg2_main(mgr, "existingSceneHandleForPersistenceIdentifier:",
-                                          persistObj, 0, 0, 0);
-            if (r_is_objc_ptr(handle)) {
-                if (outBid && outBidLen) {
-                    strncpy(outBid, bidBuf, outBidLen - 1);
-                    outBid[outBidLen - 1] = '\0';
-                }
-                printf("[STAGE] recents: picked handle=0x%llx bid=%s\n", handle, bidBuf);
-                return handle;
-            }
-            printf("[STAGE] recents:   handle lookup returned nil\n");
-        }
-    }
-    return 0;
-}
-
 static int stagestrip_collect_recent_bids(char out[][128], int maxOut)
 {
     if (!out || maxOut <= 0) return 0;
@@ -2215,70 +1955,6 @@ static int stagestrip_collect_recent_bids(char out[][128], int maxOut)
         }
     }
     return written;
-}
-
-// Resolve the App-Switcher-visible scene handles on iOS 26 by walking
-// SpringBoard -> windowSceneManager -> activeDisplayWindowScene ->
-// switcherController -> layoutStateApplicationSceneHandles. This bypasses
-// the (broken on iOS 26) SBApplication.mainScene path entirely. Returns an
-// NSArray pointer (remote) or 0 on failure.
-static uint64_t stagestrip_collect_scene_handles(void)
-{
-    uint64_t UIApplication = r_class("UIApplication");
-    if (!r_is_objc_ptr(UIApplication)) {
-        printf("[STAGE] probe: UIApplication missing\n");
-        return 0;
-    }
-    uint64_t app = r_msg2_main(UIApplication, "sharedApplication", 0, 0, 0, 0);
-    if (!r_is_objc_ptr(app)) {
-        printf("[STAGE] probe: sharedApplication nil\n");
-        return 0;
-    }
-    if (!r_responds(app, "windowSceneManager")) {
-        printf("[STAGE] probe: SpringBoard lacks -windowSceneManager (iOS mismatch?)\n");
-        return 0;
-    }
-    uint64_t wsm = r_msg2_main(app, "windowSceneManager", 0, 0, 0, 0);
-    if (!r_is_objc_ptr(wsm)) {
-        printf("[STAGE] probe: windowSceneManager nil\n");
-        return 0;
-    }
-
-    uint64_t windowScene = 0;
-    if (r_responds(wsm, "activeDisplayWindowScene"))
-        windowScene = r_msg2_main(wsm, "activeDisplayWindowScene", 0, 0, 0, 0);
-    if (!r_is_objc_ptr(windowScene) && r_responds(wsm, "embeddedDisplayWindowScene"))
-        windowScene = r_msg2_main(wsm, "embeddedDisplayWindowScene", 0, 0, 0, 0);
-    if (!r_is_objc_ptr(windowScene)) {
-        printf("[STAGE] probe: window scene nil\n");
-        return 0;
-    }
-
-    if (!r_responds(windowScene, "switcherController")) {
-        printf("[STAGE] probe: switcherController missing\n");
-        return 0;
-    }
-    uint64_t switcher = r_msg2_main(windowScene, "switcherController", 0, 0, 0, 0);
-    if (!r_is_objc_ptr(switcher)) {
-        printf("[STAGE] probe: switcherController nil\n");
-        return 0;
-    }
-    if (!r_responds(switcher, "layoutStateApplicationSceneHandles")) {
-        printf("[STAGE] probe: layoutStateApplicationSceneHandles missing\n");
-        return 0;
-    }
-    uint64_t handlesSet = r_msg2_main(switcher, "layoutStateApplicationSceneHandles", 0, 0, 0, 0);
-    if (!r_is_objc_ptr(handlesSet)) {
-        printf("[STAGE] probe: handles set nil (no live switcher entries)\n");
-        return 0;
-    }
-    if (!r_responds(handlesSet, "allObjects")) return 0;
-    uint64_t handlesArr = r_msg2_main(handlesSet, "allObjects", 0, 0, 0, 0);
-    if (!r_is_objc_ptr(handlesArr)) {
-        printf("[STAGE] probe: handles array nil\n");
-        return 0;
-    }
-    return handlesArr;
 }
 
 // Read a scene handle's app bundle id into a local buffer (best-effort).
@@ -2438,109 +2114,6 @@ static uint64_t stagestrip_make_scene_layer_host_view(uint64_t scene,
         r_msg2_main(host, "setPassesTouchesThrough:", 0, 0, 0, 0);
     stagestrip_enable_interaction_tree(host, 4);
     return host;
-}
-
-// The report shows StageDuo's iOS >= 15 path prefers
-// _UISceneLayerHostContainerView initWithScene:debugDescription:. If that
-// class is absent on iOS 26, fall back to SpringBoard's first-party live
-// overlay objects and then the older SBApplicationSceneView paths.
-static uint64_t stagestrip_make_fullscreen_live_overlay_view(uint64_t handle,
-                                                             double w, double h)
-{
-    if (!r_is_objc_ptr(handle)) return 0;
-
-    uint64_t cls = r_class("SBFullScreenAlwaysLiveLiveContentOverlay");
-    if (!r_is_objc_ptr(cls)) {
-        printf("[STAGE] overlay: SBFullScreenAlwaysLiveLiveContentOverlay missing\n");
-        return 0;
-    }
-
-    uint64_t alloc = r_msg2_main(cls, "alloc", 0, 0, 0, 0);
-    if (!r_is_objc_ptr(alloc) ||
-        !r_responds(alloc, "initWithSceneHandle:referenceSize:containerOrientation:")) {
-        printf("[STAGE] overlay: fullscreen init selector missing alloc=0x%llx\n", alloc);
-        return 0;
-    }
-
-    if (r_responds(handle, "setWantsEnhancedWindowingEnabled:"))
-        r_msg2_main(handle, "setWantsEnhancedWindowingEnabled:", 1, 0, 0, 0);
-
-    struct { double w; double h; } refSize = { w, h };
-    int64_t containerOrient = 1; // UIInterfaceOrientationPortrait
-    uint64_t overlay = r_msg2_main_raw(alloc,
-        "initWithSceneHandle:referenceSize:containerOrientation:",
-        &handle,          sizeof(handle),
-        &refSize,         sizeof(refSize),
-        &containerOrient, sizeof(containerOrient),
-        NULL, 0);
-    if (!r_is_objc_ptr(overlay)) {
-        printf("[STAGE] overlay: fullscreen init returned nil\n");
-        return 0;
-    }
-
-    if (r_responds(overlay, "setAsyncRenderingEnabled:withMinificationFilterEnabled:"))
-        r_msg2_main(overlay, "setAsyncRenderingEnabled:withMinificationFilterEnabled:",
-                    1, 0, 0, 0);
-    if (r_responds(overlay, "setDisplayLayoutElementActive:"))
-        r_msg2_main(overlay, "setDisplayLayoutElementActive:", 1, 0, 0, 0);
-    if (r_responds(overlay, "setOcclusionState:inSteadyState:"))
-        r_msg2_main(overlay, "setOcclusionState:inSteadyState:", 0, 1, 0, 0);
-    if (r_responds(overlay, "setWantsEnhancedWindowingEnabled:"))
-        r_msg2_main(overlay, "setWantsEnhancedWindowingEnabled:", 1, 0, 0, 0);
-    if (r_responds(overlay, "setResizesHostedContext:"))
-        r_msg2_main(overlay, "setResizesHostedContext:", 1, 0, 0, 0);
-    if (r_responds(overlay, "setShouldPreventFlatteningUnoccludedScenes:"))
-        r_msg2_main(overlay, "setShouldPreventFlatteningUnoccludedScenes:", 1, 0, 0, 0);
-    if (r_responds(overlay, "setDisableFlattening:"))
-        r_msg2_main(overlay, "setDisableFlattening:", 1, 0, 0, 0);
-    if (r_responds(overlay, "setMaximized:"))
-        r_msg2_main(overlay, "setMaximized:", 0, 0, 0, 0);
-    if (r_responds(overlay, "setPassesTouchesThrough:"))
-        r_msg2_main(overlay, "setPassesTouchesThrough:", 0, 0, 0, 0);
-    if (r_responds(overlay, "setAllowsHitTesting:"))
-        r_msg2_main(overlay, "setAllowsHitTesting:", 1, 0, 0, 0);
-
-    uint64_t view = r_responds(overlay, "contentOverlayView")
-        ? r_msg2_main(overlay, "contentOverlayView", 0, 0, 0, 0)
-        : 0;
-    if (!r_is_objc_ptr(view)) {
-        printf("[STAGE] overlay: contentOverlayView nil overlay=0x%llx\n", overlay);
-        return 0;
-    }
-
-    uint64_t overlayKey = r_sel("cyanideStageStripLiveContentOverlay");
-    if (overlayKey) {
-        r_dlsym_call(R_TIMEOUT, "objc_setAssociatedObject",
-                     view, overlayKey, overlay, 1 /* RETAIN_NONATOMIC */,
-                     0, 0, 0, 0);
-    }
-
-    stagestrip_send_rect(view, "setFrame:", 0.0, 0.0, w, h);
-    r_msg2_main(view, "setClipsToBounds:", 1, 0, 0, 0);
-    stagestrip_enable_interaction_tree(view, 6);
-    uint64_t sceneView = r_responds(overlay, "sceneView")
-        ? r_msg2_main(overlay, "sceneView", 0, 0, 0, 0)
-        : r_ivar_value(overlay, "_sceneView");
-    stagestrip_enable_interaction_tree(sceneView, 4);
-    if (r_responds(view, "setNeedsLayout")) r_msg2_main(view, "setNeedsLayout", 0, 0, 0, 0);
-    if (r_responds(view, "layoutIfNeeded")) r_msg2_main(view, "layoutIfNeeded", 0, 0, 0, 0);
-
-    uint64_t token = r_responds(overlay, "liveSceneIdentityToken")
-        ? r_msg2_main(overlay, "liveSceneIdentityToken", 0, 0, 0, 0)
-        : 0;
-    uint64_t touchBehavior = r_responds(overlay, "touchBehavior")
-        ? r_msg2_main(overlay, "touchBehavior", 0, 0, 0, 0)
-        : 0;
-    uint64_t enhanced = r_responds(overlay, "wantsEnhancedWindowingEnabled")
-        ? r_msg2_main(overlay, "wantsEnhancedWindowingEnabled", 0, 0, 0, 0)
-        : 0;
-    uint64_t noFlat = r_responds(overlay, "disableFlattening")
-        ? r_msg2_main(overlay, "disableFlattening", 0, 0, 0, 0)
-        : 0;
-    printf("[STAGE] overlay: always-live overlay=0x%llx view=0x%llx sceneView=0x%llx token=0x%llx touch=%llu enhanced=%llu noFlat=%llu size=%.0fx%.0f\n",
-           overlay, view, sceneView, token, touchBehavior, enhanced & 0xff,
-           noFlat & 0xff, w, h);
-    return view;
 }
 
 static uint64_t stagestrip_make_medusa_scene_view(uint64_t handle,
@@ -2834,30 +2407,6 @@ static uint64_t stagestrip_handle_make_view(uint64_t handle, double w, double h)
     return view;
 }
 
-static uint64_t stagestrip_make_passthrough_container(const char *role)
-{
-    uint64_t cls = kStripUsePassthroughContainers
-        ? r_class("SBTouchPassthroughLayerHostView")
-        : 0;
-    const char *className = kStripUsePassthroughContainers
-        ? "SBTouchPassthroughLayerHostView"
-        : "UIView";
-    if (!r_is_objc_ptr(cls))
-        cls = r_class("UIView");
-    uint64_t alloc = r_is_objc_ptr(cls)
-        ? r_msg2_main(cls, "alloc", 0, 0, 0, 0) : 0;
-    uint64_t view = r_is_objc_ptr(alloc)
-        ? r_msg2_main(alloc, "init", 0, 0, 0, 0) : 0;
-    if (r_is_objc_ptr(view)) {
-        r_msg2_main(view, "setUserInteractionEnabled:", 1, 0, 0, 0);
-        if (r_responds(view, "setMultipleTouchEnabled:"))
-            r_msg2_main(view, "setMultipleTouchEnabled:", 1, 0, 0, 0);
-        printf("[STAGE] container: %s role=%s view=0x%llx\n",
-               className, role ? role : "?", view);
-    }
-    return view;
-}
-
 static void stagestrip_set_background_white(uint64_t view, double white, double alpha)
 {
     if (!r_is_objc_ptr(view)) return;
@@ -2893,109 +2442,6 @@ static void stagestrip_set_layer_border_white(uint64_t view,
         : 0;
     if (cgColor) r_msg2_main(layer, "setBorderColor:", cgColor, 0, 0, 0);
     stagestrip_send_double(layer, "setBorderWidth:", width);
-}
-
-static uint64_t stagestrip_make_stacked_stage_host(StripScenePick *picks, int count,
-                                                   double w, double h)
-{
-    if (!picks || count <= 0) return 0;
-    if (count > 2) count = 2;
-    memset(gStripRows, 0, sizeof(gStripRows));
-    memset(gStripLives, 0, sizeof(gStripLives));
-
-    uint64_t root = stagestrip_make_passthrough_container("root");
-    if (!r_is_objc_ptr(root)) return 0;
-
-    stagestrip_send_rect(root, "setFrame:", 0.0, 0.0, w, h);
-    r_msg2_main(root, "setAutoresizingMask:", 2 | 16 /* flexible width/height */, 0, 0, 0);
-    r_msg2_main(root, "setClipsToBounds:", 1, 0, 0, 0);
-    r_msg2_main(root, "setUserInteractionEnabled:", 1, 0, 0, 0);
-    stagestrip_set_background_white(root, 0.0, 0.18);
-
-    double gap = count > 1 ? kStripStackGap : 0.0;
-    double rowH = (h - gap * (count - 1)) / count;
-    if (rowH < 80.0) rowH = h / count;
-
-    for (int i = 0; i < count; i++) {
-        uint64_t row = stagestrip_make_passthrough_container("row");
-        if (!r_is_objc_ptr(row)) continue;
-
-        double y = i * (rowH + gap);
-        stagestrip_send_rect(row, "setFrame:", 0.0, y, w, rowH);
-        r_msg2_main(row, "setAutoresizingMask:", 2 /* flexible width */, 0, 0, 0);
-        r_msg2_main(row, "setClipsToBounds:", 1, 0, 0, 0);
-        r_msg2_main(row, "setUserInteractionEnabled:", 1, 0, 0, 0);
-        stagestrip_set_background_white(row, 0.0, 0.22);
-        // StageDuo card chrome: 0.5pt thin border at white α=0.06 (RE report
-        // §7). Much subtler than the previous 1.0pt α=0.24 ring.
-        stagestrip_set_layer_border_white(row, 1.0, 0.06, 0.5);
-
-        uint64_t layer = r_msg2_main(row, "layer", 0, 0, 0, 0);
-        if (r_is_objc_ptr(layer)) {
-            stagestrip_send_double(layer, "setCornerRadius:", 14.0);
-            // Continuous corner curve = StageDuo squircle look (iOS 13+).
-            if (r_responds(layer, "setCornerCurve:")) {
-                uint64_t cont = r_nsstr_retained("continuous");
-                if (r_is_objc_ptr(cont)) {
-                    r_msg2_main(layer, "setCornerCurve:", cont, 0, 0, 0);
-                    r_msg2_main(cont, "release", 0, 0, 0, 0);
-                }
-            }
-            r_msg2_main(layer, "setMasksToBounds:", 1, 0, 0, 0);
-        }
-
-        uint64_t live = 0;
-        if (kStripPreferRawSceneLayerHost)
-            live = stagestrip_make_scene_layer_host_view(picks[i].scene, picks[i].bid, w, h);
-        if (!r_is_objc_ptr(live) && i < kStripMaxMedusaTiles) {
-            live = stagestrip_make_medusa_scene_view(picks[i].handle, i, w, h);
-        } else if (!r_is_objc_ptr(live)) {
-            printf("[STAGE] medusa[%d]: skipped; max safe medusa tiles=%d\n",
-                   i, kStripMaxMedusaTiles);
-        }
-        if (!r_is_objc_ptr(live) && kStripUseAlwaysLiveOverlay) {
-            live = stagestrip_make_fullscreen_live_overlay_view(picks[i].handle, w, h);
-        } else if (!r_is_objc_ptr(live)) {
-            printf("[STAGE] overlay[%d]: skipped; always-live overlay wedges when token=0\n", i);
-        }
-        if (!r_is_objc_ptr(live))
-            live = stagestrip_make_direct_scene_view(picks[i].handle, w, h);
-        if (!r_is_objc_ptr(live))
-            live = stagestrip_handle_make_view(picks[i].handle, w, h);
-        if (!r_is_objc_ptr(live) && !kStripPreferRawSceneLayerHost)
-            live = stagestrip_make_scene_layer_host_view(picks[i].scene, picks[i].bid, w, h);
-        if (!r_is_objc_ptr(live)) {
-            printf("[STAGE] stack[%d]: no view for %s\n", i, picks[i].bid);
-            continue;
-        }
-
-        // Match the original card behavior: scale/build content for the full
-        // width, then crop a horizontal band by centering it inside a shorter row.
-        double liveY = (rowH - h) / 2.0;
-        stagestrip_send_rect(live, "setFrame:", 0.0, liveY, w, h);
-        r_msg2_main(live, "setAutoresizingMask:", 2 /* flexible width */, 0, 0, 0);
-        r_msg2_main(live, "setUserInteractionEnabled:", 1, 0, 0, 0);
-        r_msg2_main(row, "addSubview:", live, 0, 0, 0);
-        r_msg2_main(root, "addSubview:", row, 0, 0, 0);
-        uint64_t rowKey = r_sel(i == 0 ? "cyanideStageStripRow0" : "cyanideStageStripRow1");
-        uint64_t liveKey = r_sel(i == 0 ? "cyanideStageStripLive0" : "cyanideStageStripLive1");
-        if (rowKey) {
-            r_dlsym_call(R_TIMEOUT, "objc_setAssociatedObject",
-                         root, rowKey, row, 1 /* RETAIN_NONATOMIC */, 0, 0, 0, 0);
-        }
-        if (liveKey) {
-            r_dlsym_call(R_TIMEOUT, "objc_setAssociatedObject",
-                         root, liveKey, live, 1 /* RETAIN_NONATOMIC */, 0, 0, 0, 0);
-        }
-        if (i < 2) {
-            gStripRows[i] = row;
-            gStripLives[i] = live;
-        }
-        printf("[STAGE] stack[%d]: bid=%s row=(0,%.0f %.0fx%.0f) live=0x%llx liveY=%.0f\n",
-               i, picks[i].bid, y, w, rowH, live, liveY);
-    }
-
-    return root;
 }
 
 static void stagestrip_cleanup_host_view_depth(uint64_t view, int depth)
@@ -3247,11 +2693,6 @@ static uint64_t stagestrip_resize_host_view_commit_for_slot(int slot,
     return fresh;
 }
 
-static void stagestrip_resize_host_view_commit(uint64_t view, double w, double h)
-{
-    (void)stagestrip_resize_host_view_commit_for_slot(-1, view, w, h);
-}
-
 static void stagestrip_set_center_thread(uint64_t obj, StripPoint center)
 {
     if (!r_is_objc_ptr(obj)) return;
@@ -3318,11 +2759,6 @@ static uint64_t stagestrip_make_double_invocation(uint64_t target,
                                                   double value)
 {
     return stagestrip_make_invocation(target, selName, &value, sizeof(value));
-}
-
-static uint64_t stagestrip_make_frame_invocation(uint64_t target, StripRect rect)
-{
-    return stagestrip_make_invocation(target, "setFrame:", &rect, sizeof(rect));
 }
 
 static void stagestrip_retain_action_target(uint64_t owner, uint64_t target)
@@ -3491,24 +2927,6 @@ static void stagestrip_hide_transition_shield_after(double delay)
     stagestrip_schedule_invocation(shield,
         stagestrip_make_bool_invocation(shield, "setHidden:", true),
         delay + kStripTransitionShieldFade + 0.03);
-}
-
-static void stagestrip_show_view_animated(uint64_t view, double duration)
-{
-    if (!r_is_objc_ptr(view)) return;
-    bool wasHidden = stagestrip_view_is_hidden(view);
-    if (r_responds(view, "setUserInteractionEnabled:"))
-        r_msg2_main(view, "setUserInteractionEnabled:", 1, 0, 0, 0);
-    if (wasHidden)
-        stagestrip_send_double(view, "setAlpha:", 0.0);
-    r_msg2_main(view, "setHidden:", 0, 0, 0, 0);
-    if (wasHidden) {
-        stagestrip_animation_begin(duration);
-        stagestrip_send_double(view, "setAlpha:", 1.0);
-        stagestrip_animation_commit();
-    } else {
-        stagestrip_send_double(view, "setAlpha:", 1.0);
-    }
 }
 
 static void stagestrip_show_picker_overlay_animated(void)
@@ -4059,53 +3477,6 @@ static void stagestrip_raise_pan_handles_slot(StripFloatSlot *S)
         r_msg2_main(S->window, "bringSubviewToFront:", S->closeButton, 0, 0, 0);
 }
 
-static void stagestrip_install_stage_picker_swipe_slot(int slot)
-{
-    if (slot < 0 || slot >= kStripMaxFloatSlots) return;
-    StripFloatSlot *S = &gStripFloatSlots[slot];
-    uint64_t panel = gStripPickerPanel;
-    if (!r_is_objc_ptr(S->window) || !r_is_objc_ptr(panel)) return;
-
-    if (r_is_objc_ptr(S->pickerSwipe) && S->pickerSwipePanel == panel)
-        return;
-
-    if (r_is_objc_ptr(S->pickerSwipe)) {
-        r_msg2_main(S->window, "removeGestureRecognizer:", S->pickerSwipe, 0, 0, 0);
-        S->pickerSwipe = 0;
-        S->pickerSwipePanel = 0;
-    }
-
-    uint64_t cmdInv = stagestrip_make_int_invocation(panel, "setTag:", kStripPickerCmdShow);
-    uint64_t invokeSel = r_sel("invoke");
-    uint64_t UISwipe = r_class("UISwipeGestureRecognizer");
-    uint64_t swipeAlloc = r_is_objc_ptr(UISwipe)
-        ? r_msg2_main(UISwipe, "alloc", 0, 0, 0, 0) : 0;
-    uint64_t swipeGR = r_is_objc_ptr(swipeAlloc) && r_is_objc_ptr(cmdInv) && invokeSel
-        ? r_msg2_main(swipeAlloc, "initWithTarget:action:", cmdInv, invokeSel, 0, 0) : 0;
-    if (!r_is_objc_ptr(swipeGR)) return;
-
-    r_msg2_main(swipeGR, "setDirection:", 4 /* swipe up */, 0, 0, 0);
-    if (r_responds(swipeGR, "setCancelsTouchesInView:"))
-        r_msg2_main(swipeGR, "setCancelsTouchesInView:", 0, 0, 0, 0);
-    r_msg2_main(S->window, "addGestureRecognizer:", swipeGR, 0, 0, 0);
-    stagestrip_retain_action_target(S->window, cmdInv);
-    S->pickerSwipe = swipeGR;
-    S->pickerSwipePanel = panel;
-    printf("[STAGE] picker-swipe[%d]: installed win=0x%llx recognizer=0x%llx panel=0x%llx\n",
-           slot, S->window, swipeGR, panel);
-}
-
-// Legacy single-slot wrapper for backward compat with any callsite that
-// hasn't moved to the slot API yet.
-static void stagestrip_install_pan_handles(uint64_t win,
-                                           uint64_t hostView,
-                                           uint64_t referenceView,
-                                           double w,
-                                           double h)
-{
-    stagestrip_install_pan_handles_slot(0, win, hostView, referenceView, w, h);
-}
-
 // Install an X close button at the top-left corner of a slot's window. When
 // tapped, hides both the host view and the window — the next control-loop
 // tick observes the hidden state and tears down the slot.
@@ -4207,23 +3578,6 @@ static void stagestrip_teardown_slot(int slot)
     }
     S->cornerArcsVisible = false;
     stagestrip_hide_transition_shield_after(kStripTransitionShieldCloseHold);
-}
-
-static void stagestrip_add_layout_action(uint64_t button,
-                                         uint64_t win,
-                                         uint64_t hostView,
-                                         StripRect winRect)
-{
-    (void)hostView;
-    if (!r_is_objc_ptr(button) || !r_is_objc_ptr(win)) return;
-
-    stagestrip_add_invocation_action(button, stagestrip_make_frame_invocation(win, winRect));
-}
-
-static void stagestrip_add_move_action(uint64_t button, uint64_t win, StripRect winRect)
-{
-    if (!r_is_objc_ptr(button) || !r_is_objc_ptr(win)) return;
-    stagestrip_add_invocation_action(button, stagestrip_make_frame_invocation(win, winRect));
 }
 
 // Build one row in the picker's app list. The row binds two NSInvocations to
@@ -5629,18 +4983,6 @@ static bool stagestrip_present_floating_host_for_slot(int slot,
     return true;
 }
 
-// Legacy single-slot presenter — keeps any caller that hasn't migrated to
-// the slot API compiling and working with slot 0.
-static bool stagestrip_present_floating_host(uint64_t hostView, double w, double h)
-{
-    CGRect b = UIScreen.mainScreen.bounds;
-    double sw = isfinite(b.size.width)  ? b.size.width  : 390.0;
-    double sh = isfinite(b.size.height) ? b.size.height : 844.0;
-    return stagestrip_present_floating_host_for_slot(0, hostView, w, h,
-                                                     (sw - w) / 2.0,
-                                                     (sh - h) / 2.0);
-}
-
 static bool stagestrip_dismiss_floating_host(void)
 {
     uint64_t UIApplication = r_class("UIApplication");
@@ -6094,11 +5436,6 @@ static bool stagestrip_install_or_refresh(int maxSlots)
 static bool stagestrip_pan_state_is_active(uint64_t state)
 {
     return state == 1 /* began */ || state == 2 /* changed */;
-}
-
-static bool stagestrip_pan_state_is_done(uint64_t state)
-{
-    return state == 3 /* ended */ || state == 4 /* cancelled */ || state == 5 /* failed */;
 }
 
 static bool stagestrip_read_picker_label(uint64_t label, char *out, size_t outLen)
@@ -6845,6 +6182,10 @@ void stagestrip_forget_remote_state(void)
     stagestrip_stop_control_loop();
     gStripLibraryBuildPending = 0;
     gStripWindow = 0;
+    // The shield window is cached like the others but was only cleared by the
+    // dismiss path: after a SpringBoard restart the next pick messaged an
+    // address from the old process.
+    gStripTransitionShieldWin = 0;
     gStripContainer = 0;
     gStripLaunchAddr = 0;
     gStripLiveScene = 0;

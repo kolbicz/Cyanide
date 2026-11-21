@@ -321,6 +321,13 @@ bool fontow_apply(FontOWTarget target, NSString *fontPath, NSString **result)
     // against the original (the file itself may hold a replaced font now).
     NSString *note = nil;
     NSData *originalForPatch = [NSData dataWithContentsOfFile:backup options:NSDataReadingMappedIfSafe error:nil];
+    NSString *sourceError = nil;
+    if (originalForPatch && !fontpatch_source_usable(originalForPatch, font, &sourceError)) {
+        *result = [NSString stringWithFormat:@"%@ can't be used as the %@: %@", fontPath.lastPathComponent,
+                   fontow_target_title(target).lowercaseString, sourceError];
+        log_user("[FONTOW] %s\n", (*result).UTF8String);
+        return false;
+    }
     if (originalForPatch && fontpatch_needed(originalForPatch, font)) {
         NSString *patchError = nil;
         NSData *adapted = fontpatch_adapt(originalForPatch, font, &patchError, &note);

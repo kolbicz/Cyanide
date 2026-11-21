@@ -28,6 +28,10 @@ void log_user(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void log_session_begin(void);
 void log_session_end(void);
 void log_session_flush(void);  // flush + fsync, keep file open for background tail
+void log_session_run_finished(void);  // flush, then slow the sync cadence and cap the background tail
+// Run cadence for an exploit run that starts while the file is in tail mode.
+BOOL log_session_critical_begin(void);
+void log_session_critical_end(BOOL switched);
 
 // Force the always-open live log (<Documents>/live.log) to media. Every line is
 // already fflush()'d (survives a normal close); call this to also make it

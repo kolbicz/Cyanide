@@ -1,1 +1,0 @@
-void xpf_common_init(void);

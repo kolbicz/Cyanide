@@ -661,6 +661,47 @@ static BOOL sbl_extract_zip(NSData *zip, NSString *destination, NSProgress *prog
     return YES;
 }
 
+// A ustar header holds 100 bytes of name (plus a 155-byte prefix). Longer
+// paths travel in a record placed before the entry: GNU tar's 'L' record (the
+// name itself) or a pax 'x' record ("<len> path=<name>\n" among other keys).
+// dpkg-built themes reach 100 bytes easily
+// (Library/Themes/<name>.theme/IconBundles/<bundle-id>-large.png), and with
+// these records skipped the file was written under its cut-off name: the
+// import "succeeded" with icons missing, or failed when two cut names collided.
+static const NSUInteger kSBLMaxTarPathRecordBytes = 16 * 1024;
+
+static NSString *sbl_tar_gnu_long_name(const uint8_t *bytes, NSUInteger size)
+{
+    NSUInteger n = 0;
+    while (n < size && bytes[n] != 0) n++;
+    return n ? [[NSString alloc] initWithBytes:bytes length:n encoding:NSUTF8StringEncoding] : nil;
+}
+
+// The "path" value of a pax extended header, or nil when it has none.
+static NSString *sbl_tar_pax_path(const uint8_t *bytes, NSUInteger size)
+{
+    NSString *path = nil;
+    NSUInteger pos = 0;
+    while (pos < size) {
+        // "<decimal length> <key>=<value>\n"; the length covers the whole record.
+        NSUInteger recordLength = 0, digits = 0;
+        while (pos + digits < size && bytes[pos + digits] >= '0' && bytes[pos + digits] <= '9' && digits < 10) {
+            recordLength = recordLength * 10 + (NSUInteger)(bytes[pos + digits] - '0');
+            digits++;
+        }
+        if (digits == 0 || pos + digits >= size || bytes[pos + digits] != ' ') break;
+        if (recordLength <= digits + 1 || recordLength > size - pos) break;
+        const uint8_t *body = bytes + pos + digits + 1;
+        NSUInteger bodyLength = recordLength - digits - 1;
+        if (bodyLength > 0 && body[bodyLength - 1] == '\n') bodyLength--;
+        if (bodyLength > 5 && memcmp(body, "path=", 5) == 0) {
+            path = [[NSString alloc] initWithBytes:body + 5 length:bodyLength - 5 encoding:NSUTF8StringEncoding];
+        }
+        pos += recordLength;
+    }
+    return path.length ? path : nil;
+}
+
 static BOOL sbl_extract_tar(NSData *tar, NSString *destination, NSProgress *progress, NSError **error)
 {
     const uint8_t *b = tar.bytes;
@@ -671,6 +712,7 @@ static BOOL sbl_extract_tar(NSData *tar, NSString *destination, NSProgress *prog
     uint64_t totalBytes = 0;
     BOOL ended = NO;
     NSMutableSet<NSString *> *explicitDirectories = [NSMutableSet set];
+    NSString *pendingLongName = nil;   // from an 'L' or pax record, for the next entry
 
     while (p + 512 <= len) {
         if (sbl_cancelled(progress, error)) return NO;
@@ -709,6 +751,28 @@ static BOOL sbl_extract_tar(NSData *tar, NSString *destination, NSProgress *prog
             return NO;
         }
 
+        if (type == 'L' || type == 'x') {
+            if (size > kSBLMaxTarPathRecordBytes) {
+                sbl_set_error(error, 33, @"TAR contains an over-long path record.");
+                return NO;
+            }
+            NSString *longName = type == 'L' ? sbl_tar_gnu_long_name(b + dataOff, size)
+                                             : sbl_tar_pax_path(b + dataOff, size);
+            if (type == 'L' && !longName) {
+                sbl_set_error(error, 33, @"TAR contains an unreadable long file name.");
+                return NO;
+            }
+            if (longName) pendingLongName = longName;
+            p = next;
+            continue;
+        }
+        if (type != 'K' && type != 'g' && pendingLongName) {
+            // The real path of this entry. It goes through the same
+            // sbl_safe_output_path check below as a header name does.
+            name = pendingLongName;
+            pendingLongName = nil;
+        }
+
         if (type == '0' || type == '\0') {
             if (size > kSBLMaxEntryBytes || totalBytes > kSBLMaxTotalBytes - size) {
                 sbl_set_error(error, 32, @"TAR contains a file larger than 64 MB or more than 256 MB in total.");
@@ -740,10 +804,11 @@ static BOOL sbl_extract_tar(NSData *tar, NSString *destination, NSProgress *prog
                 if (!sbl_create_directory_entry(outPath, explicitDirectories, error)) return NO;
             }
         }
-        // Everything else -- symlinks ('2'), hard links ('1'), pax ('x', 'g')
-        // and GNU long-name ('L', 'K') headers, device nodes -- is skipped,
+        // Everything else -- symlinks ('2'), hard links ('1'), global pax
+        // ('g') and GNU long-link ('K') headers, device nodes -- is skipped,
         // as before: nothing is created for it. Failing on these made normal
-        // .deb theme and passcode imports fail.
+        // .deb theme and passcode imports fail. Long names ('L') and pax path
+        // records ('x') are applied to the entry they describe, above.
         p = next;
     }
 

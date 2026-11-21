@@ -1175,7 +1175,9 @@ static BOOL cleaner_intro_accepted(void)
     BOOL busy = self.loading || self.cleaning;
     NSUInteger selectable = 0, selected = 0;
     for (CYCleanerItem *item in self.items) {
-        if (item.active || item.systemApp || item.totalBytes == 0) continue;
+        // Same rule as toggleSelectAll: a hand-picked custom target is not
+        // part of Select All, so it must not decide the menu's label either.
+        if (item.active || item.systemApp || (item.customRelative && !item.customAutoSelect) || item.totalBytes == 0) continue;
         selectable++;
         if (item.selected) selected++;
     }
@@ -1186,7 +1188,8 @@ static BOOL cleaner_intro_accepted(void)
     if (busy || !self.processListAvailable || selectable == 0) selectAll.attributes = UIMenuElementAttributesDisabled;
     NSUInteger large = 0;
     for (CYCleanerItem *item in self.items)
-        if (!item.active && !item.systemApp && item.totalBytes >= kCleanerLargeCacheBytes) large++;
+        if (!item.active && !item.systemApp && !(item.customRelative && !item.customAutoSelect) &&
+            item.totalBytes >= kCleanerLargeCacheBytes) large++;
     UIAction *selectLarge = [UIAction actionWithTitle:@"Select Large Caches (50 MB+)"
                                                 image:[UIImage systemImageNamed:@"externaldrive.badge.checkmark"]
                                            identifier:nil handler:^(UIAction *x) { [weakSelf selectLargeCaches:nil]; }];
@@ -1434,8 +1437,9 @@ static BOOL cleaner_intro_accepted(void)
                 [items addObject:item];
             }
 
-            // Custom targets (#18), in their app's current container. Never
-            // pre-selected; an app that isn't installed has nothing to show.
+            // Custom targets (#18), in their app's current container. Only
+            // the ones marked "Select Automatically" are pre-selected; an app
+            // that isn't installed has nothing to show.
             NSMutableDictionary<NSString *, FBAppContainer *> *byBundle = [NSMutableDictionary dictionary];
             for (FBAppContainer *c in containers) if (c.identifier.length) byBundle[c.identifier] = c;
             for (CYCleanerCustomTarget *target in cleaner_custom_targets()) {
@@ -1650,9 +1654,24 @@ static BOOL cleaner_intro_accepted(void)
     for (CYCleanerItem *item in self.items) if (item.selected && item.customRelative) customCount++;
     if (appCount > customCount)
         [message appendFormat:@" %lu app cache/temp folder%@.", (unsigned long)(appCount - customCount), appCount - customCount == 1 ? @"" : @"s"];
-    if (customCount > 0)
-        [message appendFormat:@" %lu item%@ you added (folders are emptied, files deleted; anything the app keeps there, like drafts, is lost).",
+    if (customCount > 0) {
+        [message appendFormat:@" %lu item%@ you added (folders are emptied, files deleted; anything the app keeps there, like drafts, is lost):",
          (unsigned long)customCount, customCount == 1 ? @"" : @"s"];
+        // Name them: these are not caches, and one marked "Select
+        // Automatically" may have been selected by the scan, not by hand.
+        static const NSUInteger kMaxNamed = 6;
+        NSUInteger named = 0;
+        for (CYCleanerItem *item in self.items) {
+            if (!item.selected || !item.customRelative) continue;
+            if (named == kMaxNamed) {
+                [message appendFormat:@"\n… and %lu more", (unsigned long)(customCount - named)];
+                break;
+            }
+            [message appendFormat:@"\n• %@: %@ (%@)", item.name ?: @"App", item.customRelative, cleaner_bytes(item.totalBytes)];
+            named++;
+        }
+        [message appendString:@"\n"];
+    }
     if (logsSelected) [message appendString:@" CrashReporter logs."];
     [message appendString:@" Apps may need to redownload content."];
     UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Clean Caches?"
@@ -2193,6 +2212,14 @@ static BOOL cleaner_intro_accepted(void)
                               @"path": root,
                               @"bytes": bytes }];
         }
+        return out;
+    }
+    if (item.customRelative) {
+        // A target the user added keeps its size in cacheBytes, but it is not
+        // Library/Caches: list the path that will really be emptied or deleted.
+        [out addObject:@{ @"title": item.customRelative,
+                          @"path": [item.container.path stringByAppendingPathComponent:item.customRelative],
+                          @"bytes": @(item.cacheBytes) }];
         return out;
     }
     if (item.cacheBytes > 0) {

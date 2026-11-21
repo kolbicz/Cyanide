@@ -149,7 +149,7 @@ static bool cr_ensure_backup_dir(void)
     return true;
 }
 
-static bool cr_backup_original_if_needed(NSString *targetPath, NSString *fileName)
+static bool cr_backup_original_if_needed(NSString *targetPath, NSString *fileName, NSData *silentPayload)
 {
     if (!cr_ensure_backup_dir()) return false;
 
@@ -173,6 +173,17 @@ static bool cr_backup_original_if_needed(NSString *targetPath, NSString *fileNam
                  fileName.UTF8String,
                  error.localizedDescription.UTF8String ?: "empty file");
         return false;
+    }
+
+    // The backup lives in the app's own folder and is gone after a reinstall,
+    // while the silenced file stays. Backing that up as "the original" made a
+    // later Restore write the silent file back and report success. If the
+    // target already is Cyanide's silent payload there is no original here to
+    // save: leave no backup, so Restore says so instead.
+    if (silentPayload.length > 0 && [data isEqualToData:silentPayload]) {
+        log_user("[CALLREC] %s is already the silent file and its original backup is gone; "
+                 "Restore cannot bring the original back.\n", fileName.UTF8String);
+        return true;
     }
 
     if (![data writeToFile:backupPath options:NSDataWritingAtomic error:&error]) {
@@ -309,7 +320,7 @@ static bool cr_disable_payloads(void)
             ok = false;
             continue;
         }
-        if (!cr_backup_original_if_needed(targetPath, payload->fileName)) {
+        if (!cr_backup_original_if_needed(targetPath, payload->fileName, data)) {
             ok = false;
             continue;
         }

@@ -140,8 +140,11 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
     if (self.package.repoURL.length == 0 || self.package.repoTweakID.length == 0) return NO;
     NSString *installed = [NSUserDefaults.standardUserDefaults
         stringForKey:repotweaks_installed_version_key(self.package.repoURL, self.package.repoTweakID)];
-    if (installed.length == 0 || self.package.version.length == 0) return NO;
-    return repotweaks_compare_versions(self.package.version, installed) == NSOrderedDescending;
+    if (installed.length == 0) return NO;
+    if (self.package.version.length > 0 &&
+        repotweaks_compare_versions(self.package.version, installed) == NSOrderedDescending) return YES;
+    // Same version number, different code: still an update the user decides on.
+    return quickloader_repo_tweak_has_changed_script(self.package.repoURL, self.package.repoTweakID);
 }
 
 - (void)reloadRepoOptions
@@ -337,19 +340,22 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
 
 - (UIMenu *)manualActionMenu
 {
+    // The menu is owned by self's navigation item, so its handlers take self
+    // weakly; a strong capture kept the detail page alive after it was popped.
+    __weak typeof(self) weakSelf = self;
     if (self.package.kind == PackageInstallKindNanoRegistry) {
         UIAction *apply = [UIAction actionWithTitle:@"Apply Pairing Override"
                                               image:[UIImage systemImageNamed:@"applewatch.radiowaves.left.and.right"]
                                          identifier:nil
                                             handler:^(__kindof UIAction *_) {
-            [self queueManualIntent:PackageQueueIntentInstall];
+            [weakSelf queueManualIntent:PackageQueueIntentInstall];
         }];
 
         UIAction *remove = [UIAction actionWithTitle:@"Remove Pairing Override"
                                                image:[UIImage systemImageNamed:@"xmark.circle"]
                                           identifier:nil
                                              handler:^(__kindof UIAction *_) {
-            [self queueManualIntent:PackageQueueIntentUninstall];
+            [weakSelf queueManualIntent:PackageQueueIntentUninstall];
         }];
         remove.attributes = UIMenuElementAttributesDestructive;
 
@@ -361,10 +367,12 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
                                                 image:[UIImage systemImageNamed:@"speaker.slash.fill"]
                                            identifier:nil
                                               handler:^(__kindof UIAction *_) {
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
             [PackageDetailViewController
-                presentCallRecordingDisclosureIfNeededFromViewController:self
+                presentCallRecordingDisclosureIfNeededFromViewController:strongSelf
                                                           confirmHandler:^{
-                [self queueManualIntent:PackageQueueIntentInstall];
+                [weakSelf queueManualIntent:PackageQueueIntentInstall];
             }];
         }];
         silence.attributes = UIMenuElementAttributesDestructive;
@@ -373,7 +381,7 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
                                                 image:[UIImage systemImageNamed:@"speaker.wave.2.fill"]
                                            identifier:nil
                                               handler:^(__kindof UIAction *_) {
-            [self queueManualIntent:PackageQueueIntentUninstall];
+            [weakSelf queueManualIntent:PackageQueueIntentUninstall];
         }];
 
         return [UIMenu menuWithTitle:@"Call Recording Sound" children:@[silence, restore]];
@@ -384,7 +392,7 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
                                              image:[UIImage systemImageNamed:@"line.3.horizontal"]
                                         identifier:nil
                                            handler:^(__kindof UIAction *_) {
-            [self queueManualIntent:PackageQueueIntentInstall];
+            [weakSelf queueManualIntent:PackageQueueIntentInstall];
         }];
         hide.attributes = UIMenuElementAttributesDestructive;
 
@@ -392,7 +400,7 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
                                                 image:[UIImage systemImageNamed:@"arrow.clockwise"]
                                            identifier:nil
                                               handler:^(__kindof UIAction *_) {
-            [self queueManualIntent:PackageQueueIntentUninstall];
+            [weakSelf queueManualIntent:PackageQueueIntentUninstall];
         }];
 
         return [UIMenu menuWithTitle:@"Home Bar" children:@[hide, restore]];
@@ -402,7 +410,7 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
                                             image:[UIImage systemImageNamed:@"icloud.slash"]
                                        identifier:nil
                                           handler:^(__kindof UIAction *_) {
-        [self queueManualIntent:PackageQueueIntentInstall];
+        [weakSelf queueManualIntent:PackageQueueIntentInstall];
     }];
     disable.attributes = UIMenuElementAttributesDestructive;
 
@@ -410,7 +418,7 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
                                            image:[UIImage systemImageNamed:@"icloud"]
                                       identifier:nil
                                          handler:^(__kindof UIAction *_) {
-        [self queueManualIntent:PackageQueueIntentUninstall];
+        [weakSelf queueManualIntent:PackageQueueIntentUninstall];
     }];
 
     return [UIMenu menuWithTitle:@"OTA Updates" children:@[disable, enable]];
@@ -506,6 +514,14 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
                                              selector:@selector(queueDidChange:)
                                                  name:kSettingsActionsDidCompleteNotification
                                                object:nil];
+}
+
+- (void)viewWillDisappear:(BOOL)animated
+{
+    [super viewWillDisappear:animated];
+    // A text option is saved when its field stops editing; make sure that
+    // happens before the page goes away.
+    [self.view endEditing:YES];
 }
 
 - (void)dealloc
@@ -911,7 +927,14 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
     NSString *valuesKey = repotweaks_values_defaults_key(self.package.repoURL, self.package.repoTweakID);
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
 
+    // These cells and their controls are owned by self's table, so nothing
+    // below may hold self (or the control it is attached to) strongly: that
+    // kept every opened options page alive, reloading on each notification.
+    // Handlers read their control from the action's sender instead.
+    __weak typeof(self) weakSelf = self;
     void (^saveValues)(void) = ^{
+        typeof(self) self = weakSelf;
+        if (!self) return;
         [d setObject:self.repoValues forKey:valuesKey];
         if (self.package.isInstalled) {
             if (self.package.repoNativeEnabledKey.length > 0) {
@@ -930,8 +953,10 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
     if ([type isEqualToString:@"switch"]) {
         UISwitch *sw = [[UISwitch alloc] init];
         sw.on = [currentValue isEqualToString:@"true"] || [currentValue boolValue];
-        [sw addAction:[UIAction actionWithHandler:^(__kindof UIAction *_) {
-            self.repoValues[varName] = sw.isOn ? @"true" : @"false";
+        [sw addAction:[UIAction actionWithHandler:^(__kindof UIAction *action) {
+            UISwitch *control = (UISwitch *)action.sender;
+            if (![control isKindOfClass:UISwitch.class]) return;
+            weakSelf.repoValues[varName] = control.isOn ? @"true" : @"false";
             saveValues();
         }] forControlEvents:UIControlEventValueChanged];
         cell.accessoryView = sw;
@@ -943,10 +968,22 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
         tf.textAlignment = NSTextAlignmentRight;
         tf.textColor = UIColor.secondaryLabelColor;
         tf.text = currentValue;
-        [tf addAction:[UIAction actionWithHandler:^(__kindof UIAction *_) {
-            self.repoValues[varName] = tf.text ?: @"";
-            saveValues();
+        // Typing only updates the value. Saving posts the queue-change
+        // notification, which reloads this table and replaces the (unreused)
+        // cell being typed in -- so a save per keystroke closed the keyboard
+        // after every character and recompiled the script each time. Save
+        // once, when editing ends.
+        [tf addAction:[UIAction actionWithHandler:^(__kindof UIAction *action) {
+            UITextField *control = (UITextField *)action.sender;
+            if (![control isKindOfClass:UITextField.class]) return;
+            weakSelf.repoValues[varName] = control.text ?: @"";
         }] forControlEvents:UIControlEventEditingChanged];
+        [tf addAction:[UIAction actionWithHandler:^(__kindof UIAction *action) {
+            UITextField *control = (UITextField *)action.sender;
+            if (![control isKindOfClass:UITextField.class]) return;
+            weakSelf.repoValues[varName] = control.text ?: @"";
+            saveValues();
+        }] forControlEvents:UIControlEventEditingDidEnd | UIControlEventEditingDidEndOnExit];
         cell.accessoryView = tf;
         return cell;
     }
@@ -956,8 +993,10 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
         well.translatesAutoresizingMaskIntoConstraints = NO;
         well.title = pkgdetail_string_or_empty(param[@"label"]);
         well.selectedColor = pkgdetail_color_from_hex(currentValue.length ? currentValue : @"#FF0000");
-        [well addAction:[UIAction actionWithHandler:^(__kindof UIAction *_) {
-            self.repoValues[varName] = pkgdetail_hex_from_color(well.selectedColor);
+        [well addAction:[UIAction actionWithHandler:^(__kindof UIAction *action) {
+            UIColorWell *control = (UIColorWell *)action.sender;
+            if (![control isKindOfClass:UIColorWell.class]) return;
+            weakSelf.repoValues[varName] = pkgdetail_hex_from_color(control.selectedColor);
             saveValues();
         }] forControlEvents:UIControlEventValueChanged];
         [cell.contentView addSubview:well];
@@ -998,11 +1037,14 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
         [stack addArrangedSubview:slider];
         [stack addArrangedSubview:valueLabel];
 
-        [slider addAction:[UIAction actionWithHandler:^(__kindof UIAction *_) {
-            updateLabel(slider.value);
+        [slider addAction:[UIAction actionWithHandler:^(__kindof UIAction *action) {
+            UISlider *control = (UISlider *)action.sender;
+            if ([control isKindOfClass:UISlider.class]) updateLabel(control.value);
         }] forControlEvents:UIControlEventValueChanged];
-        [slider addAction:[UIAction actionWithHandler:^(__kindof UIAction *_) {
-            self.repoValues[varName] = [NSString stringWithFormat:@"%.2f", slider.value];
+        [slider addAction:[UIAction actionWithHandler:^(__kindof UIAction *action) {
+            UISlider *control = (UISlider *)action.sender;
+            if (![control isKindOfClass:UISlider.class]) return;
+            weakSelf.repoValues[varName] = [NSString stringWithFormat:@"%.2f", control.value];
             saveValues();
         }] forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
         cell.accessoryView = stack;

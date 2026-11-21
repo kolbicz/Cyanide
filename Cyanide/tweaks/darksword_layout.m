@@ -54,11 +54,6 @@ static int ds_layout_ios_major(void)
 //     for spacing, setIconImageInfo: on each SBIconView for scaling.
 //     setIconImageInfo: still exists on iOS 26's SBIconView, and
 //     SBIconListView.setFrame: is a regular UIView setter.
-static bool darksword_layout_supported_on_current_ios(void)
-{
-    (void)0;
-    return true; // both branches now handled
-}
 
 typedef struct {
     double top;
@@ -73,16 +68,6 @@ typedef struct {
     double width;
     double height;
 } RC_CGRect;
-
-static void r_send_rect_main_local(uint64_t obj, const char *selName,
-                                   double x, double y, double w, double h)
-{
-    if (!r_is_objc_ptr(obj)) return;
-    RC_CGRect rect = { x, y, w, h };
-    r_msg2_main_raw(obj, selName,
-                    &rect, sizeof(rect),
-                    NULL, 0, NULL, 0, NULL, 0);
-}
 
 typedef struct {
     double width;

@@ -947,6 +947,23 @@ static BOOL pt_backup_name_looks_usable(NSString *name)
     return settings_passcode_digit_for_filename(name).length > 0;
 }
 
+static BOOL pt_png_is_renderable(NSData *data);
+
+// Restore writes a backup to the Lock Screen keypad cache byte for byte. A
+// backup made on this device was read from that cache, but an imported one
+// comes from a file the user picked, so it gets the proof a style digit gets
+// (pt_normalized_png_data): PNG magic, sane pixel dimensions, and a forced
+// decode. Without it, any bytes under a matching "…TelephonyUI…png.orig" name
+// would become keypad art on the next Restore.
+static BOOL pt_imported_backup_is_keypad_image(NSData *data)
+{
+    static const uint8_t pngMagic[8] = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+    if (data.length < sizeof(pngMagic) || data.length > kPTMaxDigitBytes) return NO;
+    if (memcmp(data.bytes, pngMagic, sizeof(pngMagic)) != 0) return NO;
+    if (!SBLImageDataPassesPixelPreflight(data)) return NO;
+    return pt_png_is_renderable(data);
+}
+
 NSUInteger settings_passcode_import_backup_items(NSArray<NSURL *> *items,
                                                  NSUInteger *skippedOut,
                                                  NSUInteger *failedOut,
@@ -1085,6 +1102,14 @@ NSUInteger settings_passcode_import_backup_items(NSArray<NSURL *> *items,
                            partialStat.st_size == sourceStat.st_size;
         if (!sizeMatches) {
             log_user("[PASSCODE] Import of %s did not verify; discarded.\n", name.UTF8String);
+            [fm removeItemAtPath:partial error:nil];
+            failed++;
+            continue;
+        }
+
+        if (!pt_imported_backup_is_keypad_image(pt_read_file(partial))) {
+            log_user("[PASSCODE] Skipping %s: it is not a PNG image that can be drawn, so it cannot be a keypad backup.\n",
+                     name.UTF8String);
             [fm removeItemAtPath:partial error:nil];
             failed++;
             continue;

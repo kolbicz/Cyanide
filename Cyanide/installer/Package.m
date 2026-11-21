@@ -115,7 +115,7 @@ static BOOL PackageRepoScriptRequiresNativeBridge(NSString *rawScript)
 - (NSString *)repoNativeEnabledKey
 {
     if (self.kind != PackageInstallKindRepoTweak) return nil;
-    return repotweaks_native_enabled_key(self.repoTweakID);
+    return repotweaks_native_enabled_key(self.repoURL, self.repoTweakID);
 }
 
 - (BOOL)repoTweakUsesQuickLoader

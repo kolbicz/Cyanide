@@ -131,6 +131,20 @@ static NSString *quickloader_compiled_script_for_raw_script(NSString *rawScript,
     return finalScript;
 }
 
+// QuickLoader runs one script. When that slot goes to another repo tweak, to a
+// local .js, or is cleared, the repo tweak that had it is not installed any
+// more -- but its "installed version" key stayed, so Sources kept showing an
+// update badge and an Update button for a tweak that was not installed (and
+// tapping it replaced the current one). Pass the new owner, or nil for none.
+void quickloader_forget_previous_repo_owner(NSString *newRepoURL, NSString *newTweakID) {
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    NSString *oldRepo = quickloader_string_or_empty([d stringForKey:kQuickLoaderSourceRepoURLKey]);
+    NSString *oldID = quickloader_string_or_empty([d stringForKey:kQuickLoaderSourceTweakIDKey]);
+    if (oldRepo.length == 0 || oldID.length == 0) return;
+    if ([oldRepo isEqualToString:newRepoURL ?: @""] && [oldID isEqualToString:newTweakID ?: @""]) return;
+    [d removeObjectForKey:repotweaks_installed_version_key(oldRepo, oldID)];
+}
+
 static bool quickloader_save_repo_tweak_internal(NSString *repoURL,
                                                  NSString *tweakID,
                                                  NSString *displayName,
@@ -147,6 +161,7 @@ static bool quickloader_save_repo_tweak_internal(NSString *repoURL,
     if (compiled.length == 0) return false;
 
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    quickloader_forget_previous_repo_owner(safeRepo, safeID);
     [d setObject:safeName.length ? safeName : safeID forKey:@"QuickLoaderSourceScriptName"];
     [d setObject:rawScript forKey:@"QuickLoaderSourceRawJS"];
     [d setObject:mutableValues forKey:@"QuickLoaderSourceValues"];
@@ -224,15 +239,27 @@ bool quickloader_refresh_active_repo_tweak(void) {
     NSString *tweakID = quickloader_string_or_empty([d stringForKey:kQuickLoaderSourceTweakIDKey]);
     if (repoURL.length == 0 || tweakID.length == 0) return false;
 
-    NSString *rawScript = [d stringForKey:repotweaks_script_defaults_key(repoURL, tweakID)];
+    // Run the copy the user installed or last updated (Package's install path
+    // stores it through quickloader_save_repo_tweak), not the source cache. The
+    // cache is rewritten by every source refresh -- at launch and every three
+    // hours -- so reading it here made a changed script run on the next Apply
+    // with no badge and no tap, although repo updates are meant to be
+    // user-driven (see PackageShouldAutoQueueForApply). A newer cached script
+    // now only shows as an update (quickloader_repo_tweak_has_changed_script).
+    NSString *rawScript = [d stringForKey:@"QuickLoaderSourceRawJS"];
     if (rawScript.length == 0) {
-        log_user("[QuickLoader] Selected repo package script is missing; refresh its source first.\n");
-        return false;
-    }
-    if (!repotweaks_cached_script_is_current(repoURL, tweakID)) {
-        log_user("[QuickLoader] Selected repo package script is out of date (its download failed); "
-                 "refresh its source first.\n");
-        return false;
+        // State from before the installed copy was kept: fall back to the
+        // cache once; the save below then records it as the installed copy.
+        rawScript = [d stringForKey:repotweaks_script_defaults_key(repoURL, tweakID)];
+        if (rawScript.length == 0) {
+            log_user("[QuickLoader] Selected repo package script is missing; refresh its source first.\n");
+            return false;
+        }
+        if (!repotweaks_cached_script_is_current(repoURL, tweakID)) {
+            log_user("[QuickLoader] Selected repo package script is out of date (its download failed); "
+                     "refresh its source first.\n");
+            return false;
+        }
     }
 
     NSDictionary *values = [d dictionaryForKey:repotweaks_values_defaults_key(repoURL, tweakID)] ?: @{};
@@ -245,6 +272,18 @@ bool quickloader_refresh_active_repo_tweak(void) {
                                                 NO);
 }
 
+
+bool quickloader_repo_tweak_has_changed_script(NSString *repoURL, NSString *tweakID) {
+    // Only the installed tweak has a pinned copy to compare against.
+    if (!quickloader_is_repo_tweak_installed(repoURL, tweakID)) return false;
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    NSString *installed = [d stringForKey:@"QuickLoaderSourceRawJS"];
+    NSString *cached = [d stringForKey:repotweaks_script_defaults_key(repoURL, tweakID)];
+    if (installed.length == 0 || cached.length == 0) return false;
+    // A cache whose download failed is not an update to offer.
+    if (!repotweaks_cached_script_is_current(repoURL, tweakID)) return false;
+    return ![installed isEqualToString:cached];
+}
 
 // ==========================================
 // Global variables for js daemon and kill switch
@@ -607,6 +646,11 @@ bool quickloader_run_js_string(NSString *jsCode) {
                 return @(NO);
             }
             uint64_t offset = offsetValue ? js_to_uint64(offsetValue) : 0;
+            // Only the page Hide Home Bar zeroes; see the same check in RepoTweaks.m.
+            if (offset != 0) {
+                log_user("[QuickLoader] dz_zero_system_file_page refused: only offset 0 is allowed.\n");
+                return @(NO);
+            }
             log_user("[QuickLoader] Stable page-zero request: %s offset=%llu\n",
                      path.UTF8String,
                      (unsigned long long)offset);

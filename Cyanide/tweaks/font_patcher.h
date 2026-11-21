@@ -27,6 +27,13 @@
 // weight axes and source doesn't, or target is a collection).
 BOOL fontpatch_needed(NSData *target, NSData *source);
 
+// Whether `source` can replace `target` at all. fontpatch_needed answers NO
+// both for "nothing to adapt" and for "source could not be read", so on its
+// own it let a damaged file, a non-font with a font's extension or a static
+// CFF font skip adaptation and be written over the system font as it was.
+// NO with *why (the parser's reason) for those.
+BOOL fontpatch_source_usable(NSData *target, NSData *source, NSString **why);
+
 // Whether `font` came out of fontpatch_adapt (it may still carry Apple's
 // names).
 BOOL fontpatch_is_adapted(NSData *font);

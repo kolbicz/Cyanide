@@ -362,7 +362,12 @@ BOOL tendies_remove(NSArray<NSString *> *paths, NSString **message)
         BOOL inside = extensions.length && [standard hasPrefix:[extensions stringByAppendingString:@"/"]] &&
                       [standard.stringByDeletingLastPathComponent.lastPathComponent isEqualToString:@"descriptors"];
         if (!inside) {
+            // Not deleted, so not forgotten either: dropping the entry here
+            // emptied the list while the wallpaper stayed on disk (for
+            // example after an iOS update moved PosterBoard's store), with no
+            // way left to remove it from the app.
             printf("[TENDIES] not removing unexpected path %s\n", path.UTF8String);
+            [keep addObject:item];
             failed++;
             continue;
         }

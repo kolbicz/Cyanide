@@ -12,11 +12,23 @@
 typedef NS_ENUM(NSInteger, PLType) {
     PLTypeDictionary, PLTypeArray, PLTypeString, PLTypeInteger,
     PLTypeReal, PLTypeBoolean, PLTypeDate, PLTypeData,
+    // Anything else a binary plist can hold, in practice the CFKeyedArchiverUID
+    // references of an NSKeyedArchiver file. Shown, never edited or converted:
+    // it is not one of the classes above, so treating it as a string crashes.
+    // Kept last and out of pl_type_names(), so the Add and Change Type menus
+    // never offer it.
+    PLTypeOpaque,
 };
 
 static NSArray<NSString *> *pl_type_names(void)
 {
     return @[ @"Dictionary", @"Array", @"String", @"Integer", @"Real", @"Boolean", @"Date", @"Data" ];
+}
+
+static NSString *pl_type_name(PLType t)
+{
+    NSArray<NSString *> *names = pl_type_names();
+    return (t >= 0 && (NSUInteger)t < names.count) ? names[(NSUInteger)t] : @"Reference";
 }
 
 static PLType pl_type_of(id v)
@@ -30,7 +42,7 @@ static PLType pl_type_of(id v)
         if (CFGetTypeID((__bridge CFTypeRef)v) == CFBooleanGetTypeID()) return PLTypeBoolean;
         return CFNumberIsFloatType((__bridge CFNumberRef)v) ? PLTypeReal : PLTypeInteger;
     }
-    return PLTypeString;
+    return PLTypeOpaque;
 }
 
 static BOOL pl_is_container(id v)
@@ -97,6 +109,10 @@ static NSString *pl_summary(id v)
             NSData *d = v;
             return [NSString stringWithFormat:@"%lu bytes  %@", (unsigned long)d.length, pl_hex(d, 12)];
         }
+        case PLTypeOpaque: {
+            NSString *s = [[v description] stringByReplacingOccurrencesOfString:@"\n" withString:@" "] ?: @"";
+            return s.length > 80 ? [[s substringToIndex:80] stringByAppendingString:@"…"] : s;
+        }
     }
     return @"";
 }
@@ -112,6 +128,7 @@ static id pl_default_value(PLType t)
         case PLTypeBoolean:    return @NO;
         case PLTypeDate:       return [NSDate date];
         case PLTypeData:       return [NSData data];
+        case PLTypeOpaque:     break;
     }
     return @"";
 }
@@ -121,6 +138,9 @@ static id pl_convert(id v, PLType to)
 {
     PLType from = pl_type_of(v);
     if (from == to) return v;
+    // A reference has no meaningful conversion; replacing it with a default
+    // value would silently break the archive it belongs to.
+    if (from == PLTypeOpaque || to == PLTypeOpaque) return v;
     NSString *asString = [v isKindOfClass:NSString.class] ? v
                        : [v isKindOfClass:NSNumber.class] ? [(NSNumber *)v stringValue] : nil;
     switch (to) {
@@ -241,6 +261,7 @@ static const NSUInteger kPLMaxDataEditBytes = 64 * 1024;
     // and editing a multi-MB hex string on the main thread isn't usable.
     BOOL bigData = t == PLTypeData && [(NSData *)self.value length] > kPLMaxDataEditBytes;
     if (bigData) self.editable = NO;
+    if (t == PLTypeOpaque) self.editable = NO;
 
     if (t == PLTypeDate) {
         self.datePicker = [UIDatePicker new];
@@ -669,9 +690,28 @@ static const NSUInteger kPLMaxDataEditBytes = 64 * 1024;
                 doc.original = fresh.original;
                 doc.identity = fresh.identity;
                 doc.dirty = NO;
-                self.container = doc.root;
-                [self.tableView setEditing:NO animated:NO];
-                [self reloadRows];
+                // The whole tree was replaced, so every level showing this
+                // document is stale, not only this one. Reverting from a
+                // nested level used to leave the levels above on the old
+                // tree: edits made there marked the document dirty, and Save
+                // then wrote the untouched new tree and reported success.
+                // Go back to the document's first level and show the new root.
+                PlistEditorViewController *first = self;
+                for (UIViewController *vc in self.navigationController.viewControllers) {
+                    if ([vc isKindOfClass:PlistEditorViewController.class] &&
+                        ((PlistEditorViewController *)vc).doc == doc) {
+                        first = (PlistEditorViewController *)vc;
+                        break;
+                    }
+                }
+                first.container = doc.root;
+                [first.tableView setEditing:NO animated:NO];
+                [first reloadRows];
+                [first updateBarButtons];
+                if (first != self) {
+                    [self.navigationController popToViewController:first animated:YES];
+                    return;
+                }
                 [self updateBarButtons];
             });
         });
@@ -790,7 +830,7 @@ static const NSUInteger kPLMaxDataEditBytes = 64 * 1024;
     PLType t = pl_type_of(value);
     cell.textLabel.text = [self labelForRow:row];
     cell.textLabel.textColor = UIColor.labelColor;
-    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ · %@", pl_type_names()[t], pl_summary(value)];
+    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@ · %@", pl_type_name(t), pl_summary(value)];
     cell.selectionStyle = UITableViewCellSelectionStyleDefault;
     cell.accessoryType = pl_is_container(value) ? UITableViewCellAccessoryDisclosureIndicator
                                                 : UITableViewCellAccessoryNone;
@@ -879,7 +919,7 @@ static const NSUInteger kPLMaxDataEditBytes = 64 * 1024;
                 [edit addObject:[UIAction actionWithTitle:@"Rename Key" image:[UIImage systemImageNamed:@"pencil"]
                                                identifier:nil handler:^(UIAction *a) { [self renameRow:row]; }]];
             }
-            [edit addObject:[self typeMenuForRow:row]];
+            if (pl_type_of(value) != PLTypeOpaque) [edit addObject:[self typeMenuForRow:row]];
             UIAction *del = [UIAction actionWithTitle:@"Delete" image:[UIImage systemImageNamed:@"trash"]
                                            identifier:nil handler:^(UIAction *a) { [self deleteRow:row]; }];
             del.attributes = UIMenuElementAttributesDestructive;

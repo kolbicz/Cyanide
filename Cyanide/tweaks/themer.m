@@ -330,18 +330,6 @@ static uint64_t themer_lookup_class(const char *name)
     return cls;
 }
 
-static uint64_t themer_method_imp(uint64_t cls, const char *selName)
-{
-    if (!r_is_objc_ptr(cls) || !selName) return 0;
-    uint64_t sel = r_sel(selName);
-    if (!sel) return 0;
-    uint64_t method = r_dlsym_call(R_TIMEOUT, "class_getInstanceMethod",
-                                   cls, sel, 0, 0, 0, 0, 0, 0);
-    if (!method) return 0;
-    return r_dlsym_call(R_TIMEOUT, "method_getImplementation",
-                        method, 0, 0, 0, 0, 0, 0, 0);
-}
-
 static bool themer_add_method(uint64_t cls, const char *selName,
                               uint64_t imp, const char *types)
 {
@@ -725,46 +713,6 @@ static uint64_t themer_build_remote_uiimage_from_data(NSData *bytes, const char 
     return image;
 }
 
-static uint64_t themer_ensure_datasource_class(void)
-{
-    static uint64_t cls = 0;
-    if (r_is_objc_ptr(cls)) return cls;
-
-    cls = themer_lookup_class("CNDIconLayerDataSource");
-    if (r_is_objc_ptr(cls)) return cls;
-
-    uint64_t NSObject = r_class("NSObject");
-    if (!r_is_objc_ptr(NSObject)) return 0;
-
-    uint64_t name = r_alloc_str("CNDIconLayerDataSource");
-    if (!name) return 0;
-    cls = r_dlsym_call(R_TIMEOUT, "objc_allocateClassPair",
-                       NSObject, name, 0, 0, 0, 0, 0, 0);
-    r_free(name);
-    if (!r_is_objc_ptr(cls)) return 0;
-
-    uint64_t getAssocImp = themer_remote_symbol_addr("objc_getAssociatedObject");
-    bool ok = getAssocImp &&
-        themer_add_method(cls, "icon:imageWithInfo:traitCollection:options:",
-                          getAssocImp, "@@:@@@Q") &&
-        themer_add_method(cls, "icon:layerWithInfo:traitCollection:options:",
-                          getAssocImp, "@@:@@@Q") &&
-        themer_add_method(cls, "icon:displayNameForLocation:",
-                          getAssocImp, "@@:@q") &&
-        themer_add_method(cls, "icon:accessibilityLabelForLocation:",
-                          getAssocImp, "@@:@q");
-
-    r_dlsym_call(R_TIMEOUT, "objc_registerClassPair",
-                 cls, 0, 0, 0, 0, 0, 0, 0);
-
-    if (!ok) {
-        printf("[THEMER] model graft: datasource class incomplete getAssoc=0x%llx\n",
-               (unsigned long long)getAssocImp);
-        return 0;
-    }
-    return cls;
-}
-
 static double themer_icon_width_for_view(uint64_t iconView)
 {
     uint64_t iiv = r_ivar_value(iconView, "_iconImageView");
@@ -1096,170 +1044,6 @@ static bool themer_pin_dynamic_overlay(uint64_t iconView, uint64_t image,
     }
 
     return true;
-}
-
-static uint64_t themer_make_datasource(uint64_t image, double width)
-{
-    if (!r_is_objc_ptr(image)) return 0;
-    uint64_t dsCls = themer_ensure_datasource_class();
-    if (!r_is_objc_ptr(dsCls)) return 0;
-
-    uint64_t alloc = r_msg2(dsCls, "alloc", 0, 0, 0, 0);
-    uint64_t ds = r_is_objc_ptr(alloc)
-        ? r_msg2_main(alloc, "init", 0, 0, 0, 0) : 0;
-    if (!r_is_objc_ptr(ds)) return 0;
-
-    uint64_t layerCls = r_class("CALayer");
-    uint64_t layerAlloc = r_is_objc_ptr(layerCls)
-        ? r_msg2(layerCls, "alloc", 0, 0, 0, 0) : 0;
-    uint64_t layer = r_is_objc_ptr(layerAlloc)
-        ? r_msg2_main(layerAlloc, "init", 0, 0, 0, 0) : 0;
-    if (!r_is_objc_ptr(layer)) {
-        r_msg2(ds, "release", 0, 0, 0, 0);
-        return 0;
-    }
-
-    uint64_t cgImage = r_responds_main(image, "CGImage")
-        ? r_msg2_main(image, "CGImage", 0, 0, 0, 0) : 0;
-    if (cgImage && r_responds_main(layer, "setContents:")) {
-        r_msg2_main(layer, "setContents:", cgImage, 0, 0, 0);
-    }
-
-    struct { double x, y, w, h; } bounds = {0.0, 0.0, width, width};
-    if (r_responds_main(layer, "setBounds:")) {
-        r_msg2_main_raw(layer, "setBounds:",
-            &bounds, sizeof(bounds),
-            NULL, 0, NULL, 0, NULL, 0);
-    }
-
-    double radius = width * 0.225;
-    if (r_responds_main(layer, "setCornerRadius:")) {
-        r_msg2_main_raw(layer, "setCornerRadius:",
-            &radius, sizeof(radius),
-            NULL, 0, NULL, 0, NULL, 0);
-    }
-    if (r_responds_main(layer, "setMasksToBounds:")) {
-        r_msg2_main(layer, "setMasksToBounds:", 1, 0, 0, 0);
-    }
-
-    double scale = 3.0;
-    uint64_t UIScreen = r_class("UIScreen");
-    uint64_t screen = r_is_objc_ptr(UIScreen)
-        ? r_msg2(UIScreen, "mainScreen", 0, 0, 0, 0) : 0;
-    if (r_is_objc_ptr(screen) && r_responds_main(screen, "scale")) {
-        uint64_t bits = r_msg2_main(screen, "scale", 0, 0, 0, 0);
-        memcpy(&scale, &bits, sizeof(scale));
-    }
-    if (r_responds_main(layer, "setContentsScale:")) {
-        r_msg2_main_raw(layer, "setContentsScale:",
-            &scale, sizeof(scale),
-            NULL, 0, NULL, 0, NULL, 0);
-    }
-
-    uint64_t imageSel = r_sel("icon:imageWithInfo:traitCollection:options:");
-    if (imageSel) {
-        r_dlsym_call(R_TIMEOUT, "objc_setAssociatedObject",
-                     ds, imageSel, image, 1, 0, 0, 0, 0);
-    }
-    uint64_t layerSel = r_sel("icon:layerWithInfo:traitCollection:options:");
-    if (layerSel) {
-        r_dlsym_call(R_TIMEOUT, "objc_setAssociatedObject",
-                     ds, layerSel, layer, 1, 0, 0, 0, 0);
-    }
-    r_msg2(layer, "release", 0, 0, 0, 0);
-    return ds;
-}
-
-static uint64_t themer_make_icon_layer(uint64_t image, double width)
-{
-    if (!r_is_objc_ptr(image)) return 0;
-
-    uint64_t layerCls = r_class("CALayer");
-    uint64_t layerAlloc = r_is_objc_ptr(layerCls)
-        ? r_msg2(layerCls, "alloc", 0, 0, 0, 0) : 0;
-    uint64_t layer = r_is_objc_ptr(layerAlloc)
-        ? r_msg2_main(layerAlloc, "init", 0, 0, 0, 0) : 0;
-    if (!r_is_objc_ptr(layer)) return 0;
-
-    uint64_t cgImage = r_responds_main(image, "CGImage")
-        ? r_msg2_main(image, "CGImage", 0, 0, 0, 0) : 0;
-    if (cgImage && r_responds_main(layer, "setContents:")) {
-        r_msg2_main(layer, "setContents:", cgImage, 0, 0, 0);
-    }
-
-    struct { double x, y, w, h; } bounds = {0.0, 0.0, width, width};
-    if (r_responds_main(layer, "setBounds:")) {
-        r_msg2_main_raw(layer, "setBounds:",
-            &bounds, sizeof(bounds),
-            NULL, 0, NULL, 0, NULL, 0);
-    }
-
-    double radius = width * 0.225;
-    if (r_responds_main(layer, "setCornerRadius:")) {
-        r_msg2_main_raw(layer, "setCornerRadius:",
-            &radius, sizeof(radius),
-            NULL, 0, NULL, 0, NULL, 0);
-    }
-    if (r_responds_main(layer, "setMasksToBounds:")) {
-        r_msg2_main(layer, "setMasksToBounds:", 1, 0, 0, 0);
-    }
-
-    double scale = 3.0;
-    uint64_t UIScreen = r_class("UIScreen");
-    uint64_t screen = r_is_objc_ptr(UIScreen)
-        ? r_msg2(UIScreen, "mainScreen", 0, 0, 0, 0) : 0;
-    if (r_is_objc_ptr(screen) && r_responds_main(screen, "scale")) {
-        uint64_t bits = r_msg2_main(screen, "scale", 0, 0, 0, 0);
-        memcpy(&scale, &bits, sizeof(scale));
-    }
-    if (r_responds_main(layer, "setContentsScale:")) {
-        r_msg2_main_raw(layer, "setContentsScale:",
-            &scale, sizeof(scale),
-            NULL, 0, NULL, 0, NULL, 0);
-    }
-
-    return layer;
-}
-
-static uint64_t themer_copy_icon_label(uint64_t icon)
-{
-    if (!r_is_objc_ptr(icon)) return 0;
-
-    uint64_t label = 0;
-    if (r_responds_main(icon, "displayNameForLocation:")) {
-        label = r_msg2_main(icon, "displayNameForLocation:", 0, 0, 0, 0);
-    }
-    if (!r_is_objc_ptr(label) && r_responds_main(icon, "displayName")) {
-        label = r_msg2_main(icon, "displayName", 0, 0, 0, 0);
-    }
-    if (!r_is_objc_ptr(label) && r_responds_main(icon, "application")) {
-        uint64_t app = r_msg2_main(icon, "application", 0, 0, 0, 0);
-        if (r_is_objc_ptr(app) && r_responds_main(app, "displayName")) {
-            label = r_msg2_main(app, "displayName", 0, 0, 0, 0);
-        }
-    }
-    if (!r_is_objc_ptr(label)) return 0;
-    return r_msg2(label, "copy", 0, 0, 0, 0);
-}
-
-static void themer_seed_datasource_metadata(uint64_t ds, uint64_t icon)
-{
-    if (!r_is_objc_ptr(ds) || !r_is_objc_ptr(icon)) return;
-
-    uint64_t label = themer_copy_icon_label(icon);
-    if (!r_is_objc_ptr(label)) return;
-
-    uint64_t displaySel = r_sel("icon:displayNameForLocation:");
-    if (displaySel) {
-        r_dlsym_call(R_TIMEOUT, "objc_setAssociatedObject",
-                     ds, displaySel, label, 1, 0, 0, 0, 0);
-    }
-    uint64_t axSel = r_sel("icon:accessibilityLabelForLocation:");
-    if (axSel) {
-        r_dlsym_call(R_TIMEOUT, "objc_setAssociatedObject",
-                     ds, axSel, label, 1, 0, 0, 0, 0);
-    }
-    r_msg2(label, "release", 0, 0, 0, 0);
 }
 
 static uint64_t themer_ensure_model_class(uint64_t currentClass)
@@ -2357,32 +2141,6 @@ bool themer_repaint_visible_theme_views_in_session(void)
            (unsigned long)activeData.count,
            (unsigned long long)elapsed);
     return applied > 0;
-}
-
-static NSSet<NSString *> *themer_collect_visible_bundles(void)
-{
-    uint64_t listViewCls = r_class("SBIconListView");
-    uint64_t iconViewCls = r_class("SBIconView");
-    if (!r_is_objc_ptr(listViewCls) || !r_is_objc_ptr(iconViewCls)) return [NSSet set];
-
-    enum { LV_CAP = 64 };
-    uint64_t lvs[LV_CAP];
-    int nlv = sb_collect_views_in_windows_main(listViewCls, lvs, LV_CAP);
-    if (nlv == 0) return [NSSet set];
-
-    NSMutableSet<NSString *> *bundles = [NSMutableSet set];
-    for (int i = 0; i < nlv; i++) {
-        enum { IV_CAP = 64 };
-        uint64_t ivs[IV_CAP];
-        int n = sb_collect_views_main(lvs[i], iconViewCls, ivs, IV_CAP);
-        for (int j = 0; j < n; j++) {
-            char bundle[128] = {0};
-            if (themer_read_bundle_for_iconview(ivs[j], bundle, sizeof(bundle)) && bundle[0]) {
-                [bundles addObject:@(bundle)];
-            }
-        }
-    }
-    return bundles;
 }
 
 // Cached remote images belong to the theme bytes they were built from. When a

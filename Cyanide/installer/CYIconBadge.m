@@ -5,8 +5,38 @@
 
 #import "CYIconBadge.h"
 
+UIImage *CYIconBadgeCached(NSString *style, NSString *sfSymbol, UIColor *color, CGFloat size,
+                           UIImage * (NS_NOESCAPE ^render)(void))
+{
+    static NSCache<NSString *, UIImage *> *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        cache = [NSCache new];
+        cache.countLimit = 256;
+    });
+
+    // A system colour is dynamic and the bitmap bakes in whatever it resolves
+    // to right now, so the key carries the resolved components (light and dark
+    // get separate entries) and the screen scale.
+    UITraitCollection *traits = UITraitCollection.currentTraitCollection;
+    CGColorRef cg = [color resolvedColorWithTraitCollection:traits].CGColor;
+    NSMutableString *key = [NSMutableString stringWithFormat:@"%@|%@|%.2f|%.1f|%d",
+                            style, sfSymbol ?: @"", size, traits.displayScale,
+                            (int)CGColorSpaceGetModel(CGColorGetColorSpace(cg))];
+    const CGFloat *components = CGColorGetComponents(cg);
+    size_t count = CGColorGetNumberOfComponents(cg);
+    for (size_t i = 0; components && i < count; i++) [key appendFormat:@"|%.4f", components[i]];
+
+    UIImage *image = [cache objectForKey:key];
+    if (image) return image;
+    image = render();
+    if (image) [cache setObject:image forKey:key];
+    return image;
+}
+
 UIImage *CYIconBadgeImage(NSString *sfSymbol, UIColor *color, CGFloat size)
 {
+    return CYIconBadgeCached(@"round", sfSymbol, color, size, ^UIImage *{
     UIGraphicsImageRendererFormat *fmt = [[UIGraphicsImageRendererFormat alloc] init];
     fmt.opaque = NO;
     UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size) format:fmt];
@@ -26,6 +56,7 @@ UIImage *CYIconBadgeImage(NSString *sfSymbol, UIColor *color, CGFloat size)
         CGFloat y = (size - symSize.height) / 2.0;
         [sym drawInRect:CGRectMake(x, y, symSize.width, symSize.height)];
     }];
+    });
 }
 
 UIColor *CYSpectrumColor(NSUInteger index)

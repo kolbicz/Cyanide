@@ -843,8 +843,13 @@ static const NSInteger kLaraHUDModeCount = sizeof(kLaraHUDModes) / sizeof(kLaraH
         [ac addAction:[UIAlertAction actionWithTitle:@"Restore Original" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
             NSString *err = nil;
             BOOL ok = lara_wallet_card_restore(card, &err);
-            weakSelf.status = ok ? @"Original restored. Respring or reopen Wallet to see it." : err;
+            // Result after the reload starts: listJITApps puts its own
+            // "Looking for apps…" placeholder in status, and only a message
+            // set after that survives the reload. Set first, as it was, the
+            // result -- an error included -- was never shown.
             [weakSelf listJITApps];
+            weakSelf.status = ok ? @"Original restored. Respring or reopen Wallet to see it." : err;
+            [weakSelf.tableView reloadData];
         }]];
     }
     [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
@@ -897,8 +902,9 @@ static const NSInteger kLaraHUDModeCount = sizeof(kLaraHUDModes) / sizeof(kLaraH
     }];
     NSString *err = nil;
     BOOL ok = lara_wallet_card_set_image(card, UIImagePNGRepresentation(scaled), &err);
+    [self listJITApps];   // then the result: see the Restore Original handler
     self.status = ok ? @"Card image replaced. Respring or reopen Wallet to see it." : err;
-    [self listJITApps];
+    [self.tableView reloadData];
 }
 
 // Removes installd's free-profile mark from every counted app, as root

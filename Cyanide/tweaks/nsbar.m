@@ -315,18 +315,6 @@ static void nsbar_apply_overlay_style(uint64_t label)
     }
 }
 
-static double nsbar_measure_text_width(NSString *text)
-{
-    if (text.length == 0) return kNSBarMinWidth;
-    UIFont *font = nil;
-    if (@available(iOS 9.0, *)) {
-        font = [UIFont monospacedDigitSystemFontOfSize:kNSBarFontPt weight:UIFontWeightRegular];
-    }
-    if (!font) font = [UIFont systemFontOfSize:kNSBarFontPt];
-    NSDictionary *attrs = @{ NSFontAttributeName: font };
-    return ceil([text sizeWithAttributes:attrs].width);
-}
-
 static bool nsbar_valid_screen_length(double v)
 {
     return isfinite(v) && v >= 100.0 && v <= 2000.0;

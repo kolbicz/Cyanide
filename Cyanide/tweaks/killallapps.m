@@ -84,13 +84,6 @@ static bool remote_read_cstr(uint64_t addr, char *buf, size_t maxLen)
     return true;
 }
 
-static bool ns_equal(uint64_t bid, uint64_t cfStr)
-{
-    if (!r_is_objc_ptr(bid) || !cfStr) return false;
-    uint64_t r = r_msg2_main(bid, "isEqualToString:", cfStr, 0, 0, 0);
-    return (r & 0xff) != 0;
-}
-
 // Bundle-id-based heuristic that distinguishes App-Switcher-visible apps
 // from background extensions, widget renderers, and system UI services.
 // `runningApplications` is too broad — it includes things like

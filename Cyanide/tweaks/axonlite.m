@@ -391,13 +391,6 @@ static uint64_t axn_try_msg0(uint64_t obj, const char *selName)
     return r_msg2(obj, selName, 0, 0, 0, 0);
 }
 
-static uint64_t axn_try_msg0_or_ivar(uint64_t obj, const char *selName, const char *ivarName)
-{
-    uint64_t value = axn_try_msg0(obj, selName);
-    if (!r_is_objc_ptr(value) && ivarName) value = r_ivar_value(obj, ivarName);
-    return r_is_objc_ptr(value) ? value : 0;
-}
-
 static uint64_t axn_try_msg0_main(uint64_t obj, const char *selName)
 {
     if (!r_is_objc_ptr(obj) || !r_responds_main(obj, selName)) return 0;
@@ -633,20 +626,6 @@ static bool axn_scan_class_interesting(const char *cls)
            strstr(cls, "CSMainPage") ||
            strstr(cls, "CSCombined") ||
            strstr(cls, "CSCoverSheet");
-}
-
-static void axn_log_candidate_controller(const char *label, uint64_t obj, uint64_t windowIndex)
-{
-    if (gAxonRootLogBudget <= 0) return;
-
-    char cls[96];
-    if (!axn_object_class_name(obj, cls, sizeof(cls))) snprintf(cls, sizeof(cls), "nil");
-    printf("[AXONLITE] %s window=%llu vc=0x%llx class=%s\n",
-           label ? label : "vc",
-           (unsigned long long)windowIndex,
-           (unsigned long long)obj,
-           cls);
-    gAxonRootLogBudget--;
 }
 
 static void axn_log_candidate_controller_class(const char *label, uint64_t obj,
@@ -2693,79 +2672,7 @@ static bool axn_update_overlay(uint64_t clvc, AXNBundle *bundles, int bundleCoun
     return true;
 }
 
-static void axn_cell_set_alpha(uint64_t cell, double alpha)
-{
-    if (!r_is_objc_ptr(cell)) return;
-    r_msg2_main_raw(cell, "setCompositeAlpha:",
-                    &alpha, sizeof(alpha), NULL, 0, NULL, 0, NULL, 0);
-}
-
-static void axn_cell_set_hidden_main(uint64_t cell, bool hidden)
-{
-    if (!r_is_objc_ptr(cell)) return;
-    r_msg2_main(cell, "setHidden:", hidden ? 1 : 0, 0, 0, 0);
-}
-
 static uint64_t gAxonSetHiddenSel = 0;
-
-static void axn_cells_set_hidden_batch(const uint64_t *cells, int count, bool hidden)
-{
-    if (count <= 0 || !cells) return;
-
-    AXN_TAG("batch hide=%d count=%d ensure-sel", hidden, count);
-    if (!gAxonSetHiddenSel) gAxonSetHiddenSel = r_sel("setHidden:");
-    if (!gAxonSetHiddenSel) return;
-
-    AXN_TAG("batch hide=%d count=%d malloc remote buf", hidden, count);
-    size_t bufSize = (size_t)count * sizeof(uint64_t);
-    uint64_t remoteBuf = do_remote_call_stable(R_TIMEOUT, "malloc",
-                                               bufSize, 0, 0, 0, 0, 0, 0, 0);
-    if (!remoteBuf) return;
-
-    AXN_TAG("batch hide=%d count=%d remote_write buf=0x%llx",
-            hidden, count, (unsigned long long)remoteBuf);
-    if (!remote_write(remoteBuf, cells, bufSize)) {
-        r_free(remoteBuf);
-        return;
-    }
-
-    AXN_TAG("batch hide=%d count=%d arrayWithObjects:count:", hidden, count);
-    uint64_t NSArray = r_class("NSArray");
-    uint64_t arr = r_is_objc_ptr(NSArray)
-        ? r_msg2(NSArray, "arrayWithObjects:count:", remoteBuf, (uint64_t)count, 0, 0)
-        : 0;
-    r_free(remoteBuf);
-    if (!r_is_objc_ptr(arr)) return;
-
-    AXN_TAG("batch hide=%d count=%d makeObjectsPerformSelector:setHidden: arr=0x%llx",
-            hidden, count, (unsigned long long)arr);
-    r_msg2_main(arr, "makeObjectsPerformSelector:withObject:",
-                gAxonSetHiddenSel, hidden ? 1 : 0, 0, 0);
-}
-
-static void axn_show_request(uint64_t clvc, AXNRequestEntry *entry)
-{
-    (void)clvc;
-    if (!entry || !r_is_objc_ptr(entry->request)) return;
-    if (r_is_objc_ptr(entry->cell)) {
-        r_msg2_main(entry->cell, "setHidden:", 0, 0, 0, 0);
-        axn_cell_set_alpha(entry->cell, 1.0);
-    }
-    entry->hiddenByAxon = false;
-}
-
-static void axn_hide_request(uint64_t clvc, AXNRequestEntry *entry)
-{
-    if (!entry || !r_is_objc_ptr(entry->request)) return;
-    if (r_is_objc_ptr(entry->cell)) {
-        r_msg2_main(entry->cell, "setHidden:", 1, 0, 0, 0);
-        axn_cell_set_alpha(entry->cell, 0.0);
-        if (gAxonClvcCanRemove && r_is_objc_ptr(clvc)) {
-            r_msg2_main(clvc, "removeNotificationRequest:", entry->request, 0, 0, 0);
-        }
-    }
-    entry->hiddenByAxon = true;
-}
 
 static char gAxonLastAppliedFilter[128] = "";
 static bool gAxonFilterLoggedOnce = false;
@@ -2793,20 +2700,6 @@ static void axn_group_mark_toggled(uint64_t group)
 {
     if (gAxonToggledGroupCount >= kAxonMaxToggledGroups) return;
     gAxonToggledGroups[gAxonToggledGroupCount++] = group;
-}
-
-static bool axn_section_grouping_disabled(uint64_t section)
-{
-    for (int i = 0; i < gAxonDynGroupingDisabledCount; i++) {
-        if (gAxonDynGroupingDisabled[i] == section) return true;
-    }
-    return false;
-}
-
-static void axn_section_grouping_mark_disabled(uint64_t section)
-{
-    if (gAxonDynGroupingDisabledCount >= kAxonMaxDynGroupingSections) return;
-    gAxonDynGroupingDisabled[gAxonDynGroupingDisabledCount++] = section;
 }
 
 static uint64_t gAxonNCHeader = 0;
@@ -2909,23 +2802,6 @@ typedef struct { char bundle[128]; uint64_t nsstr; } AXNSectionIdCache;
 static AXNSectionIdCache gAxonSectionIdCache[kAxonMaxRequests];
 static int gAxonSectionIdCount = 0;
 
-static uint64_t axn_section_id_for_bundle(const char *bundle)
-{
-    if (!bundle || !bundle[0]) return 0;
-    for (int i = 0; i < gAxonSectionIdCount; i++) {
-        if (strcmp(gAxonSectionIdCache[i].bundle, bundle) == 0) {
-            return gAxonSectionIdCache[i].nsstr;
-        }
-    }
-    if (gAxonSectionIdCount >= kAxonMaxRequests) return 0;
-    uint64_t ns = r_nsstr_retained(bundle);
-    if (!r_is_objc_ptr(ns)) return 0;
-    AXNSectionIdCache *e = &gAxonSectionIdCache[gAxonSectionIdCount++];
-    snprintf(e->bundle, sizeof(e->bundle), "%s", bundle);
-    e->nsstr = ns;
-    return ns;
-}
-
 static void axn_section_id_cache_clear(void)
 {
     for (int i = 0; i < gAxonSectionIdCount; i++) {
@@ -2935,33 +2811,6 @@ static void axn_section_id_cache_clear(void)
     }
     memset(gAxonSectionIdCache, 0, sizeof(gAxonSectionIdCache));
     gAxonSectionIdCount = 0;
-}
-
-static int axn_filtered_index(const char *bundle)
-{
-    for (int i = 0; i < gAxonFilteredCount; i++) {
-        if (strcmp(gAxonFilteredBundles[i], bundle) == 0) return i;
-    }
-    return -1;
-}
-
-static void axn_filtered_add(const char *bundle)
-{
-    if (!bundle || !bundle[0]) return;
-    if (axn_filtered_index(bundle) >= 0) return;
-    if (gAxonFilteredCount >= kAxonMaxRequests) return;
-    snprintf(gAxonFilteredBundles[gAxonFilteredCount++], 128, "%s", bundle);
-}
-
-static void axn_filtered_remove(const char *bundle)
-{
-    int idx = axn_filtered_index(bundle);
-    if (idx < 0) return;
-    for (int j = idx; j < gAxonFilteredCount - 1; j++) {
-        memcpy(gAxonFilteredBundles[j], gAxonFilteredBundles[j + 1], 128);
-    }
-    gAxonFilteredCount--;
-    memset(gAxonFilteredBundles[gAxonFilteredCount], 0, 128);
 }
 
 // Drive section-level filtering via

@@ -118,16 +118,17 @@ static UIColor *colorFromHexString(NSString *hexString) {
 // Helper converting UIColor in "#FF0000"
 static NSString *hexStringFromColor(UIColor *color) {
     if (![color isKindOfClass:UIColor.class]) return @"#000000";
-    const CGFloat *components = CGColorGetComponents(color.CGColor);
-    size_t count = CGColorGetNumberOfComponents(color.CGColor);
-
-    if (count == 4) { // RGB
-        return [NSString stringWithFormat:@"#%02lX%02lX%02lX",
-                lroundf(components[0] * 255.0),
-                lroundf(components[1] * 255.0),
-                lroundf(components[2] * 255.0)];
+    // Through UIColor's own conversion: reading raw components only worked for
+    // 4-component RGB, so a grayscale colour (the picker's white or gray) was
+    // saved as black.
+    CGFloat r = 0, g = 0, b = 0, a = 0, white = 0;
+    if (![color getRed:&r green:&g blue:&b alpha:&a]) {
+        if (![color getWhite:&white alpha:&a]) return @"#000000";
+        r = g = b = white;
     }
-    return @"#000000"; // Fallback
+    r = MIN(MAX(r, 0.0), 1.0); g = MIN(MAX(g, 0.0), 1.0); b = MIN(MAX(b, 0.0), 1.0);
+    return [NSString stringWithFormat:@"#%02lX%02lX%02lX",
+            lround(r * 255.0), lround(g * 255.0), lround(b * 255.0)];
 }
 
 static NSString *settings_string_or_empty(id value)
@@ -176,626 +177,9 @@ static NSMutableDictionary *settings_string_values_dictionary(id raw)
     return out;
 }
 
-static void settings_clear_repo_tweak_defaults(NSString *repoURL, NSString *tweakID)
-{
-    if (![repoURL isKindOfClass:NSString.class] || repoURL.length == 0 ||
-        ![tweakID isKindOfClass:NSString.class] || tweakID.length == 0) {
-        return;
-    }
-    repotweaks_forget_tweak(repoURL, tweakID);
-    [[NSUserDefaults standardUserDefaults] synchronize];
-}
-
-static NSDictionary *settings_repotweaks_caches(void)
-{
-    id raw = [[NSUserDefaults standardUserDefaults] objectForKey:@"RepoTweaksCaches"];
-    return [raw isKindOfClass:NSDictionary.class] ? (NSDictionary *)raw : @{};
-}
-
 static NSString * const kSettingsDefaultRepoURL = @"https://raw.githubusercontent.com/MinePlayer16/MinePlayer16.github.io/refs/heads/main/repotweaks.json";
 
-static NSArray<NSString *> *settings_repotweaks_urls(void)
-{
-    id raw = [[NSUserDefaults standardUserDefaults] objectForKey:@"RepoTweaksURLs"];
-    if (![raw isKindOfClass:NSArray.class]) return @[];
-    NSMutableArray<NSString *> *urls = [NSMutableArray array];
-    for (id value in (NSArray *)raw) {
-        if ([value isKindOfClass:NSString.class]) [urls addObject:value];
-    }
-    return urls;
-}
 
-static NSDictionary *settings_repotweaks_repo_for_url(NSString *repoURL)
-{
-    id repo = repoURL.length ? settings_repotweaks_caches()[repoURL] : nil;
-    return [repo isKindOfClass:NSDictionary.class] ? (NSDictionary *)repo : @{};
-}
-
-static NSArray<NSDictionary *> *settings_repotweaks_tweaks_for_url(NSString *repoURL)
-{
-    id raw = settings_repotweaks_repo_for_url(repoURL)[@"tweaks"];
-    if (![raw isKindOfClass:NSArray.class]) return @[];
-    NSMutableArray<NSDictionary *> *out = [NSMutableArray array];
-    for (id value in (NSArray *)raw) {
-        if ([value isKindOfClass:NSDictionary.class]) {
-            NSMutableDictionary *tweak = [(NSDictionary *)value mutableCopy];
-            if ([repoURL isKindOfClass:NSString.class] && repoURL.length > 0) {
-                tweak[@"_repoURL"] = repoURL;
-            }
-            [out addObject:tweak];
-        }
-    }
-    return out;
-}
-
-
-
-// =============================================================================
-// REPOTWEAKS: Details and Dynamic parameters window
-// =============================================================================
-@interface RepoTweakDetailController : UITableViewController
-@property (nonatomic, strong) NSDictionary *tweak;
-@property (nonatomic, strong) NSString *tweakID;
-@property (nonatomic, strong) NSString *repoURL;
-@property (nonatomic, strong) NSString *rawScript;
-@property (nonatomic, strong) NSArray<NSDictionary *> *params;
-@property (nonatomic, strong) NSMutableDictionary *values;
-@end
-
-@implementation RepoTweakDetailController
-
-- (instancetype)initWithTweak:(NSDictionary *)tweak {
-    self = [super initWithStyle:UITableViewStyleGrouped];
-    if (self) {
-        self.tweak = [tweak isKindOfClass:NSDictionary.class] ? tweak : @{};
-        self.tweakID = settings_string_or_empty(self.tweak[@"id"]);
-        self.repoURL = settings_string_or_empty(self.tweak[@"_repoURL"]);
-        self.title = settings_string_or_empty(self.tweak[@"name"]).length ? settings_string_or_empty(self.tweak[@"name"]) : @"RepoTweak";
-
-        NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-        // Retrieve js code from repo
-        NSString *scriptKey = repotweaks_script_defaults_key(self.repoURL, self.tweakID);
-        self.rawScript = [d stringForKey:scriptKey] ?: @"";
-
-        // Retrieve tweaks-specific user saved settings
-        NSString *valuesKey = repotweaks_values_defaults_key(self.repoURL, self.tweakID);
-        self.values = settings_string_values_dictionary([d dictionaryForKey:valuesKey]);
-
-        // Analyze @param comments in js code
-        NSMutableArray *parsedParams = [NSMutableArray array];
-        NSArray *lines = [self.rawScript componentsSeparatedByString:@"\n"];
-        for (NSString *line in lines) {
-            if ([line containsString:@"@param:"]) {
-                NSArray *parts = [line componentsSeparatedByString:@"|"];
-                if (parts.count >= 4) {
-                    NSArray *typeParts = [parts[0] componentsSeparatedByString:@"@param:"];
-                    if (typeParts.count < 2) continue;
-                    NSString *rawType = typeParts[1];
-                    NSString *type = [rawType stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                    NSString *varName = [parts[1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                    NSString *label = [parts[2] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                    NSString *defValue = [parts[3] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                    if (!settings_js_identifier_valid(varName)) continue;
-
-                    NSMutableDictionary *paramDict = [@{@"type": type, @"varName": varName, @"label": label, @"default": defValue} mutableCopy];
-                    if (parts.count >= 5 && ([type isEqualToString:@"slider"] || [type isEqualToString:@"number"])) {
-                        NSString *rangeStr = [parts[4] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                        NSArray *rangeParts = [rangeStr componentsSeparatedByString:@"-"];
-                        if (rangeParts.count == 2) {
-                            paramDict[@"min"] = rangeParts[0];
-                            paramDict[@"max"] = rangeParts[1];
-                        }
-                    }
-                    [parsedParams addObject:paramDict];
-                    if (!self.values[varName]) {
-                        self.values[varName] = defValue; //default values if new
-                    }
-                }
-            }
-        }
-        self.params = parsedParams;
-    }
-    return self;
-}
-
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    return self.params.count > 0 ? 3 : 2;
-}
-
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (section == 0) return 2; //description and version
-    if (section == 1) return 1; //status (active or not)
-    return self.params.count;   //JS dynamic parameters
-}
-
-- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
-    if (section == 0) return CYSectionHeaderView(@"Tweak Infos");
-    if (section == 1) return CYSectionHeaderView(@"Tweak Status");
-    return CYSectionHeaderView(@"Personalization Options");
-}
-- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section { return 46.0; }
-
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    if (indexPath.section == 0) {
-        UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"info-cell"];
-        cell.selectionStyle = UITableViewCellSelectionStyleNone;
-        if (indexPath.row == 0) {
-            cell.textLabel.text = @"Description";
-            cell.detailTextLabel.text = settings_string_or_empty(self.tweak[@"description"]);
-            cell.detailTextLabel.numberOfLines = 0;
-        } else {
-            cell.textLabel.text = @"Version";
-            cell.detailTextLabel.text = settings_string_or_empty(self.tweak[@"version"]);
-        }
-        return cell;
-    }
-
-    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-
-    if (indexPath.section == 1) {
-        UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"toggle-cell"];
-        cell.selectionStyle = UITableViewCellSelectionStyleNone;
-        cell.textLabel.text = @"Enable Tweak";
-
-        UISwitch *sw = [[UISwitch alloc] init];
-        NSString *toggleKey = repotweaks_enabled_defaults_key(self.repoURL, self.tweakID);
-        sw.on = [d boolForKey:toggleKey];
-
-        UIAction *action = [UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-            [d setBool:sw.isOn forKey:toggleKey];
-            [d synchronize];
-            if (!sw.isOn) {
-                repotweaks_cancel_tweak(self.repoURL, self.tweakID);
-            }
-        }];
-        [sw addAction:action forControlEvents:UIControlEventValueChanged];
-        cell.accessoryView = sw;
-        return cell;
-    }
-
-    // Dynamic parameters section (same as QuickLoader)
-    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:@"param-cell"];
-    cell.selectionStyle = UITableViewCellSelectionStyleNone;
-
-    NSDictionary *param = self.params[indexPath.row];
-    cell.textLabel.text = param[@"label"];
-
-    NSString *varName = param[@"varName"];
-    NSString *pType = param[@"type"];
-    NSString *currentValue = settings_string_or_empty(self.values[varName]);
-
-    NSString *valuesKey = repotweaks_values_defaults_key(self.repoURL, self.tweakID);
-
-    if ([pType isEqualToString:@"switch"]) {
-        UISwitch *sw = [[UISwitch alloc] init];
-        sw.on = [currentValue isEqualToString:@"true"];
-        UIAction *action = [UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-            self.values[varName] = sw.isOn ? @"true" : @"false";
-            [d setObject:self.values forKey:valuesKey];
-            [d synchronize];
-        }];
-        [sw addAction:action forControlEvents:UIControlEventValueChanged];
-        cell.accessoryView = sw;
-    }
-    else if ([pType isEqualToString:@"text"]) {
-        UITextField *tf = [[UITextField alloc] initWithFrame:CGRectMake(0, 0, 150, 30)];
-        tf.textAlignment = NSTextAlignmentRight;
-        tf.textColor = UIColor.secondaryLabelColor;
-        tf.text = currentValue;
-        UIAction *action = [UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-            self.values[varName] = tf.text;
-            [d setObject:self.values forKey:valuesKey];
-            [d synchronize];
-        }];
-        [tf addAction:action forControlEvents:UIControlEventEditingChanged];
-        cell.accessoryView = tf;
-    }
-    else if ([pType isEqualToString:@"color"]) {
-        UIColorWell *colorWell = [[UIColorWell alloc] init];
-        colorWell.translatesAutoresizingMaskIntoConstraints = NO;
-        //call to convert color
-        colorWell.selectedColor = colorFromHexString(currentValue ?: @"#FF0000");
-
-        UIAction *action = [UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-            colorWell.title = param[@"label"];
-            self.values[varName] = hexStringFromColor(colorWell.selectedColor);
-            [d setObject:self.values forKey:valuesKey];
-            [d synchronize];
-        }];
-        [colorWell addAction:action forControlEvents:UIControlEventValueChanged];
-
-        [cell.contentView addSubview:colorWell];
-        [NSLayoutConstraint activateConstraints:@[
-            [colorWell.trailingAnchor constraintEqualToAnchor:cell.contentView.layoutMarginsGuide.trailingAnchor],
-            [colorWell.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
-            [colorWell.widthAnchor constraintEqualToConstant:32.0],
-            [colorWell.heightAnchor constraintEqualToConstant:32.0]
-        ]];
-    }
-    else if ([pType isEqualToString:@"slider"] || [pType isEqualToString:@"number"]) {
-        UIStackView *stack = [[UIStackView alloc] initWithFrame:CGRectMake(0, 0, 220, 30)];
-        stack.axis = UILayoutConstraintAxisHorizontal;
-        stack.spacing = 10;
-        stack.alignment = UIStackViewAlignmentCenter;
-
-        UISlider *slider = [[UISlider alloc] init];
-        slider.minimumValue = param[@"min"] ? [param[@"min"] floatValue] : 0.0;
-        slider.maximumValue = param[@"max"] ? [param[@"max"] floatValue] : 1.0;
-
-        //if there is none, retrieve default value
-        float defVal = param[@"default"] ? [param[@"default"] floatValue] : slider.minimumValue;
-        slider.value = currentValue ? [currentValue floatValue] : defVal;
-
-        UILabel *valLabel = [[UILabel alloc] init];
-        valLabel.textColor = [UIColor secondaryLabelColor];
-        valLabel.font = [UIFont systemFontOfSize:14];
-        [valLabel setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
-
-        void (^updateLabelText)(float) = ^(float value) {
-            if (fabs(value - defVal) < 0.01) {
-                valLabel.text = [NSString stringWithFormat:@"%.2f (Def)", value];
-            } else {
-                valLabel.text = [NSString stringWithFormat:@"%.2f", value];
-            }
-        };
-
-        updateLabelText(slider.value);
-
-        [stack addArrangedSubview:slider];
-        [stack addArrangedSubview:valLabel];
-
-        UIAction *updateTextAction = [UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-            updateLabelText(slider.value);
-        }];
-        [slider addAction:updateTextAction forControlEvents:UIControlEventValueChanged];
-
-        UIAction *saveAction = [UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-            self.values[varName] = [NSString stringWithFormat:@"%.2f", slider.value];
-            [d setObject:self.values forKey:valuesKey];
-            [d synchronize];
-        }];
-        [slider addAction:saveAction forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside];
-
-        cell.accessoryView = stack;
-    }
-
-    return cell;
-}
-
-@end
-
-
-// ==========================================
-// REPOTWEAKS: REPO DETAIL VIEW CONTROLLER
-// ==========================================
-@interface RepoDetailController : UITableViewController
-@property (nonatomic, strong) NSString *repoURL;
-@end
-
-@implementation RepoDetailController
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    NSDictionary *repo = settings_repotweaks_repo_for_url(self.repoURL);
-    NSString *repoName = settings_string_or_empty(repo[@"repoName"]);
-    self.title = repoName.length ? repoName : @"Repository";
-}
-
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    return 2; // Section 0: Tweaks, Section 1: Delete
-}
-
-- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
-    if (section == 0) {
-        NSDictionary *repo = settings_repotweaks_repo_for_url(self.repoURL);
-        NSString *author = settings_string_or_empty(repo[@"author"]);
-        return CYSectionHeaderView([NSString stringWithFormat:@"By %@", author.length ? author : @"Unknown"]);
-    }
-    return nil;
-}
-- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
-    return section == 0 ? UITableViewAutomaticDimension : 0.0;
-}
-
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (section == 1) return 1;
-    return settings_repotweaks_tweaks_for_url(self.repoURL).count;
-}
-
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
-
-    // The Delete Button
-    if (indexPath.section == 1) {
-        cell.textLabel.text = @"Delete Repository";
-        cell.textLabel.textColor = [UIColor systemRedColor];
-        cell.textLabel.textAlignment = NSTextAlignmentCenter;
-        return cell;
-    }
-
-    // The Tweaks
-    NSArray *tweaks = settings_repotweaks_tweaks_for_url(self.repoURL);
-    if (indexPath.row >= (NSInteger)tweaks.count) return cell;
-    NSDictionary *tweak = tweaks[indexPath.row];
-
-    cell.textLabel.text = settings_string_or_empty(tweak[@"name"]);
-    cell.detailTextLabel.text = settings_string_or_empty(tweak[@"description"]);
-    cell.detailTextLabel.numberOfLines = 0;
-
-    UISwitch *toggle = [[UISwitch alloc] init];
-    toggle.tag = indexPath.row; // Link the switch to the tweak array index
-    NSString *tweakID = settings_string_or_empty(tweak[@"id"]);
-    NSString *key = repotweaks_enabled_defaults_key(self.repoURL, tweakID);
-    toggle.on = [[NSUserDefaults standardUserDefaults] boolForKey:key];
-    [toggle addTarget:self action:@selector(toggled:) forControlEvents:UIControlEventValueChanged];
-
-    cell.accessoryView = toggle;
-    cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-    return cell;
-}
-
-- (void)toggled:(UISwitch *)sender {
-    NSArray *tweaks = settings_repotweaks_tweaks_for_url(self.repoURL);
-    if (sender.tag < 0 || sender.tag >= (NSInteger)tweaks.count) return;
-    NSDictionary *tweak = tweaks[sender.tag];
-    NSString *tweakID = settings_string_or_empty(tweak[@"id"]);
-    if (tweakID.length == 0) return;
-    NSString *key = repotweaks_enabled_defaults_key(self.repoURL, tweakID);
-    [[NSUserDefaults standardUserDefaults] setBool:sender.on forKey:key];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-    if (!sender.on) {
-        repotweaks_cancel_tweak(self.repoURL, tweakID);
-    }
-}
-
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-
-    if (indexPath.section == 0) {
-        NSArray *tweaks = settings_repotweaks_tweaks_for_url(self.repoURL);
-        if (indexPath.row >= (NSInteger)tweaks.count) return;
-        RepoTweakDetailController *detailVC = [[RepoTweakDetailController alloc] initWithTweak:tweaks[indexPath.row]];
-        [self.navigationController pushViewController:detailVC animated:YES];
-        return;
-    }
-
-    // Handle Repo Deletion
-    if (indexPath.section == 1) {
-        NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-        for (NSDictionary *tweak in settings_repotweaks_tweaks_for_url(self.repoURL)) {
-            settings_clear_repo_tweak_defaults(self.repoURL, settings_string_or_empty(tweak[@"id"]));
-        }
-
-        NSMutableArray *urls = [settings_repotweaks_urls() mutableCopy];
-        if (!urls) urls = [NSMutableArray array];
-        [urls removeObject:self.repoURL];
-        [d setObject:urls forKey:@"RepoTweaksURLs"];
-
-        NSMutableDictionary *caches = [settings_repotweaks_caches() mutableCopy];
-        if (!caches) caches = [NSMutableDictionary dictionary];
-        [caches removeObjectForKey:self.repoURL];
-        [d setObject:caches forKey:@"RepoTweaksCaches"];
-        [d synchronize];
-
-        [self.navigationController popViewControllerAnimated:YES]; // Slide back to main menu
-    }
-}
-@end
-
-
-
-
-
-
-// ==========================================
-// REPOTWEAKS: REPO MANAGER CONTROLLER (the main page)
-// ==========================================
-@interface RepoManagerController : UITableViewController
-@property (nonatomic, strong) NSArray *flattenedTweaks;
-@end
-
-@implementation RepoManagerController
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.title = @"RepoTweaks";
-
-    // + and refresh buttons (menu bar)
-    UIBarButtonItem *addButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd target:self action:@selector(addRepo)];
-    UIBarButtonItem *refreshButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh target:self action:@selector(refreshAll)];
-    self.navigationItem.rightBarButtonItems = @[addButton, refreshButton];
-
-    repotweaks_seed_default_repos();
-    if ([settings_repotweaks_urls() containsObject:kSettingsDefaultRepoURL]) {
-        NSDictionary *repo = settings_repotweaks_repo_for_url(kSettingsDefaultRepoURL);
-        NSArray *tweaks = repo[@"tweaks"];
-        if (![tweaks isKindOfClass:NSArray.class] || tweaks.count == 0) {
-            __weak typeof(self) weakSelf = self;
-            repotweaks_refresh_repo(kSettingsDefaultRepoURL, ^(BOOL success, NSString *message) {
-                (void)success;
-                (void)message;
-                [weakSelf updateData];
-            });
-        }
-    }
-}
-
-// auto refresh (there was a bug and I had to go back to the page and it would not refresh the UI without this)
-- (void)viewWillAppear:(BOOL)animated {
-    [super viewWillAppear:animated];
-    [self updateData];
-}
-
-- (void)updateData {
-    NSMutableArray *tempTweaks = [NSMutableArray array];
-    for (NSString *url in settings_repotweaks_urls()) {
-        [tempTweaks addObjectsFromArray:settings_repotweaks_tweaks_for_url(url)];
-    }
-    self.flattenedTweaks = tempTweaks;
-    [self.tableView reloadData];
-}
-
-- (void)addRepo {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Add Source" message:@"Paste the RAW link to your packages.json" preferredStyle:UIAlertControllerStyleAlert];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) { textField.placeholder = @"https://raw.githubusercontent.com/..."; }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Add" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        NSString *url = alert.textFields.firstObject.text;
-        if (url.length > 0) {
-            repotweaks_add_repo(url, ^(BOOL success, NSString *message) {
-                [self updateData];
-                if (!success) {
-                    UIAlertController *err = [UIAlertController alertControllerWithTitle:@"Source Failed"
-                                                                                 message:message ?: @"Could not refresh that repository."
-                                                                          preferredStyle:UIAlertControllerStyleAlert];
-                    [err addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-                    [self presentViewController:err animated:YES completion:nil];
-                }
-            });
-        }
-    }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
-}
-
-- (void)refreshAll {
-    NSArray *urls = settings_repotweaks_urls();
-    if (urls.count == 0) return;
-
-    // Refresh Alert
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Refreshing Sources"
-                                                                   message:@"Nuking old scripts and downloading the latest..."
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [self presentViewController:alert animated:YES completion:nil];
-
-    // track download status
-    dispatch_group_t group = dispatch_group_create();
-
-    for (NSString *url in urls) {
-        dispatch_group_enter(group);
-        repotweaks_refresh_repo(url, ^(BOOL success, NSString *message) {
-            dispatch_group_leave(group);
-        });
-    }
-
-    //dismiss alert and refresh UI on success
-    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-        [alert dismissViewControllerAnimated:YES completion:^{
-            [self updateData];
-        }];
-    });
-}
-
-// Native tweak sections
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 2; }
-- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
-    return CYSectionHeaderView(section == 0 ? @"Sources" : @"All Tweaks");
-}
-- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section { return 46.0; }
-
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (section == 0) return settings_repotweaks_urls().count;
-    return self.flattenedTweaks.count;
-}
-
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
-    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-
-    if (indexPath.section == 0) {
-        NSArray *urls = settings_repotweaks_urls();
-        if (indexPath.row >= (NSInteger)urls.count) return cell;
-        NSString *url = urls[indexPath.row];
-        NSDictionary *repo = settings_repotweaks_repo_for_url(url);
-
-        NSString *repoName = settings_string_or_empty(repo[@"repoName"]);
-        cell.textLabel.text = repoName.length ? repoName : @"Unknown Repo";
-        cell.detailTextLabel.text = url;
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-    } else {
-        if (indexPath.row >= (NSInteger)self.flattenedTweaks.count) return cell;
-        NSDictionary *tweak = self.flattenedTweaks[indexPath.row];
-        cell.textLabel.text = settings_string_or_empty(tweak[@"name"]);
-        cell.detailTextLabel.text = settings_string_or_empty(tweak[@"description"]);
-        cell.detailTextLabel.numberOfLines = 0;
-
-        UISwitch *toggle = [[UISwitch alloc] init];
-        toggle.tag = indexPath.row;
-        NSString *tweakID = settings_string_or_empty(tweak[@"id"]);
-        NSString *repoURL = settings_string_or_empty(tweak[@"_repoURL"]);
-        NSString *key = repotweaks_enabled_defaults_key(repoURL, tweakID);
-        toggle.on = [d boolForKey:key];
-        [toggle addTarget:self action:@selector(toggled:) forControlEvents:UIControlEventValueChanged];
-
-        cell.accessoryView = toggle;
-        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-    }
-    return cell;
-}
-
-- (void)toggled:(UISwitch *)sender {
-    if (sender.tag < 0 || sender.tag >= (NSInteger)self.flattenedTweaks.count) return;
-    NSDictionary *tweak = self.flattenedTweaks[sender.tag];
-    NSString *tweakID = settings_string_or_empty(tweak[@"id"]);
-    NSString *repoURL = settings_string_or_empty(tweak[@"_repoURL"]);
-    if (tweakID.length == 0) return;
-    NSString *key = repotweaks_enabled_defaults_key(repoURL, tweakID);
-    [[NSUserDefaults standardUserDefaults] setBool:sender.on forKey:key];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-    if (!sender.on) {
-        repotweaks_cancel_tweak(repoURL, tweakID);
-    }
-}
-
-//swipe to delete logic
-- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
-    return indexPath.section == 0; //only let user swipe to delete sources
-}
-
-- (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath {
-    if (editingStyle == UITableViewCellEditingStyleDelete && indexPath.section == 0) {
-        NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-        NSMutableArray *urls = [settings_repotweaks_urls() mutableCopy];
-        if (!urls) urls = [NSMutableArray array];
-        if (indexPath.row >= (NSInteger)urls.count) return;
-        NSString *urlToRemove = urls[indexPath.row];
-        for (NSDictionary *tweak in settings_repotweaks_tweaks_for_url(urlToRemove)) {
-            settings_clear_repo_tweak_defaults(urlToRemove, settings_string_or_empty(tweak[@"id"]));
-        }
-
-        [urls removeObjectAtIndex:indexPath.row];
-        [d setObject:urls forKey:@"RepoTweaksURLs"];
-
-        NSMutableDictionary *caches = [settings_repotweaks_caches() mutableCopy];
-        if (!caches) caches = [NSMutableDictionary dictionary];
-        [caches removeObjectForKey:urlToRemove];
-        [d setObject:caches forKey:@"RepoTweaksCaches"];
-        [d synchronize];
-
-        [self updateData]; //refreshes the ui
-    }
-}
-
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-
-    // Section 0: press on the repo, it lists all tweaks
-    if (indexPath.section == 0) {
-        NSArray *urls = settings_repotweaks_urls();
-        if (indexPath.row >= (NSInteger)urls.count) return;
-        RepoDetailController *detailVC = [[RepoDetailController alloc] initWithStyle:UITableViewStyleGrouped];
-        detailVC.repoURL = urls[indexPath.row];
-        [self.navigationController pushViewController:detailVC animated:YES];
-    }
-    // Section 1: press on a tweak, it lists all dynamic parameters
-    else if (indexPath.section == 1) {
-        if (indexPath.row >= (NSInteger)self.flattenedTweaks.count) return;
-        NSDictionary *tweak = self.flattenedTweaks[indexPath.row];
-
-        RepoTweakDetailController *detailVC = [[RepoTweakDetailController alloc] initWithTweak:tweak];
-        [self.navigationController pushViewController:detailVC animated:YES];
-    }
-}
-@end
 
 // Posted on the main queue when SpringBoard has restarted (the respring
 // overlay waits for it).
@@ -1314,6 +698,58 @@ static volatile BOOL g_settings_actions_last_pending_only = NO;
 // Counts consecutive auto-retries within one user-initiated run chain. Reset
 // by every fresh public entry point and whenever a final outcome is posted.
 static volatile int g_settings_actions_auto_retry_attempt = 0;
+// A run requested while another run is in flight. The follow-up used to reuse
+// the in-flight run's own mode, and every request overwrote the key scope and
+// the retry counter before it knew whether it would start or be queued: a
+// scoped "apply right away" run could lose its scope half-way through, a
+// queued full run came out pending-only (or the reverse), and any request
+// during an auto-retry chain reset the attempt cap. A request now carries its
+// own mode and scope; they take effect only when its run claims the slot, and
+// a queued one is kept here for the follow-up. Guarded by settings_rerun_lock().
+static BOOL g_settings_rerun_has_request = NO;
+static BOOL g_settings_rerun_pending_only = YES;
+static NSSet<NSString *> *g_settings_rerun_keys = nil;   // nil: not limited to keys
+
+static NSObject *settings_rerun_lock(void)
+{
+    static NSObject *lock;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ lock = [NSObject new]; });
+    return lock;
+}
+
+// Several requests can queue behind one run; the single follow-up must cover
+// all of them: a full run covers a pending-only one, and an unscoped
+// pending-only run covers a key-scoped one.
+static void settings_queue_rerun_request(BOOL pendingOnly, NSSet<NSString *> *onlyKeys)
+{
+    @synchronized (settings_rerun_lock()) {
+        if (!g_settings_rerun_has_request) {
+            g_settings_rerun_pending_only = pendingOnly;
+            g_settings_rerun_keys = pendingOnly ? [onlyKeys copy] : nil;
+        } else if (!pendingOnly || !g_settings_rerun_pending_only) {
+            g_settings_rerun_pending_only = NO;
+            g_settings_rerun_keys = nil;
+        } else if (!onlyKeys || !g_settings_rerun_keys) {
+            g_settings_rerun_keys = nil;
+        } else {
+            g_settings_rerun_keys = [g_settings_rerun_keys setByAddingObjectsFromSet:onlyKeys];
+        }
+        g_settings_rerun_has_request = YES;
+    }
+}
+
+static BOOL settings_take_rerun_request(BOOL *pendingOnly, NSSet<NSString *> * __strong *onlyKeys)
+{
+    @synchronized (settings_rerun_lock()) {
+        if (!g_settings_rerun_has_request) return NO;
+        *pendingOnly = g_settings_rerun_pending_only;
+        *onlyKeys = g_settings_rerun_keys;
+        g_settings_rerun_has_request = NO;
+        g_settings_rerun_keys = nil;
+        return YES;
+    }
+}
 // Main-thread only. The idle-timer value from before the first attempt of a
 // run group; auto-retries and queued follow-ups re-enter without restoring,
 // so they must not re-capture the (now forced) YES as the original.
@@ -2614,16 +2050,6 @@ static const char *settings_axonlite_pause_reason(void)
     return "screen unavailable";
 }
 
-static void settings_stop_axonlite_then_forget_locked(const char *reason)
-{
-    if (g_springboard_rc_ready) {
-        bool stopped = axonlite_stop_in_session();
-        printf("[SETTINGS] Axon Lite stopped before state drop%s%s result=%d\n",
-               reason ? ": " : "", reason ?: "", stopped);
-    }
-    axonlite_forget_remote_state();
-}
-
 static void settings_forget_springboard_tweak_state_locked(void)
 {
     __sync_lock_test_and_set(&g_fastlockx_lite_remote_active_state, -1);
@@ -3318,6 +2744,17 @@ static void settings_present_controller(UIViewController *controller, UIViewCont
             printf("[SETTINGS] presentation skipped: no attached presenter\n");
             return;
         }
+        // On iPad an action sheet is a popover, and UIKit raises an exception
+        // when one is presented without an anchor. Sheets that did not set
+        // their own get a centred, arrowless one here (same as the LiveWP
+        // and log sheets set by hand), so no caller can forget it.
+        UIPopoverPresentationController *pop = controller.popoverPresentationController;
+        if (pop && !pop.sourceView && !pop.barButtonItem) {
+            UIView *anchor = presenter.view;
+            pop.sourceView = anchor;
+            pop.sourceRect = CGRectMake(CGRectGetMidX(anchor.bounds), CGRectGetMidY(anchor.bounds), 1, 1);
+            pop.permittedArrowDirections = 0;
+        }
         [presenter presentViewController:controller animated:YES completion:nil];
     });
 }
@@ -3655,7 +3092,11 @@ static BOOL settings_ensure_kexploit(void)
         if (settings_handle_stale_krw("stale KRW")) return YES;
     }
 
+    // Outside a run (the session log is in its slow tail mode) this is still
+    // the window where a panic can take the last lines: sync fast for it.
+    BOOL logSwitched = log_session_critical_begin();
     int res = kexploit_opa334();
+    log_session_critical_end(logSwitched);
     if (res != 0) {
         printf("[SETTINGS] kexploit_opa334 failed: %d\n", res);
         return NO;
@@ -4154,11 +3595,6 @@ static void settings_terminal_kexploit_cleanup_sync_internal(const char *reason)
     g_springboard_sandbox_escaped = 0;
     kutils_reset_self_cache();
     settings_notify_remote_call_state_changed();
-}
-
-static void settings_terminal_kexploit_cleanup_sync(const char *reason)
-{
-    settings_terminal_kexploit_cleanup_sync_internal(reason);
 }
 
 static BOOL settings_acquire_actions_lock_wait(const char *owner, uint64_t timeoutUS)
@@ -4750,16 +4186,6 @@ static void settings_nicebar_refresh_weather_if_needed(BOOL force,
             if (completion) completion(ok, text);
         }];
     });
-}
-
-static BOOL settings_dark_tweaks_any_enabled(NSUserDefaults *d)
-{
-    return [d boolForKey:kSettingsDSDisableAppLibrary] ||
-           [d boolForKey:kSettingsDSDisableIconFlyIn] ||
-           [d boolForKey:kSettingsDSHideNewAppDots] ||
-           [d boolForKey:kSettingsDSZeroWakeAnimation] ||
-           [d boolForKey:kSettingsDSZeroBacklightFade] ||
-           [d boolForKey:kSettingsDSDoubleTapToLock];
 }
 
 // Keys a scoped pending run (settings_run_pending_actions_for_keys) is limited
@@ -9319,7 +8745,21 @@ static void settings_schedule_live_apply_for_key(NSString *key)
                 return;
             }
             @try {
-                if (!settings_ensure_kexploit()) {
+                // This runs from a setting change (a slider released, a field
+                // edited), not from a button that says it runs the exploit,
+                // and LocationSimStarted outlives a reboot. So use live or
+                // saved kernel access, and fall back to a full run only where
+                // the tools may start one by themselves: never on A18/M4,
+                // where a run can reboot the device (settings_tool_may_run_exploit).
+                BOOL kernelReady = settings_ensure_kexploit_for_read();
+                if (!kernelReady && !settings_tool_may_run_exploit(NO)) {
+                    log_user("[LOCSIM] Target not refreshed: no saved kernel access. Run Exploit, then use Simulate Location.\n");
+                    settings_post_actions_complete_async(NO, kSettingsFullExploitRequiredMessage);
+                    settings_notify_package_queue_changed_async();
+                    return;
+                }
+                if (!kernelReady) kernelReady = settings_ensure_kexploit();
+                if (!kernelReady) {
                     printf("[LOCSIM] live target refresh failed to acquire KRW\n");
                     log_user("[LOCSIM] Target refresh failed: kernel primitives were not acquired. Please try running chain again.\n");
                     settings_post_actions_complete_async(NO, @"Location refresh failed: kernel primitives were not acquired.");
@@ -10059,8 +9499,11 @@ void settings_register_defaults(void)
     log_set_rc_filter(![defaults boolForKey:kSettingsVerboseLoggingEnabled]);
 }
 
-static void settings_run_actions_internal(BOOL pendingOnly)
+// freshRequest: a new request (a user action or a queued follow-up), as opposed
+// to an auto-retry of the same run, which keeps its attempt count.
+static void settings_run_actions_internal(BOOL pendingOnly, NSSet<NSString *> *requestedKeys, BOOL freshRequest)
 {
+    NSSet<NSString *> *onlyKeys = pendingOnly ? [requestedKeys copy] : nil;
     g_settings_actions_last_pending_only = pendingOnly;
     if (!settings_device_supported()) {
         NSString *message = settings_unsupported_message();
@@ -10090,13 +9533,27 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                 printf("[SETTINGS] another (non-run) action holds the lock; run refused\n");
                 log_user("[RUN] Another action is running. Try again when it has finished.\n");
                 settings_post_actions_complete_async(NO, @"Another action is running. Try again when it has finished.");
+                // A retry or follow-up that re-entered from a finished run
+                // still holds that run's idle-timer hold, and no later
+                // completion would give it back: the screen then never locked
+                // by itself. No run owns the slot here, so release it.
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (g_settings_actions_idle_held && g_settings_actions_running != kSettingsLockRun) {
+                        UIApplication.sharedApplication.idleTimerDisabled = g_settings_actions_idle_was_disabled;
+                        g_settings_actions_idle_held = NO;
+                    }
+                });
                 return;
             }
+            settings_queue_rerun_request(pendingOnly, onlyKeys);
             __sync_lock_test_and_set(&g_settings_actions_rerun_requested, 1);
             printf("[SETTINGS] actions already running; queued one follow-up run\n");
             log_user("[RUN] Already running. Queued one follow-up run for the latest package state.\n");
             return;
         }
+        // This run owns the slot: only now does its scope become the scope.
+        settings_set_run_only_keys(onlyKeys);
+        if (freshRequest) g_settings_actions_auto_retry_attempt = 0;
         dispatch_sync(dispatch_get_main_queue(), ^{
             if (!g_settings_actions_idle_held) {
                 g_settings_actions_idle_was_disabled = UIApplication.sharedApplication.idleTimerDisabled;
@@ -10879,8 +10336,10 @@ static void settings_run_actions_internal(BOOL pendingOnly)
             settings_log_perf_delta("Whole run", runStartNs, &runPerf0);
             // Flush, but keep the file open so post-[DONE] background output
             // (idle parking, live-tweak loops) still lands in the shareable log.
-            // The next run's log_session_begin() rotates the file.
-            log_session_flush();
+            // The next run's log_session_begin() rotates the file. From here
+            // the file only takes that tail: synced once a second instead of
+            // every 50 ms, and closed once the tail reaches its size limit.
+            log_session_run_finished();
             __sync_lock_release(&g_settings_actions_running);
             settings_reconcile_applied_from_defaults();
             // Auto-retry: a clean KRW-acquire miss is fully re-entrant in the
@@ -10901,13 +10360,18 @@ static void settings_run_actions_internal(BOOL pendingOnly)
                 int attempt = __sync_add_and_fetch(&g_settings_actions_auto_retry_attempt, 1);
                 log_user("[RUN] Auto-retrying chain (attempt %d of %ld)…\n",
                          attempt, (long)maxRetryAttempts);
-                settings_run_actions_internal(pendingOnly);
+                settings_run_actions_internal(pendingOnly, onlyKeys, NO);
                 return;
             }
             g_settings_actions_auto_retry_attempt = 0;
             if (__sync_bool_compare_and_swap(&g_settings_actions_rerun_requested, 1, 0)) {
+                // The follow-up runs what was asked for while this run was
+                // busy, not this run's own mode.
+                BOOL nextPendingOnly = pendingOnly;
+                NSSet<NSString *> *nextKeys = onlyKeys;
+                (void)settings_take_rerun_request(&nextPendingOnly, &nextKeys);
                 log_user("[RUN] Applying queued follow-up run.\n");
-                settings_run_actions_internal(pendingOnly);
+                settings_run_actions_internal(nextPendingOnly, nextKeys, YES);
                 return;
             }
             // An installer preflight failure (e.g. a repo tweak whose script
@@ -10945,23 +10409,17 @@ static void settings_run_actions_internal(BOOL pendingOnly)
 
 void settings_run_actions(void)
 {
-    settings_set_run_only_keys(nil);
-    g_settings_actions_auto_retry_attempt = 0;
-    settings_run_actions_internal(NO);
+    settings_run_actions_internal(NO, nil, YES);
 }
 
 void settings_run_pending_actions(void)
 {
-    settings_set_run_only_keys(nil);
-    g_settings_actions_auto_retry_attempt = 0;
-    settings_run_actions_internal(YES);
+    settings_run_actions_internal(YES, nil, YES);
 }
 
 void settings_run_pending_actions_for_keys(NSSet<NSString *> *keys)
 {
-    settings_set_run_only_keys(keys.count ? keys : nil);
-    g_settings_actions_auto_retry_attempt = 0;
-    settings_run_actions_internal(YES);
+    settings_run_actions_internal(YES, keys.count ? keys : nil, YES);
 }
 
 BOOL settings_run_in_flight(void)
@@ -10971,8 +10429,8 @@ BOOL settings_run_in_flight(void)
 
 void settings_rerun_last_actions(void)
 {
-    g_settings_actions_auto_retry_attempt = 0;
-    settings_run_actions_internal(g_settings_actions_last_pending_only);
+    // Same mode and scope as the last run.
+    settings_run_actions_internal(g_settings_actions_last_pending_only, settings_run_only_keys(), YES);
 }
 
 // SettingsSection enum moved to SettingsViewController.h so the package catalog
@@ -11042,6 +10500,12 @@ static NSString *settings_pretty_date_for_iso(NSString *iso)
 }
 
 @interface SettingsViewController () <UIDocumentPickerDelegate, PHPickerViewControllerDelegate>
+{
+    // Root bundle lists for the current table data pass (see tweakBundleRows).
+    NSArray<NSDictionary *> *_cachedTweakBundleRows;
+    NSArray<NSDictionary *> *_cachedSystemBundleRows;
+    BOOL _bundleRowsExpiryScheduled;
+}
 @property (nonatomic, strong) UISegmentedControl *powercuffSegmented;
 @property (nonatomic, assign) BOOL pendingManualActionsReload;
 @property (nonatomic, assign) BOOL detailMode;
@@ -15747,14 +15211,50 @@ UIViewController *settings_make_daemons_viewer(void)
     return out;
 }
 
+// The two root lists are asked for by every data-source call (row counts,
+// section titles, header heights and each cell), and each answer used to
+// rebuild the row model of every detail page to decide which bundles to show:
+// about 25 full rebuilds for one reload of the root screen. They are now built
+// once per data pass. numberOfSectionsInTableView: opens every pass (reloadData,
+// reloadSections:, batch updates) and drops them, so a reload always sees the
+// current state; anything read between passes lives for one run-loop turn.
+- (void)invalidateBundleRowsCache
+{
+    _cachedTweakBundleRows = nil;
+    _cachedSystemBundleRows = nil;
+}
+
+- (void)scheduleBundleRowsCacheExpiry
+{
+    if (_bundleRowsExpiryScheduled) return;
+    _bundleRowsExpiryScheduled = YES;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf->_bundleRowsExpiryScheduled = NO;
+        [strongSelf invalidateBundleRowsCache];
+    });
+}
+
 - (NSArray<NSDictionary *> *)tweakBundleRows
 {
-    return [self filterBundles:[self allTweakBundleRows]];
+    if (!NSThread.isMainThread) return [self filterBundles:[self allTweakBundleRows]];
+    if (!_cachedTweakBundleRows) {
+        _cachedTweakBundleRows = [self filterBundles:[self allTweakBundleRows]];
+        [self scheduleBundleRowsCacheExpiry];
+    }
+    return _cachedTweakBundleRows;
 }
 
 - (NSArray<NSDictionary *> *)systemBundleRows
 {
-    return [self filterBundles:[self allSystemBundleRows]];
+    if (!NSThread.isMainThread) return [self filterBundles:[self allSystemBundleRows]];
+    if (!_cachedSystemBundleRows) {
+        _cachedSystemBundleRows = [self filterBundles:[self allSystemBundleRows]];
+        [self scheduleBundleRowsCacheExpiry];
+    }
+    return _cachedSystemBundleRows;
 }
 
 - (NSArray<NSDictionary *> *)bundleRowsForRootSection:(RootSection)section
@@ -15769,6 +15269,7 @@ UIViewController *settings_make_daemons_viewer(void)
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
 {
+    [self invalidateBundleRowsCache];   // a new data pass starts here
     return self.detailMode ? 1 : RootSectionCount;
 }
 
@@ -15949,6 +15450,13 @@ UIViewController *settings_make_daemons_viewer(void)
 #pragma mark - Icon badge
 
 + (UIImage *)iconBadgeWithSymbol:(NSString *)symbol color:(UIColor *)color size:(CGFloat)size
+{
+    return CYIconBadgeCached(@"square", symbol, color, size, ^UIImage *{
+        return [self renderIconBadgeWithSymbol:symbol color:color size:size];
+    });
+}
+
++ (UIImage *)renderIconBadgeWithSymbol:(NSString *)symbol color:(UIColor *)color size:(CGFloat)size
 {
     UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
     UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size) format:format];
@@ -17359,6 +16867,7 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
             [d setObject:self.qlScriptName forKey:@"QuickLoaderSourceScriptName"];
             [d setObject:self.qlRawScript forKey:@"QuickLoaderSourceRawJS"];
             [d setObject:self.qlValues forKey:@"QuickLoaderSourceValues"];
+            quickloader_forget_previous_repo_owner(nil, nil);   // a local script takes the slot
             [d removeObjectForKey:@"QuickLoaderSourceRepoURL"];
             [d removeObjectForKey:@"QuickLoaderSourceTweakID"];
             [d synchronize];
@@ -18036,8 +17545,15 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
         text = @"No log yet. Run a chain at least once.";
     } else {
         NSError *err = nil;
-        text = [NSString stringWithContentsOfFile:logPath encoding:NSUTF8StringEncoding error:&err];
-        if (!text) text = [NSString stringWithFormat:@"Failed to read log: %@", err.localizedDescription];
+        NSData *raw = [NSData dataWithContentsOfFile:logPath options:NSDataReadingMappedIfSafe error:&err];
+        if (raw) {
+            // Log lines are cut at a byte limit, which can split a multi-byte
+            // character; strict UTF-8 then rejected the whole file. Fall back
+            // to Latin-1, which accepts any bytes (as the Log tab does).
+            text = [[NSString alloc] initWithData:raw encoding:NSUTF8StringEncoding]
+                ?: [[NSString alloc] initWithData:raw encoding:NSISOLatin1StringEncoding];
+        }
+        if (!text) text = [NSString stringWithFormat:@"Failed to read log: %@", err.localizedDescription ?: @"unreadable file"];
     }
 
     UIViewController *vc = [[UIViewController alloc] init];
@@ -18805,19 +18321,35 @@ void cyanide_present_contact(UIViewController *host)
         }
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
         cell.textLabel.text = row[@"title"];
+        // The cell is reused: drop the previous row's control. A colour well
+        // sits in contentView (not accessoryView), so without this a new one
+        // was stacked on top on every reload, and a row of another type kept
+        // the old one.
+        cell.accessoryView = nil;
+        for (UIView *old in [cell.contentView.subviews copy]) {
+            if ([old isKindOfClass:UIColorWell.class]) [old removeFromSuperview];
+        }
 
         NSString *varName = row[@"varName"];
         NSString *pType = row[@"paramType"];
         NSString *currentValue = settings_string_or_empty(self.qlValues[varName]);
+        // The handlers below belong to controls this controller owns through
+        // its table. Capturing self (or the control itself) strongly kept every
+        // QuickLoader page alive for good, still observing notifications: they
+        // take self weakly and read the control from the action's sender.
+        __weak typeof(self) weakQL = self;
 
         if ([pType isEqualToString:@"switch"]) {
             UISwitch *sw = [[UISwitch alloc] init];
             sw.on = [currentValue isEqualToString:@"true"];
 
             UIAction *action = [UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-                self.qlValues[varName] = sw.isOn ? @"true" : @"false";
-                [[NSUserDefaults standardUserDefaults] setObject:self.qlValues forKey:@"QuickLoaderSourceValues"];
-                [self applyQuickLoaderScript]; //auto-compiling
+                typeof(self) me = weakQL;
+                UISwitch *control = (UISwitch *)action.sender;
+                if (!me || ![control isKindOfClass:UISwitch.class]) return;
+                me.qlValues[varName] = control.isOn ? @"true" : @"false";
+                [[NSUserDefaults standardUserDefaults] setObject:me.qlValues forKey:@"QuickLoaderSourceValues"];
+                [me applyQuickLoaderScript]; //auto-compiling
             }];
             [sw addAction:action forControlEvents:UIControlEventValueChanged];
 
@@ -18830,18 +18362,18 @@ void cyanide_present_contact(UIViewController *host)
             tf.text = currentValue;
 
             UIAction *action = [UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-                self.qlValues[varName] = tf.text;
-                [[NSUserDefaults standardUserDefaults] setObject:self.qlValues forKey:@"QuickLoaderSourceValues"];
-                [self applyQuickLoaderScript]; //auto-compiling
+                typeof(self) me = weakQL;
+                UITextField *control = (UITextField *)action.sender;
+                if (!me || ![control isKindOfClass:UITextField.class]) return;
+                me.qlValues[varName] = control.text ?: @"";
+                [[NSUserDefaults standardUserDefaults] setObject:me.qlValues forKey:@"QuickLoaderSourceValues"];
+                [me applyQuickLoaderScript]; //auto-compiling
             }];
             [tf addAction:action forControlEvents:UIControlEventEditingChanged];
 
             cell.accessoryView = tf;
         }
         else if ([pType isEqualToString:@"color"]) {
-            // making sure AccessoryView is empty to avoid conflicts
-            cell.accessoryView = nil;
-
             UIColorWell *colorWell = [[UIColorWell alloc] init];
             colorWell.translatesAutoresizingMaskIntoConstraints = NO;
             colorWell.title = row[@"title"];
@@ -18850,9 +18382,12 @@ void cyanide_present_contact(UIViewController *host)
             colorWell.selectedColor = colorFromHexString(currentValue ?: @"#FF0000");
 
             UIAction *action = [UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-                self.qlValues[varName] = hexStringFromColor(colorWell.selectedColor);
-                [[NSUserDefaults standardUserDefaults] setObject:self.qlValues forKey:@"QuickLoaderSourceValues"];
-                [self applyQuickLoaderScript]; //auto-compiling
+                typeof(self) me = weakQL;
+                UIColorWell *control = (UIColorWell *)action.sender;
+                if (!me || ![control isKindOfClass:UIColorWell.class]) return;
+                me.qlValues[varName] = hexStringFromColor(control.selectedColor);
+                [[NSUserDefaults standardUserDefaults] setObject:me.qlValues forKey:@"QuickLoaderSourceValues"];
+                [me applyQuickLoaderScript]; //auto-compiling
             }];
             [colorWell addAction:action forControlEvents:UIControlEventValueChanged];
 
@@ -18905,15 +18440,19 @@ void cyanide_present_contact(UIViewController *host)
 
             //refresh text (when sliding)
             UIAction *updateTextAction = [UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-                updateLabelText(slider.value);
+                UISlider *control = (UISlider *)action.sender;
+                if ([control isKindOfClass:UISlider.class]) updateLabelText(control.value);
             }];
             [slider addAction:updateTextAction forControlEvents:UIControlEventValueChanged];
 
             //save and compile (after sliding)
             UIAction *saveAction = [UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-                self.qlValues[varName] = [NSString stringWithFormat:@"%.2f", slider.value];
-                [[NSUserDefaults standardUserDefaults] setObject:self.qlValues forKey:@"QuickLoaderSourceValues"];
-                [self applyQuickLoaderScript];
+                typeof(self) me = weakQL;
+                UISlider *control = (UISlider *)action.sender;
+                if (!me || ![control isKindOfClass:UISlider.class]) return;
+                me.qlValues[varName] = [NSString stringWithFormat:@"%.2f", control.value];
+                [[NSUserDefaults standardUserDefaults] setObject:me.qlValues forKey:@"QuickLoaderSourceValues"];
+                [me applyQuickLoaderScript];
             }];
             [slider addAction:saveAction forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside];
 
@@ -20281,10 +19820,17 @@ void cyanide_present_contact(UIViewController *host)
         if (!probe && !enableAlways && !disableAlways && !pulse && !unlock) return;
 
         [self presentActivityLog];
-        UIBackgroundTaskIdentifier bgTask = [[UIApplication sharedApplication]
+        // __block, and ended in the expiration handler, as the Passcode Style
+        // task above does: a task that is still open when its time expires
+        // makes iOS kill the app, in the middle of whatever the worker is doing.
+        __block UIBackgroundTaskIdentifier bgTask = [[UIApplication sharedApplication]
             beginBackgroundTaskWithName:@"FastLockX Lite"
                       expirationHandler:^{
             log_user("[FLX] Background time expired; stopping FastLockX Lite action.\n");
+            if (bgTask != UIBackgroundTaskInvalid) {
+                [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+                bgTask = UIBackgroundTaskInvalid;
+            }
         }];
 
         __weak typeof(self) weakSelf = self;
@@ -20577,6 +20123,7 @@ void cyanide_present_contact(UIViewController *host)
             [d removeObjectForKey:@"QuickLoaderSourceScriptName"];
             [d removeObjectForKey:@"QuickLoaderSourceRawJS"];
             [d removeObjectForKey:@"QuickLoaderSourceValues"];
+            quickloader_forget_previous_repo_owner(nil, nil);
             [d removeObjectForKey:@"QuickLoaderSourceRepoURL"];
             [d removeObjectForKey:@"QuickLoaderSourceTweakID"];
             [d removeObjectForKey:@"QuickLoaderSavedJS"];

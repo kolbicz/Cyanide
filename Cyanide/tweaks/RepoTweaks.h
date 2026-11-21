@@ -47,7 +47,10 @@ void repotweaks_cancel_tweak(NSString *repoURL, NSString *tweakId);
 // Used when its source drops it or is deleted. Call on main; caller syncs.
 void repotweaks_forget_tweak(NSString *repoURL, NSString *tweakId);
 // The built-in tweak's enabled key for a repo package backed by one, or nil.
-NSString *repotweaks_native_enabled_key(NSString *tweakId);
+// Non-nil only for a reserved built-in id listed by the built-in source.
+NSString *repotweaks_native_enabled_key(NSString *repoURL, NSString *tweakId);
+// Call when the user deletes a source, so a deleted default is not seeded back.
+void repotweaks_note_source_removed_by_user(NSString *repoURL);
 
 bool repotweaks_stop_in_session(void);
 

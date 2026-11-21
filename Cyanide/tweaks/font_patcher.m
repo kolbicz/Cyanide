@@ -86,6 +86,37 @@ BOOL fontpatch_needed(NSData *target, NSData *source)
     return fp_face_count(target) > 1 || (t[@"fvar"] != nil && s[@"fvar"] == nil);
 }
 
+// Whether an sfnt file (any outline format) lists table `tag`. Bounds-checked;
+// NO for anything that isn't an sfnt.
+static BOOL fp_sfnt_has_table(NSData *font, const char *tag)
+{
+    const uint8_t *b = font.bytes;
+    size_t n = font.length;
+    if (n < 12) return NO;
+    uint16_t numTables = rd16(b + 4);
+    if (12 + (size_t)numTables * 16 > n) return NO;
+    for (uint16_t i = 0; i < numTables; i++) {
+        const uint8_t *r = b + 12 + i * 16;
+        if (memcmp(r, tag, 4) != 0) continue;
+        uint32_t off = rd32(r + 8), len = rd32(r + 12);
+        return (size_t)off + len <= n;
+    }
+    return NO;
+}
+
+BOOL fontpatch_source_usable(NSData *target, NSData *source, NSString **why)
+{
+    NSString *reason = nil;
+    if (fp_tables(source, &reason)) return YES;
+    // Not readable as TrueType. The one such file that can still go in as it
+    // is: a variable CFF font for a single (non-collection) variable target,
+    // where nothing has to be adapted.
+    BOOL cff = source.length >= 12 && memcmp(source.bytes, "OTTO", 4) == 0;
+    if (cff && fp_face_count(target) == 1 && fp_sfnt_has_table(source, "fvar")) return YES;
+    if (why) *why = reason ?: @"Not a font file.";
+    return NO;
+}
+
 BOOL fontpatch_is_adapted(NSData *font)
 {
     NSString *why = nil;

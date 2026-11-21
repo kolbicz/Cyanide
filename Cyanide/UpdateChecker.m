@@ -238,10 +238,6 @@ static NSString *update_http_failure(NSURLResponse *response)
         [spin.bottomAnchor  constraintEqualToAnchor:checking.view.bottomAnchor constant:-20],
     ]];
 
-    UIViewController *top = presenter;
-    while (top.presentedViewController) top = top.presentedViewController;
-    [top presentViewController:checking animated:YES completion:nil];
-
     NSURL *url = [NSURL URLWithString:kReleasesAPI];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url
                                                        cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
@@ -330,7 +326,18 @@ static NSString *update_http_failure(NSURLResponse *response)
             }];
         });
     }];
-    [task resume];
+    // Start the request only once the "Checking…" alert is on screen. A
+    // request that fails at once (offline, airplane mode) used to finish while
+    // the alert was still animating in; UIKit ignores a dismiss during that
+    // transition, which left an alert with no buttons that could not be
+    // closed and never showed "Check Failed".
+    UIViewController *top = presenter;
+    while (top.presentedViewController) top = top.presentedViewController;
+    if (top) {
+        [top presentViewController:checking animated:YES completion:^{ [task resume]; }];
+    } else {
+        [task resume];
+    }
 }
 
 - (void)presentUpdateAlertFrom:(UIViewController *)presenter
