@@ -1873,6 +1873,11 @@ static const useconds_t kThemerLegacyPageIdlePollUS   = 1500000;  // no swipe fo
 static const useconds_t kThemerLegacyPageLockedPollUS = 2000000;  // locked: no probe
 static const NSUInteger kThemerLegacyPageIdleAfterTicks = 20;     // ~6s at 300ms
 static const uint64_t   kThemerLegacyFallbackRepaintUS = 120000000; // was every 12s
+// iOS 26+ with SnowBoard Lite: page-follow too (issue #22: icons shown in the
+// App Library came back unthemed and stayed so until the next slow repair).
+// Its fallback repaint keeps the previous background interval, so it never
+// repaints less often than before.
+static const uint64_t   kThemerPageFollowFallback26US = 30000000;
 static const useconds_t kThemerRepairInitialDelayUS = 900000;
 static const useconds_t kThemerRepairIntervalUS = 450000;
 NSString * const kSettingsRemoteCallStateDidChangeNotification = @"SettingsRemoteCallStateDidChangeNotification";
@@ -7042,7 +7047,12 @@ static void settings_start_themer_live_loop(void)
         NSUInteger tick = 0;
         NSUInteger failures = 0;
         NSInteger iosMajor = [[NSProcessInfo processInfo] operatingSystemVersion].majorVersion;
-        BOOL legacyPageMode = (iosMajor > 0 && iosMajor < 26);
+        // iOS 26+: page-follow only for SnowBoard Lite (it repairs the
+        // visible page, like the legacy mode); Themer keeps its cached path.
+        BOOL sblPageFollow26 = iosMajor >= 26 && settings_snowboardlite_live_repair_enabled(d);
+        BOOL legacyPageMode = (iosMajor > 0 && iosMajor < 26) || sblPageFollow26;
+        uint64_t fallbackRepaintUS = sblPageFollow26 ? kThemerPageFollowFallback26US
+                                                     : kThemerLegacyFallbackRepaintUS;
         NSUInteger maxTicks = legacyPageMode
             ? kThemerLegacyPageMaxTicks
             : kThemerLiveMaxTicks;
@@ -7052,13 +7062,14 @@ static void settings_start_themer_live_loop(void)
         BOOL lockedTick = NO;         // last tick skipped because the device is locked
         uint64_t lastFallbackUS = 0;  // last occasional full repaint (time based)
 
-        printf("[SETTINGS] Themer dynamic live loop started interval=%uus background=%uus sblSlow=%uus/%uus max=%lu iosMajor=%ld\n",
+        printf("[SETTINGS] Themer dynamic live loop started interval=%uus background=%uus sblSlow=%uus/%uus max=%lu iosMajor=%ld pageFollow=%d\n",
                kThemerLiveIntervalUS,
                kThemerLiveBackgroundIntervalUS,
                kThemerSnowBoardLiteSlowIntervalUS,
                kThemerSnowBoardLiteSlowBackgroundIntervalUS,
                (unsigned long)maxTicks,
-               (long)iosMajor);
+               (long)iosMajor,
+               legacyPageMode);
 
         @try {
             // Start with a sleep so we don't pile a tick on top of the
@@ -7102,9 +7113,15 @@ static void settings_start_themer_live_loop(void)
                                 uint64_t nowUS = clock_gettime_nsec_np(CLOCK_MONOTONIC) / 1000ULL;
                                 uint64_t token = sbcustomizer_current_page_token();
                                 bool pageChanged = (token != lastPageToken);
-                                if (pageChanged) { hotTicks = 5; idleTicks = 0; }
+                                if (pageChanged) {
+                                    hotTicks = 5; idleTicks = 0;
+                                    // #22 test: shows whether the App Library return counts.
+                                    if (sblPageFollow26 && tick > 0)
+                                        printf("[SETTINGS] SnowBoard Lite page change 0x%llx -> 0x%llx: repainting\n",
+                                               lastPageToken, token);
+                                }
                                 else idleTicks++;
-                                bool fallbackDue = (nowUS - lastFallbackUS) >= kThemerLegacyFallbackRepaintUS;
+                                bool fallbackDue = (nowUS - lastFallbackUS) >= fallbackRepaintUS;
                                 if (pageChanged || tick == 0 || hotTicks > 0 || fallbackDue) {
                                     ok = themer_repaint_visible_theme_views_in_session();
                                     if (fallbackDue || tick == 0) lastFallbackUS = nowUS;
