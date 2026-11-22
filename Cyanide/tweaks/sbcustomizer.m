@@ -1534,10 +1534,130 @@ static int rebalance_impl(uint64_t rootFolder, uint64_t count,
     return failed ? -1 : moved;
 }
 
+// ---- Remembered pages ------------------------------------------------------
+//
+// Between runs SpringBoard is back on its own grid (one row more per page), so
+// every arranged page has a free row. Whatever iOS places by itself (a
+// reinstalled or restored app, one added back from the App Library) lands in
+// the first free slot, and the next arrange used to push each page's LAST
+// icons forward -- the newcomers -- to the front of the next page, which is
+// rarely where they came from (Nov 2026 log: page[1] 28 icons, page[2] 22,
+// moved=3, and the user's page order changed). So the arrange remembers which
+// page every app ended on and sends icons in a page's free row (past its
+// target count) back to their remembered page while that page is short.
+// Icons inside the target count are never touched here, so an app the user
+// dragged onto a page stays; anything not handled falls through to the usual
+// push-forward / fill rebalance.
+static NSString *const kSBCRememberedPagesKey = @"SBCArrangeRememberedPages";
+
+// Bundle ID of an app icon, or nil (folders, widgets, web clips). Same
+// SBApplication path as icon_matches_bundle; on the main thread because the
+// arrange mutates these models there.
+static NSString *icon_bundle_id(uint64_t icon)
+{
+    if (!r_is_objc_ptr(icon) || !r_responds(icon, "application")) return nil;
+    uint64_t app = r_msg2_main(icon, "application", 0, 0, 0, 0);
+    if (!r_last_main_ok() || !r_is_objc_ptr(app) || !r_responds(app, "bundleIdentifier")) return nil;
+    uint64_t value = r_msg2_main(app, "bundleIdentifier", 0, 0, 0, 0);
+    if (!r_last_main_ok() || !r_is_objc_ptr(value)) return nil;
+    char actual[192] = {0};
+    if (!r_read_nsstring(value, actual, sizeof(actual)) || !actual[0]) return nil;
+    return [NSString stringWithUTF8String:actual];
+}
+
+static void remember_page_layout(uint64_t rootFolder, uint64_t count)
+{
+    NSMutableArray<NSArray<NSString *> *> *pages = [NSMutableArray array];
+    NSUInteger apps = 0;
+    for (uint64_t page = 0; page < count; page++) {
+        uint64_t model = page_model_at(rootFolder, page);
+        uint64_t n = icon_array_count_transient(model);
+        if (n == UINT64_MAX) {
+            printf("[SBC:ARRANGE] page[%llu] unreadable; page memory not updated\n", page);
+            return;
+        }
+        NSMutableArray<NSString *> *ids = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
+        for (uint64_t i = 0; i < n; i++) {
+            NSString *bundleID = icon_bundle_id(icon_at_index_transient(model, i));
+            if (bundleID.length) apps++;
+            [ids addObject:bundleID ?: @""];
+        }
+        [pages addObject:ids];
+    }
+    [NSUserDefaults.standardUserDefaults setObject:pages forKey:kSBCRememberedPagesKey];
+    printf("[SBC:ARRANGE] remembered %llu page(s), %lu app icon(s)\n",
+           count, (unsigned long)apps);
+}
+
+static int return_overflow_to_remembered_pages(uint64_t rootFolder, uint64_t count,
+                                               int firstPageIcons, int otherPageIcons)
+{
+    NSArray *remembered = [NSUserDefaults.standardUserDefaults arrayForKey:kSBCRememberedPagesKey];
+    if (remembered.count == 0 || count == 0 || count > SBC_PAGE_VIEW_CACHE_MAX) return 0;
+
+    // bundle ID -> (page, index) where the last arrange left it.
+    NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *where = [NSMutableDictionary dictionary];
+    [remembered enumerateObjectsUsingBlock:^(id ids, NSUInteger page, BOOL *stop) {
+        if (![ids isKindOfClass:NSArray.class]) return;
+        [(NSArray *)ids enumerateObjectsUsingBlock:^(id bundleID, NSUInteger index, BOOL *stop2) {
+            if ([bundleID isKindOfClass:NSString.class] && [bundleID length] && !where[bundleID]) {
+                where[bundleID] = @[@(page), @(index)];
+            }
+        }];
+    }];
+
+    uint64_t counts[SBC_PAGE_VIEW_CACHE_MAX];
+    for (uint64_t page = 0; page < count; page++) {
+        counts[page] = icon_array_count_transient(page_model_at(rootFolder, page));
+        if (counts[page] == UINT64_MAX) return 0;
+    }
+
+    int moved = 0;
+    for (uint64_t page = 0; page < count; page++) {
+        uint64_t desired = (uint64_t)(page == 0 ? firstPageIcons : otherPageIcons);
+        if (counts[page] <= desired) continue;
+        // Only the free-row block (index >= desired), last first, so the
+        // indices still to visit don't shift.
+        for (uint64_t i = counts[page]; i > desired && counts[page] > desired; ) {
+            i--;
+            uint64_t icon = icon_at_index_transient(page_model_at(rootFolder, page), i);
+            NSString *bundleID = icon_bundle_id(icon);
+            NSArray<NSNumber *> *pos = bundleID.length ? where[bundleID] : nil;
+            if (!pos) continue;
+            uint64_t home = pos[0].unsignedLongLongValue;
+            if (home == page || home >= count) continue;
+            uint64_t homeDesired = (uint64_t)(home == 0 ? firstPageIcons : otherPageIcons);
+            if (counts[home] >= homeDesired) continue;
+            uint64_t index = pos[1].unsignedLongLongValue;
+            if (index > counts[home]) index = counts[home];
+            if (!move_icon_between_pages(rootFolder, page, i, home, index,
+                                         counts[page], counts[home], icon, "remembered page")) {
+                // Restored (or unknown): leave the rest to the verified rebalance.
+                printf("[SBC:ARRANGE] returning %s failed; rebalancing instead\n",
+                       bundleID.UTF8String);
+                return moved;
+            }
+            printf("[SBC:ARRANGE] %s: page[%llu] free row -> back to page[%llu] index %llu\n",
+                   bundleID.UTF8String, page, home, index);
+            counts[page]--;
+            counts[home]++;
+            moved++;
+        }
+    }
+    if (moved) printf("[SBC:ARRANGE] returned %d icon(s) to their remembered page\n", moved);
+    return moved;
+}
+
 static int rebalance_page_models(uint64_t rootFolder, uint64_t count,
                                  int firstPageIcons, int otherPageIcons)
 {
-    return rebalance_impl(rootFolder, count, firstPageIcons, otherPageIcons, true);
+    reset_page_view_cache(rootFolder);
+    int returned = return_overflow_to_remembered_pages(rootFolder, count,
+                                                       firstPageIcons, otherPageIcons);
+    int moved = rebalance_impl(rootFolder, count, firstPageIcons, otherPageIcons, true);
+    if (moved < 0) return moved;
+    remember_page_layout(rootFolder, count);
+    return moved + returned;
 }
 
 static bool arrange_homescreen_pages(uint64_t iconCtrl, int preferredCols,

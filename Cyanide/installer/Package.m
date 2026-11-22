@@ -193,18 +193,23 @@ static BOOL PackageRepoScriptRequiresNativeBridge(NSString *rawScript)
 {
     if (self.kind == PackageInstallKindRepoTweak) {
         if (self.repoNativeEnabledKey.length > 0) {
-            return self.isInstalled && !settings_tweak_is_applied(self.repoNativeEnabledKey);
+            return self.isInstalled && settings_tweak_needs_apply(self.repoNativeEnabledKey);
         }
-        return self.isInstalled && !settings_tweak_is_applied(kSettingsQuickLoaderEnabled);
+        return self.isInstalled && settings_tweak_needs_apply(kSettingsQuickLoaderEnabled);
     }
     if (self.kind != PackageInstallKindToggle || !self.enabledKey) return NO;
+    // CarPlay without Siri is applied per car connection (Control Center
+    // button, Shortcuts action, cyanide://carplay, or a full Run) and is never
+    // marked applied, so as a queue item it stayed pending forever, kept the
+    // queue open and made every queue run an empty one.
+    if ([self.enabledKey isEqualToString:kSettingsCarPlayWithoutSiriEnabled]) return NO;
     if ([self.enabledKey isEqualToString:kSettingsQuickLoaderEnabled] &&
         quickloader_is_driven_by_repo_tweak()) {
         return NO;
     }
     if (self.isInstallDisabled) return NO;
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-    return [d boolForKey:self.enabledKey] && !settings_tweak_is_applied(self.enabledKey);
+    return [d boolForKey:self.enabledKey] && settings_tweak_needs_apply(self.enabledKey);
 }
 
 - (BOOL)isInstallDisabled

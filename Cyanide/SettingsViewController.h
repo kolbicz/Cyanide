@@ -200,6 +200,8 @@ void settings_rerun_last_actions(void);
 // applied in this app session. Cleared on launch, on cleanup, and whenever the
 // SpringBoard RemoteCall session goes away.
 BOOL settings_tweak_is_applied(NSString *key);
+// Not applied yet, or applied and queued again by the re-apply button.
+BOOL settings_tweak_needs_apply(NSString *key);
 void settings_mark_tweak_needs_apply(NSString *key);
 // SpringBoard Tools applied with the tweaks (Settings → Lara → SpringBoard
 // Tools → Apply with Tweaks). settings_sbtools_note: its screen applied the

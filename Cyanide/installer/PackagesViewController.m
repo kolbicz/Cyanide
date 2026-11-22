@@ -45,10 +45,10 @@ static NSString * const kSearchCellID = @"SearchPkgCell";
     self.navigationItem.searchController = self.searchCtl;
     self.navigationItem.hidesSearchBarWhenScrolling = NO;
 
-    // Re-queue tweaks applied in this session so they can be applied again
-    // without relaunching. Only shown while Cyanide stays open (after an
-    // in-session apply emptied the queue); on a fresh relaunch the queue already
-    // shows the tweaks, so the button is hidden. See updateReapplyButtonVisibility.
+    // Re-queue applied tweaks so they can be applied again without a respring.
+    // Shown while any enabled tweak is applied and not already queued again,
+    // including one-shot SpringBoard patches kept from an earlier launch. See
+    // updateReapplyButtonVisibility.
     [self updateReapplyButtonVisibility];
 
     [[NSNotificationCenter defaultCenter] addObserver:self

@@ -1405,7 +1405,7 @@ static NSMutableSet<NSString *> *settings_applied_keys_set(void)
 // exits. A reopened Cyanide then neither re-applies them all nor loses track
 // of what a switch-off has to undo. Live tweaks stop with Cyanide and stay
 // process-local.
-static BOOL settings_key_is_springboard_oneshot(NSString *key)
+static NSSet<NSString *> *settings_springboard_oneshot_keys(void)
 {
     static NSSet<NSString *> *keys;
     static dispatch_once_t once;
@@ -1426,7 +1426,12 @@ static BOOL settings_key_is_springboard_oneshot(NSString *key)
             kSettingsDSDragCoefficientEnabled,
         ]];
     });
-    return key && [keys containsObject:key];
+    return keys;
+}
+
+static BOOL settings_key_is_springboard_oneshot(NSString *key)
+{
+    return key && [settings_springboard_oneshot_keys() containsObject:key];
 }
 
 static BOOL settings_key_persists_applied_state(NSString *key)
@@ -1512,6 +1517,17 @@ static BOOL settings_persisted_applied(NSString *key)
     return YES;
 }
 
+// Applied tweaks the re-apply button put back in the queue. They stay
+// "applied" (a switch-off still knows what to undo); they only count as
+// pending again until a run applies them. Process-local: a relaunch drops it.
+static NSMutableSet<NSString *> *settings_reapply_requested_set(void)
+{
+    static NSMutableSet<NSString *> *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ set = [NSMutableSet set]; });
+    return set;
+}
+
 static void settings_mark_tweak_applied(NSString *key, BOOL applied)
 {
     if (!key) return;
@@ -1520,6 +1536,8 @@ static void settings_mark_tweak_applied(NSString *key, BOOL applied)
         if (applied) [set addObject:key];
         else         [set removeObject:key];
     }
+    NSMutableSet *requested = settings_reapply_requested_set();
+    @synchronized (requested) { [requested removeObject:key]; }
     settings_set_persisted_applied(key, applied);
 }
 
@@ -1531,6 +1549,14 @@ BOOL settings_tweak_is_applied(NSString *key)
         if ([set containsObject:key]) return YES;
     }
     return settings_persisted_applied(key);
+}
+
+BOOL settings_tweak_needs_apply(NSString *key)
+{
+    if (!key) return NO;
+    if (!settings_tweak_is_applied(key)) return YES;
+    NSMutableSet *requested = settings_reapply_requested_set();
+    @synchronized (requested) { return [requested containsObject:key]; }
 }
 
 void settings_mark_tweak_needs_apply(NSString *key)
@@ -1555,30 +1581,55 @@ void settings_sbtools_note(BOOL applied)
     settings_notify_package_queue_changed_async();
 }
 
-// Re-queue every already-applied tweak so it shows in the queue and can be
-// applied again — without relaunching Cyanide. Relaunching normally re-queues
-// enabled tweaks because the in-memory applied set starts empty; this reproduces
-// that in-process by clearing that set, so parked-state re-apply can be tested
-// while the app stays open (closing/relaunching itself changes the primitive).
-// Mirrors a relaunch: only the process-local applied state is cleared;
-// persisted markers (QuickLoader/RepoTweaks) survive a relaunch and are left be.
-void settings_requeue_applied_tweaks_for_reapply(void)
+// Every key that can be applied right now: this session's (in-memory) set
+// plus the ones whose applied state was kept from an earlier launch (one-shot
+// SpringBoard patches, QuickLoader, repo tweaks), enabled ones only.
+static NSArray<NSString *> *settings_applied_enabled_keys(void)
 {
+    NSMutableSet<NSString *> *candidates = [NSMutableSet set];
     NSMutableSet<NSString *> *set = settings_applied_keys_set();
-    @synchronized (set) { [set removeAllObjects]; }
-    settings_notify_package_queue_changed_async();
-    log_user("[SETTINGS] Re-queued applied tweaks — apply again without relaunching.\n");
+    @synchronized (set) { [candidates unionSet:set]; }
+    [candidates unionSet:settings_springboard_oneshot_keys()];
+    [candidates addObject:kSettingsQuickLoaderEnabled];
+    [candidates addObject:kSettingsRepoTweaksEnabled];
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (NSString *key in candidates) {
+        if ([key isEqualToString:kSettingsCarPlayWithoutSiriEnabled]) continue;
+        if (![d boolForKey:key] || !settings_tweak_is_applied(key)) continue;
+        [out addObject:key];
+    }
+    return out;
 }
 
-// True only while there are tweaks applied in THIS process session (the
-// in-memory applied set). It is empty on a fresh relaunch — where the queue
-// already re-shows the enabled tweaks — and non-empty after an in-session apply
-// emptied the queue. Drives the re-apply button's visibility: it's only useful
-// while Cyanide stays open.
+// Put every applied tweak back in the queue so it can be applied again
+// without a respring. Used to clear only this session's in-memory set, which
+// is empty after a relaunch -- while the one-shot SpringBoard patches kept
+// from the earlier launch never came back (1.30.0: no button, empty queue).
+// The applied state itself is kept: a tweak switched off afterwards must
+// still be undone.
+void settings_requeue_applied_tweaks_for_reapply(void)
+{
+    NSArray<NSString *> *keys = settings_applied_enabled_keys();
+    NSMutableSet *requested = settings_reapply_requested_set();
+    @synchronized (requested) { [requested addObjectsFromArray:keys]; }
+    settings_notify_package_queue_changed_async();
+    log_user("[SETTINGS] Re-queued %lu applied tweak(s) — apply again without a respring.\n",
+             (unsigned long)keys.count);
+}
+
+// Whether the re-apply button has anything to put back in the queue: an
+// enabled tweak that is applied (this session or kept from an earlier launch)
+// and not already queued again.
 BOOL settings_has_reappliable_tweaks(void)
 {
-    NSMutableSet<NSString *> *set = settings_applied_keys_set();
-    @synchronized (set) { return set.count > 0; }
+    NSMutableSet *requested = settings_reapply_requested_set();
+    for (NSString *key in settings_applied_enabled_keys()) {
+        @synchronized (requested) {
+            if (![requested containsObject:key]) return YES;
+        }
+    }
+    return NO;
 }
 
 static BOOL settings_clear_all_applied_locked(void)
@@ -4207,7 +4258,7 @@ static BOOL settings_enabled_tweak_should_run(NSUserDefaults *d, NSString *key, 
     if (![d boolForKey:key]) return NO;
     NSSet<NSString *> *onlyKeys = pendingOnly ? settings_run_only_keys() : nil;
     if (onlyKeys) return [onlyKeys containsObject:key];
-    return !pendingOnly || !settings_tweak_is_applied(key);
+    return !pendingOnly || settings_tweak_needs_apply(key);
 }
 
 static NSTimeInterval settings_current_boot_epoch_seconds(void)
