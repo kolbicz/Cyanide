@@ -1584,6 +1584,30 @@ static void remember_page_layout(uint64_t rootFolder, uint64_t count)
         }
         [pages addObject:ids];
     }
+    // Name the apps that came onto or left the Home Screen since the last
+    // arrange (Nov 2026: 161 apps before a respring, 164 after, no failed
+    // move logged -- the log couldn't say which).
+    NSArray *previous = [NSUserDefaults.standardUserDefaults arrayForKey:kSBCRememberedPagesKey];
+    if (previous.count) {
+        NSMutableSet<NSString *> *before = [NSMutableSet set];
+        for (id ids in previous) {
+            if ([ids isKindOfClass:NSArray.class]) [before addObjectsFromArray:ids];
+        }
+        NSMutableSet<NSString *> *now = [NSMutableSet set];
+        for (NSArray *ids in pages) [now addObjectsFromArray:ids];
+        [before removeObject:@""];
+        [now removeObject:@""];
+        NSMutableSet<NSString *> *added = [now mutableCopy];
+        [added minusSet:before];
+        NSMutableSet<NSString *> *gone = [before mutableCopy];
+        [gone minusSet:now];
+        for (NSString *bundleID in added) {
+            printf("[SBC:ARRANGE] on the Home Screen since the last arrange: %s\n", bundleID.UTF8String);
+        }
+        for (NSString *bundleID in gone) {
+            printf("[SBC:ARRANGE] no longer on the Home Screen since the last arrange: %s\n", bundleID.UTF8String);
+        }
+    }
     [NSUserDefaults.standardUserDefaults setObject:pages forKey:kSBCRememberedPagesKey];
     printf("[SBC:ARRANGE] remembered %llu page(s), %lu app icon(s)\n",
            count, (unsigned long)apps);
