@@ -1597,10 +1597,12 @@ static NSArray<NSString *> *settings_applied_enabled_keys(void)
     [candidates unionSet:settings_springboard_oneshot_keys()];
     [candidates addObject:kSettingsQuickLoaderEnabled];
     [candidates addObject:kSettingsRepoTweaksEnabled];
+    // Re-applied like the rest: lifts the lock-out if a car is connected,
+    // otherwise it just counts as applied again.
+    [candidates addObject:kSettingsCarPlayWithoutSiriEnabled];
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
     NSMutableArray<NSString *> *out = [NSMutableArray array];
     for (NSString *key in candidates) {
-        if ([key isEqualToString:kSettingsCarPlayWithoutSiriEnabled]) continue;
         if (![d boolForKey:key] || !settings_tweak_is_applied(key)) continue;
         [out addObject:key];
     }
