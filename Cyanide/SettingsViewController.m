@@ -1438,6 +1438,7 @@ static BOOL settings_key_persists_applied_state(NSString *key)
 {
     return [key isEqualToString:kSettingsQuickLoaderEnabled] ||
            [key isEqualToString:kSettingsRepoTweaksEnabled] ||
+           [key isEqualToString:kSettingsCarPlayWithoutSiriEnabled] ||
            settings_key_is_springboard_oneshot(key);
 }
 
@@ -1491,6 +1492,10 @@ static BOOL settings_persisted_applied(NSString *key)
 
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     if (![d boolForKey:settings_persisted_applied_bool_key(key)]) return NO;
+    // CarPlay without Siri: "applied" means the package went through the
+    // queue once; the lift itself is per car connection (button, Shortcut,
+    // link). Not tied to any process, so the pid/boot checks don't apply.
+    if ([key isEqualToString:kSettingsCarPlayWithoutSiriEnabled]) return YES;
 
     // If a SpringBoard RemoteCall session is open, validate the marker against
     // that SpringBoard pid. If no session is open yet, trust the persisted
@@ -9639,8 +9644,13 @@ static void settings_run_actions_internal(BOOL pendingOnly, NSSet<NSString *> *r
             // A full Run, or a run scoped to it (the CarPlay button and
             // Shortcuts action). Other pending runs (the installer queue)
             // leave it out: switching to CarPlay forces a SpringBoard refresh.
+            // A queue run includes it only while its activation is pending
+            // (just added to the queue); the button and link run it scoped.
+            NSSet<NSString *> *carPlayOnlyKeys = pendingOnly ? settings_run_only_keys() : nil;
             BOOL runCarPlaySiri = [d boolForKey:kSettingsCarPlayWithoutSiriEnabled] &&
-                                  (!pendingOnly || [settings_run_only_keys() containsObject:kSettingsCarPlayWithoutSiriEnabled]);
+                                  (!pendingOnly ||
+                                   (carPlayOnlyKeys ? [carPlayOnlyKeys containsObject:kSettingsCarPlayWithoutSiriEnabled]
+                                                    : settings_tweak_needs_apply(kSettingsCarPlayWithoutSiriEnabled)));
             BOOL forceSpringBoardRefresh = (runPowercuff || runCarPlaySiri) &&
                                            settings_has_persistent_springboard_remote_call_user();
             BOOL springBoardPendingOnly = pendingOnly && !forceSpringBoardRefresh;
@@ -9833,7 +9843,10 @@ static void settings_run_actions_internal(BOOL pendingOnly, NSSet<NSString *> *r
                 // Nothing to patch: keep the SpringBoard channel as it is.
                 settings_progress(&step, total, "CarPlay not connected");
                 g_carplay_last_result = (int)CarPlaySiriNotConnected;
-                log_user("[CARPLAY] CarPlay isn't connected; run again while the car shows \"CarPlay Not Available\".\n");
+                // The package is active; the lift happens per connection.
+                settings_mark_tweak_applied(kSettingsCarPlayWithoutSiriEnabled, YES);
+                log_user("[CARPLAY] CarPlay isn't connected. CarPlay without Siri is active: use the CarPlay "
+                         "button in Control Center (or the Shortcut) while the car shows \"CarPlay Not Available\".\n");
             } else if (runCarPlaySiri) {
                 settings_progress(&step, total, "Lifting the CarPlay Siri lock-out");
                 if (g_springboard_rc_ready || settings_any_registered_live_loop_running()) {
@@ -9846,9 +9859,11 @@ static void settings_run_actions_internal(BOOL pendingOnly, NSSet<NSString *> *r
                     settings_destroy_springboard_remote_call_locked_internal("switching to CarPlay", NO);
                     CarPlaySiriResult result = carplaysiri_apply();
                     g_carplay_last_result = (int)result;
-                    // Applied only for this connection: not marked applied,
-                    // so every run tries again.
-                    settings_mark_tweak_applied(kSettingsCarPlayWithoutSiriEnabled, NO);
+                    // "Applied" = the package is active; the lift itself is per
+                    // connection. A failure stays pending so the queue retries.
+                    settings_mark_tweak_applied(kSettingsCarPlayWithoutSiriEnabled,
+                                                result == CarPlaySiriApplied ||
+                                                result == CarPlaySiriNotConnected);
                     if (result == CarPlaySiriApplied) {
                         log_user("[OK] CarPlay lock-out lifted.\n");
                     } else if (result != CarPlaySiriNotConnected) {
