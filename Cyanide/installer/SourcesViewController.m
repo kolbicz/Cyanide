@@ -4,6 +4,7 @@
 //
 
 #import "SourcesViewController.h"
+#import "../Localization/CyanideLanguage.h"
 #import "CYIconBadge.h"
 #import "JSTweakDocsViewController.h"
 #import "CategoryPackagesViewController.h"
@@ -382,7 +383,7 @@ static UIColor *category_color(NSString *cat)
     if (!tab) return;
     for (NSUInteger i = 0; i < tab.viewControllers.count; i++) {
         UIViewController *vc = tab.viewControllers[i];
-        if ([vc.tabBarItem.title isEqualToString:@"Settings"]) {
+        if (CyanideStringMatchesEnglish(vc.tabBarItem.title, @"Settings")) {
             UINavigationController *nav = [vc isKindOfClass:UINavigationController.class] ? (UINavigationController *)vc : nil;
             if (!nav) return;
             [nav popToRootViewControllerAnimated:NO];

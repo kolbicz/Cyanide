@@ -4,6 +4,7 @@
 //
 
 #import "CategoryPackagesViewController.h"
+#import "../Localization/CyanideLanguage.h"
 #import "CYIconBadge.h"
 #import "PackageCatalog.h"
 #import "PackageDetailViewController.h"
@@ -349,7 +350,7 @@ static NSString * const kCatPkgCellID = @"CatPkgCell";
     UINavigationController *settingsNav = nil;
     for (NSUInteger i = 0; i < tab.viewControllers.count; i++) {
         UIViewController *vc = tab.viewControllers[i];
-        if ([vc.tabBarItem.title isEqualToString:@"Settings"]) {
+        if (CyanideStringMatchesEnglish(vc.tabBarItem.title, @"Settings")) {
             settingsIndex = i;
             if ([vc isKindOfClass:UINavigationController.class]) settingsNav = (UINavigationController *)vc;
             break;

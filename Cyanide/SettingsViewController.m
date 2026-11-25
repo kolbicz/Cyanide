@@ -80,6 +80,7 @@
 #import "installer/PackageQueue.h"
 #import "installer/MainTabBarController.h"
 #import "docs/DocsViewController.h"
+#import "Localization/CyanideLanguage.h"
 #import "UpdateChecker.h"
 #import "SBLArchiveExtractor.h"
 #import "NiceBarSettingsSupport.h"
@@ -14120,7 +14121,7 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
 {
     if (title.length == 0) return NSNotFound;
     for (NSUInteger i = 0; i < tab.viewControllers.count; i++) {
-        if ([tab.viewControllers[i].tabBarItem.title isEqualToString:title]) return i;
+        if (CyanideStringMatchesEnglish(tab.viewControllers[i].tabBarItem.title, title)) return i;
     }
     return NSNotFound;
 }
@@ -14218,7 +14219,7 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
     if (![tab isKindOfClass:UITabBarController.class]) return;
     for (NSUInteger i = 0; i < tab.viewControllers.count; i++) {
         UIViewController *vc = tab.viewControllers[i];
-        if ([vc.tabBarItem.title isEqualToString:title]) {
+        if (CyanideStringMatchesEnglish(vc.tabBarItem.title, title)) {
             tab.selectedIndex = i;
             return;
         }
@@ -15357,7 +15358,7 @@ UIViewController *settings_make_daemons_viewer(void)
         case RootSectionInDev:         return (NSInteger)self.inDevBundleRows.count;
         case RootSectionSystemBundles:  return (NSInteger)self.systemBundleRows.count;
         case RootSectionLara:           return settings_device_supported() ? (NSInteger)self.laraRows.count : 0;
-        case RootSectionAbout:          return 5;
+        case RootSectionAbout:          return 6;
         case RootSectionWarning:        return 0;
         case RootSectionCount:          return 0;
     }
@@ -15795,9 +15796,14 @@ UIViewController *settings_make_daemons_viewer(void)
             cell.imageView.image = [SettingsViewController iconBadgeWithSymbol:@"doc.text.magnifyingglass" color:UIColor.systemGrayColor size:29.0];
             cell.textLabel.text = @"View Log";
             break;
-        default:
+        case 4:
             cell.imageView.image = [SettingsViewController iconBadgeWithSymbol:@"square.and.arrow.up" color:UIColor.systemGreenColor size:29.0];
             cell.textLabel.text = @"Share Log";
+            break;
+        default:
+            cell.imageView.image = [SettingsViewController iconBadgeWithSymbol:@"globe" color:UIColor.systemBlueColor size:29.0];
+            cell.textLabel.text = @"Language";
+            cell.detailTextLabel.text = CyanideLanguageDisplayName();
             break;
     }
     return cell;
@@ -17603,6 +17609,75 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
 {
     NSURL *url = [NSURL URLWithString:@"https://twitter.com/_kolbicz"];
     if (url) [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+}
+
+- (void)presentLanguagePicker
+{
+    NSString *current = CyanideLanguageCurrentCode();
+    NSString *stored = [[NSUserDefaults standardUserDefaults]
+                        stringForKey:CyanideLanguagePreferenceKey];
+    (void)current;
+
+    UIAlertController *ac = [UIAlertController
+        alertControllerWithTitle:@"Language"
+                         message:@"Choose the app language. Changing it requires restarting Cyanide."
+                  preferredStyle:UIAlertControllerStyleAlert];
+    __weak typeof(self) weakSelf = self;
+
+    NSString *follow = CyanideLocalized(@"Follow System");
+    if (!stored.length) follow = [@"✓ " stringByAppendingString:follow];
+    [ac addAction:[UIAlertAction actionWithTitle:follow
+                                           style:UIAlertActionStyleDefault
+                                         handler:^(UIAlertAction *_) {
+        CyanideLanguageSetCode(nil);
+        [weakSelf languageDidChange];
+    }]];
+
+    NSString *english = @"English";
+    if ([stored isEqualToString:CyanideLanguageEnglish]) {
+        english = [@"✓ " stringByAppendingString:english];
+    }
+    [ac addAction:[UIAlertAction actionWithTitle:english
+                                           style:UIAlertActionStyleDefault
+                                         handler:^(UIAlertAction *_) {
+        CyanideLanguageSetCode(CyanideLanguageEnglish);
+        [weakSelf languageDidChange];
+    }]];
+
+    NSString *chinese = @"简体中文";
+    if ([stored isEqualToString:CyanideLanguageSimplifiedChinese]) {
+        chinese = [@"✓ " stringByAppendingString:chinese];
+    }
+    [ac addAction:[UIAlertAction actionWithTitle:chinese
+                                           style:UIAlertActionStyleDefault
+                                         handler:^(UIAlertAction *_) {
+        CyanideLanguageSetCode(CyanideLanguageSimplifiedChinese);
+        [weakSelf languageDidChange];
+    }]];
+
+    [ac addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                           style:UIAlertActionStyleCancel
+                                         handler:nil]];
+    settings_present_controller(ac, self);
+}
+
+- (void)languageDidChange
+{
+    NSIndexSet *idx = [NSIndexSet indexSetWithIndex:RootSectionAbout];
+    [self.tableView reloadSections:idx withRowAnimation:UITableViewRowAnimationNone];
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        UIAlertController *notice = [UIAlertController
+            alertControllerWithTitle:@"Language changed"
+                             message:@"Restart Cyanide to apply the new language."
+                      preferredStyle:UIAlertControllerStyleAlert];
+        [notice addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                    style:UIAlertActionStyleDefault
+                                                  handler:nil]];
+        settings_present_controller(notice, weakSelf);
+    });
 }
 
 - (void)openViewLog
@@ -19549,6 +19624,7 @@ void cyanide_present_contact(UIViewController *host)
                     case 2: [self showAppIconPicker]; break;
                     case 3: [self openViewLog]; break;
                     case 4: [self openShareLog]; break;
+                    case 5: [self presentLanguagePicker]; break;
                 }
                 return;
             }

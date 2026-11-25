@@ -4,6 +4,7 @@
 //
 
 #import "MainTabBarController.h"
+#import "../Localization/CyanideLanguage.h"
 #import "QueuePopupBar.h"
 #import "QueueReviewViewController.h"
 #import "InstallProgressViewController.h"
@@ -130,7 +131,7 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
     if (existing.count == 0) return;
     // Rebuild once: presence of the Home tab means it already ran.
     for (UIViewController *vc in existing) {
-        if ([vc.tabBarItem.title isEqualToString:@"Home"]) return;
+        if (CyanideStringMatchesEnglish(vc.tabBarItem.title, @"Home")) return;
     }
 
     // Reuse the storyboard-instantiated root VCs (they carry their configured
@@ -142,9 +143,9 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
         if (!root) continue;
         NSString *cls = NSStringFromClass(root.class);
         NSString *t = vc.tabBarItem.title;
-        if ([cls isEqualToString:@"PackagesViewController"] || [t isEqualToString:@"Packages"]) pkgRoot = root;
-        else if ([cls isEqualToString:@"SettingsViewController"] || [t isEqualToString:@"Settings"]) setRoot = root;
-        else if ([cls isEqualToString:@"LogViewController"] || [t isEqualToString:@"Log"]) logRoot = root;
+        if ([cls isEqualToString:@"PackagesViewController"] || CyanideStringMatchesEnglish(t, @"Packages")) pkgRoot = root;
+        else if ([cls isEqualToString:@"SettingsViewController"] || CyanideStringMatchesEnglish(t, @"Settings")) setRoot = root;
+        else if ([cls isEqualToString:@"LogViewController"] || CyanideStringMatchesEnglish(t, @"Log")) logRoot = root;
     }
 
     // Detach the reused roots from their old (storyboard) nav controllers before
@@ -308,7 +309,7 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
         // Back to its usual place, right after Packages.
         NSUInteger insertAt = 1;
         for (NSUInteger i = 0; i < tabs.count; i++) {
-            if ([tabs[i].tabBarItem.title isEqualToString:@"Packages"]) { insertAt = i + 1; break; }
+            if (CyanideStringMatchesEnglish(tabs[i].tabBarItem.title, @"Packages")) { insertAt = i + 1; break; }
         }
         [tabs insertObject:self.sourcesNav atIndex:MIN(insertAt, tabs.count)];
     } else {
@@ -478,7 +479,7 @@ static NSString * const kSourcesLastRefreshKey = @"RepoTweaksLastRefreshTimestam
     NSUInteger count = repotweaks_available_update_count();
     NSString *badge = count > 0 ? [NSString stringWithFormat:@"%lu", (unsigned long)count] : nil;
     for (UIViewController *vc in self.viewControllers) {
-        if ([vc.tabBarItem.title isEqualToString:@"Sources"]) {
+        if (CyanideStringMatchesEnglish(vc.tabBarItem.title, @"Sources")) {
             vc.tabBarItem.badgeValue = badge;
             break;
         }

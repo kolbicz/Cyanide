@@ -7,6 +7,7 @@
 
 #import <UIKit/UIKit.h>
 #import "AppDelegate.h"
+#import "Localization/CyanideLanguage.h"
 #import "SettingsViewController.h"
 
 #pragma mark - Unsupported device / iOS version
@@ -97,6 +98,9 @@ configurationForConnectingSceneSession:(UISceneSession *)session
 @end
 
 int main(int argc, char * argv[]) {
+    @autoreleasepool {
+        CyanideLanguageInstall();
+    }
     // Round 31: FIRST executable statement — before UIApplicationMain, before
     // any app code. If the black-screen-with-no-headers failure reproduces,
     // this line existing (with a NEW pid) proves a fresh process spawned and

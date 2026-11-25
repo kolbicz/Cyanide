@@ -4,6 +4,7 @@
 //
 
 #import "HomeViewController.h"
+#import "../Localization/CyanideLanguage.h"
 #import "SourcesViewController.h"
 #import "../SettingsViewController.h"
 #import "../tweaks/RepoTweaks.h"
@@ -771,7 +772,7 @@ static const CGFloat kMargin = 20.0;
     UITabBarController *tab = self.tabBarController;
     if (!tab) return;
     for (NSUInteger i = 0; i < tab.viewControllers.count; i++) {
-        if ([tab.viewControllers[i].tabBarItem.title isEqualToString:@"Packages"]) {
+        if (CyanideStringMatchesEnglish(tab.viewControllers[i].tabBarItem.title, @"Packages")) {
             tab.selectedIndex = i;
             return;
         }
@@ -784,7 +785,7 @@ static const CGFloat kMargin = 20.0;
     if (!tab) return;
     for (NSUInteger i = 0; i < tab.viewControllers.count; i++) {
         UIViewController *vc = tab.viewControllers[i];
-        if ([vc.tabBarItem.title isEqualToString:@"Settings"]) {
+        if (CyanideStringMatchesEnglish(vc.tabBarItem.title, @"Settings")) {
             UINavigationController *nav = [vc isKindOfClass:UINavigationController.class] ? (UINavigationController *)vc : nil;
             if (!nav) return;
             [nav popToRootViewControllerAnimated:NO];
@@ -848,7 +849,7 @@ static const CGFloat kMargin = 20.0;
     if (!tab) return;
     for (NSUInteger i = 0; i < tab.viewControllers.count; i++) {
         UIViewController *vc = tab.viewControllers[i];
-        if (![vc.tabBarItem.title isEqualToString:@"Settings"]) continue;
+        if (!CyanideStringMatchesEnglish(vc.tabBarItem.title, @"Settings")) continue;
         UINavigationController *nav = [vc isKindOfClass:UINavigationController.class] ? (UINavigationController *)vc : nil;
         [nav popToRootViewControllerAnimated:NO];
         tab.selectedIndex = i;
@@ -873,7 +874,7 @@ static const CGFloat kMargin = 20.0;
     UITabBarController *tab = self.tabBarController;
     if (!tab) return;
     for (NSUInteger i = 0; i < tab.viewControllers.count; i++) {
-        if ([tab.viewControllers[i].tabBarItem.title isEqualToString:title]) {
+        if (CyanideStringMatchesEnglish(tab.viewControllers[i].tabBarItem.title, title)) {
             tab.selectedIndex = i;
             return;
         }

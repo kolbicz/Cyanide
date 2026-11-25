@@ -4,6 +4,7 @@
 //
 
 #import "PackageDetailViewController.h"
+#import "../Localization/CyanideLanguage.h"
 #import "CYIconBadge.h"
 #import "PackageQueue.h"
 #import "../LogTextView.h"
@@ -1368,7 +1369,7 @@ typedef NS_ENUM(NSInteger, PackageDetailSection) {
     UINavigationController *settingsNav = nil;
     for (NSUInteger i = 0; i < tab.viewControllers.count; i++) {
         UIViewController *vc = tab.viewControllers[i];
-        if ([vc.tabBarItem.title isEqualToString:@"Settings"]) {
+        if (CyanideStringMatchesEnglish(vc.tabBarItem.title, @"Settings")) {
             settingsIndex = i;
             if ([vc isKindOfClass:UINavigationController.class]) {
                 settingsNav = (UINavigationController *)vc;

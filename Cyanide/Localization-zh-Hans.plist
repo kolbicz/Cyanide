@@ -1,0 +1,804 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>patterns</key>
+	<array>
+		<dict>
+			<key>pattern</key>
+			<string>^No jailbreak required · v(.+)$</string>
+			<key>template</key>
+			<string>无需越狱 · v$1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending changes?$</string>
+			<key>template</key>
+			<string>$1 项待处理更改</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) changes?$</string>
+			<key>template</key>
+			<string>$1 项更改</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) apps?$</string>
+			<key>template</key>
+			<string>$1 个应用</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) packages?$</string>
+			<key>template</key>
+			<string>$1 个软件包</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) items?$</string>
+			<key>template</key>
+			<string>$1 个项目</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) files?$</string>
+			<key>template</key>
+			<string>$1 个文件</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) folders?$</string>
+			<key>template</key>
+			<string>$1 个文件夹</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) selected$</string>
+			<key>template</key>
+			<string>已选择 $1 项</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) installed$</string>
+			<key>template</key>
+			<string>已安装 $1 个</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) active$</string>
+			<key>template</key>
+			<string>$1 个活动</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending$</string>
+			<key>template</key>
+			<string>$1 项待处理</string>
+		</dict>
+	</array>
+	<key>strings</key>
+	<dict>
+		<key>12h time</key>
+		<string>12 小时制</string>
+		<key>24h time</key>
+		<string>24 小时制</string>
+		<key>3-App Limit</key>
+		<string>三应用限制</string>
+		<key>@_kolbicz</key>
+		<string>@_kolbicz</string>
+		<key>A18 bounded search</key>
+		<string>A18 有界搜索</string>
+		<key>A18 exploit path</key>
+		<string>A18 漏洞利用路径</string>
+		<key>A18 interleaved search</key>
+		<string>A18 交错搜索</string>
+		<key>A18 memory shaping</key>
+		<string>A18 内存塑造</string>
+		<key>About</key>
+		<string>关于</string>
+		<key>Accuracy</key>
+		<string>精度</string>
+		<key>Activate</key>
+		<string>启用</string>
+		<key>Activate Supervision</key>
+		<string>启用监管</string>
+		<key>Add a Source</key>
+		<string>添加软件源</string>
+		<key>Add to Favorites</key>
+		<string>添加到收藏</string>
+		<key>All Keys</key>
+		<string>所有键</string>
+		<key>Altitude</key>
+		<string>海拔</string>
+		<key>Always On</key>
+		<string>常亮</string>
+		<key>Another Cyanide action is running. Try again in a moment.</key>
+		<string>另一个 Cyanide 操作正在运行。请稍后再试。</string>
+		<key>Another Cyanide action is still running. Try again in a moment.</key>
+		<string>另一个 Cyanide 操作仍在运行。请稍后再试。</string>
+		<key>Another action is already running. Try again when it has finished.</key>
+		<string>另一个操作正在运行。请等待其完成后再试。</string>
+		<key>Another action is running. Try again in a moment.</key>
+		<string>另一个操作正在运行。请稍后再试。</string>
+		<key>App Decrypt</key>
+		<string>应用解密</string>
+		<key>App Icon</key>
+		<string>应用图标</string>
+		<key>App Switcher Grid</key>
+		<string>应用切换器网格</string>
+		<key>Apply</key>
+		<string>应用</string>
+		<key>Apply Changes</key>
+		<string>应用更改</string>
+		<key>Apply Changes?</key>
+		<string>应用更改？</string>
+		<key>Apply Installer changes right away</key>
+		<string>立即应用安装器更改</string>
+		<key>Apply Lock Screen Duration</key>
+		<string>应用锁屏时长</string>
+		<key>Apply Now</key>
+		<string>立即应用</string>
+		<key>Apply Pairing Override</key>
+		<string>应用配对覆盖</string>
+		<key>Apply Style Now</key>
+		<string>立即应用样式</string>
+		<key>Arrange icons by page</key>
+		<string>按页排列图标</string>
+		<key>Arrange pages</key>
+		<string>排列页面</string>
+		<key>Auto-add Dock app</key>
+		<string>自动添加程序坞应用</string>
+		<key>Auto-add selected app to Dock</key>
+		<string>自动将所选应用添加到程序坞</string>
+		<key>Auto-retry attempt cap</key>
+		<string>自动重试次数上限</string>
+		<key>Auto-retry failed chain runs</key>
+		<string>自动重试失败的链运行</string>
+		<key>Axon Lite</key>
+		<string>Axon Lite</string>
+		<key>Back</key>
+		<string>返回</string>
+		<key>Battery, uptime, kernel access, storage</key>
+		<string>电池、运行时间、内核访问、存储</string>
+		<key>Before You Clean</key>
+		<string>清理之前</string>
+		<key>Block if flashlight is on — In progress</key>
+		<string>手电筒开启时阻止 — 开发中</string>
+		<key>Block if media is active — In progress</key>
+		<string>媒体播放时阻止 — 开发中</string>
+		<key>Block in Low Power Mode — In progress</key>
+		<string>低电量模式下阻止 — 开发中</string>
+		<key>Blockers</key>
+		<string>阻止条件</string>
+		<key>Bottom Y offset</key>
+		<string>底部 Y 偏移</string>
+		<key>Bottom side inset</key>
+		<string>底部内边距</string>
+		<key>Bounce</key>
+		<string>弹跳</string>
+		<key>Browse and install JS tweaks from repos</key>
+		<string>浏览并安装仓库中的 JS 调整</string>
+		<key>Browse files and edit plists</key>
+		<string>浏览文件并编辑 plist</string>
+		<key>Cache Cleaner</key>
+		<string>缓存清理</string>
+		<key>Cancel</key>
+		<string>取消</string>
+		<key>Cannot Queue Install</key>
+		<string>无法加入安装队列</string>
+		<key>Celsius</key>
+		<string>摄氏度</string>
+		<key>Center X offset</key>
+		<string>中心 X 偏移</string>
+		<key>Changes are locked.</key>
+		<string>更改已锁定。</string>
+		<key>Changes are locked. Unlock them in the File Browser first.</key>
+		<string>更改已锁定。请先在文件浏览器中解锁。</string>
+		<key>Check for Updates</key>
+		<string>检查更新</string>
+		<key>Choose Position…</key>
+		<string>选择位置…</string>
+		<key>Choose Video…</key>
+		<string>选择视频…</string>
+		<key>Choose the app language.</key>
+		<string>选择应用语言。</string>
+		<key>Classic</key>
+		<string>经典</string>
+		<key>Clean</key>
+		<string>清理</string>
+		<key>Clean Caches?</key>
+		<string>清理缓存？</string>
+		<key>Clean Up</key>
+		<string>清理</string>
+		<key>Clean Up?</key>
+		<string>要清理吗？</string>
+		<key>Cleaning…</key>
+		<string>正在清理…</string>
+		<key>Clear</key>
+		<string>清除</string>
+		<key>Clear Selected Style</key>
+		<string>清除已选样式</string>
+		<key>Clear Selected Theme</key>
+		<string>清除已选主题</string>
+		<key>Clear Selected Video</key>
+		<string>清除已选视频</string>
+		<key>Close</key>
+		<string>关闭</string>
+		<key>Coefficient</key>
+		<string>系数</string>
+		<key>Community</key>
+		<string>社区</string>
+		<key>Confirm</key>
+		<string>确认</string>
+		<key>Continue</key>
+		<string>继续</string>
+		<key>Copy</key>
+		<string>复制</string>
+		<key>Copy Key</key>
+		<string>复制键</string>
+		<key>Copy Value</key>
+		<string>复制值</string>
+		<key>Current (with unsaved changes)</key>
+		<string>当前（有未保存更改）</string>
+		<key>DISABLED</key>
+		<string>已停用</string>
+		<key>Daemon Manager</key>
+		<string>守护进程管理器</string>
+		<key>Date</key>
+		<string>日期</string>
+		<key>Date + weekday</key>
+		<string>日期 + 星期</string>
+		<key>Deactivate</key>
+		<string>停用</string>
+		<key>Deactivate Supervision</key>
+		<string>停用监管</string>
+		<key>Debug Overlay</key>
+		<string>调试叠加层</string>
+		<key>Delete</key>
+		<string>删除</string>
+		<key>Deselect All</key>
+		<string>取消全选</string>
+		<key>Device Artwork</key>
+		<string>设备外观</string>
+		<key>Digits in style</key>
+		<string>样式数字</string>
+		<key>Disable</key>
+		<string>停用</string>
+		<key>Disable OTA Updates</key>
+		<string>禁用 OTA 更新</string>
+		<key>Disabled</key>
+		<string>已停用</string>
+		<key>Discard</key>
+		<string>放弃</string>
+		<key>Discard Changes</key>
+		<string>放弃更改</string>
+		<key>Dock</key>
+		<string>程序坞</string>
+		<key>Dock app bundle ID</key>
+		<string>程序坞应用 Bundle ID</string>
+		<key>Dock extra L/R</key>
+		<string>程序坞额外左/右</string>
+		<key>Dock extra left</key>
+		<string>程序坞额外左</string>
+		<key>Dock extra right</key>
+		<string>程序坞额外右</string>
+		<key>Dock icon scale</key>
+		<string>程序坞图标缩放</string>
+		<key>Dock icons</key>
+		<string>程序坞图标数</string>
+		<key>Dock scale %</key>
+		<string>程序坞缩放 %</string>
+		<key>Done</key>
+		<string>完成</string>
+		<key>Drag Coefficient</key>
+		<string>拖拽系数</string>
+		<key>Duration</key>
+		<string>时长</string>
+		<key>Edit</key>
+		<string>编辑</string>
+		<key>Empty folder.</key>
+		<string>空文件夹。</string>
+		<key>Enable</key>
+		<string>启用</string>
+		<key>Enable Always On</key>
+		<string>启用常亮</string>
+		<key>Enable OTA Updates</key>
+		<string>启用 OTA 更新</string>
+		<key>Enabled</key>
+		<string>已启用</string>
+		<key>English</key>
+		<string>英语</string>
+		<key>Explosion Pulse</key>
+		<string>爆炸脉冲</string>
+		<key>Export</key>
+		<string>导出</string>
+		<key>Export Originals…</key>
+		<string>导出原始文件…</string>
+		<key>FastLockX Lite</key>
+		<string>FastLockX Lite</string>
+		<key>Faster tweak apply</key>
+		<string>更快的调整应用</string>
+		<key>File Browser</key>
+		<string>文件浏览器</string>
+		<key>File Changed</key>
+		<string>文件已更改</string>
+		<key>Filesystem access is not available.</key>
+		<string>文件系统访问不可用。</string>
+		<key>Filter apps</key>
+		<string>过滤应用</string>
+		<key>Filter this folder</key>
+		<string>过滤此文件夹</string>
+		<key>First page icons</key>
+		<string>首页图标数</string>
+		<key>Follow System</key>
+		<string>跟随系统</string>
+		<key>Font Overwrite</key>
+		<string>字体覆盖</string>
+		<key>Free space from app caches</key>
+		<string>释放应用缓存空间</string>
+		<key>Friction</key>
+		<string>摩擦</string>
+		<key>Get Started</key>
+		<string>开始使用</string>
+		<key>GitHub</key>
+		<string>GitHub</string>
+		<key>Got It</key>
+		<string>知道了</string>
+		<key>Gravity Lite</key>
+		<string>Gravity Lite</string>
+		<key>Gravity strength</key>
+		<string>重力强度</string>
+		<key>Hidden Settings</key>
+		<string>隐藏设置</string>
+		<key>Hide</key>
+		<string>隐藏</string>
+		<key>Hide icon labels</key>
+		<string>隐藏图标标签</string>
+		<key>Home</key>
+		<string>首页</string>
+		<key>Home Layout Extras</key>
+		<string>主屏幕布局扩展</string>
+		<key>Home columns</key>
+		<string>主屏幕列数</string>
+		<key>Home extra L/R</key>
+		<string>主屏幕额外左/右</string>
+		<key>Home extra T/B</key>
+		<string>主屏幕额外上/下</string>
+		<key>Home extra bottom</key>
+		<string>主屏幕额外下</string>
+		<key>Home extra left</key>
+		<string>主屏幕额外左</string>
+		<key>Home extra right</key>
+		<string>主屏幕额外右</string>
+		<key>Home extra top</key>
+		<string>主屏幕额外上</string>
+		<key>Home icon scale</key>
+		<string>主屏幕图标缩放</string>
+		<key>Home rows</key>
+		<string>主屏幕行数</string>
+		<key>Home scale %</key>
+		<string>主屏幕缩放 %</string>
+		<key>How to write Cyanide tweaks</key>
+		<string>如何编写 Cyanide 调整</string>
+		<key>INSTALLED</key>
+		<string>已安装</string>
+		<key>Import Custom Theme…</key>
+		<string>导入自定义主题…</string>
+		<key>Import Failed</key>
+		<string>导入失败</string>
+		<key>Import Originals…</key>
+		<string>导入原始文件…</string>
+		<key>Import Style (.passthm/ZIP)…</key>
+		<string>导入样式（.passthm/ZIP）…</string>
+		<key>Import Theme Archive (ZIP/DEB)…</key>
+		<string>导入主题归档（ZIP/DEB）…</string>
+		<key>Import Theme Folder…</key>
+		<string>导入主题文件夹…</string>
+		<key>Import failed.</key>
+		<string>导入失败。</string>
+		<key>In Development</key>
+		<string>开发中</string>
+		<key>Include Dock</key>
+		<string>包含程序坞</string>
+		<key>Install</key>
+		<string>安装</string>
+		<key>Installed</key>
+		<string>已安装</string>
+		<key>JIT Enabler</key>
+		<string>JIT 启用器</string>
+		<key>Keep Current</key>
+		<string>保持当前</string>
+		<key>Keep app alive in background</key>
+		<string>后台保持应用运行</string>
+		<key>Kernel Access Ready</key>
+		<string>内核访问已就绪</string>
+		<key>Kernel access could not be acquired. Run the chain, then try again.</key>
+		<string>无法获取内核访问。请运行链后重试。</string>
+		<key>Kernel access for the tools</key>
+		<string>为工具提供内核访问</string>
+		<key>Kernel access is not active. Run the chain first.</key>
+		<string>内核访问未启用。请先运行链。</string>
+		<key>Kernel access isn't active. Run the chain first, then try again.</key>
+		<string>内核访问未启用。请先运行链后重试。</string>
+		<key>Language</key>
+		<string>语言</string>
+		<key>Language changed</key>
+		<string>语言已更改</string>
+		<key>Lara</key>
+		<string>Lara</string>
+		<key>Later</key>
+		<string>稍后</string>
+		<key>Launch Options</key>
+		<string>启动选项</string>
+		<key>Layout</key>
+		<string>布局</string>
+		<key>Legacy Chip Floor</key>
+		<string>旧芯片下限</string>
+		<key>Legacy chip floor</key>
+		<string>旧芯片下限</string>
+		<key>Level</key>
+		<string>级别</string>
+		<key>LiveWP</key>
+		<string>LiveWP</string>
+		<key>Load Saved Override</key>
+		<string>加载已保存的覆盖</string>
+		<key>Loading…</key>
+		<string>正在加载…</string>
+		<key>Location Services</key>
+		<string>定位服务</string>
+		<key>Location Services links</key>
+		<string>定位服务链接</string>
+		<key>Location Simulator</key>
+		<string>位置模拟器</string>
+		<key>Lock Screen Duration</key>
+		<string>锁屏时长</string>
+		<key>Log</key>
+		<string>日志</string>
+		<key>Major Cities…</key>
+		<string>主要城市…</string>
+		<key>MobileGestalt</key>
+		<string>MobileGestalt</string>
+		<key>Mode</key>
+		<string>模式</string>
+		<key>Model Name</key>
+		<string>型号名称</string>
+		<key>Model name</key>
+		<string>型号名称</string>
+		<key>Modern</key>
+		<string>现代</string>
+		<key>Multi-Watch Switching</key>
+		<string>多手表切换</string>
+		<key>Multi-watch switch</key>
+		<string>多手表切换</string>
+		<key>NSBar</key>
+		<string>NSBar</string>
+		<key>Name</key>
+		<string>名称</string>
+		<key>Network speed only</key>
+		<string>仅网速</string>
+		<key>New File</key>
+		<string>新建文件</string>
+		<key>New Folder</key>
+		<string>新建文件夹</string>
+		<key>NiceBar Lite</key>
+		<string>NiceBar Lite</string>
+		<key>No matches.</key>
+		<string>没有匹配项。</string>
+		<key>Not Now</key>
+		<string>以后再说</string>
+		<key>Not Saved</key>
+		<string>未保存</string>
+		<key>Not Supported</key>
+		<string>不支持</string>
+		<key>Not a regular file.</key>
+		<string>不是普通文件。</string>
+		<key>OK</key>
+		<string>好</string>
+		<key>OTA Updates</key>
+		<string>OTA 更新</string>
+		<key>Off</key>
+		<string>关</string>
+		<key>On</key>
+		<string>开</string>
+		<key>Open QuickLoader</key>
+		<string>打开 QuickLoader</string>
+		<key>Original Backup</key>
+		<string>原始备份</string>
+		<key>Originals</key>
+		<string>原始文件</string>
+		<key>Other page icons</key>
+		<string>其他页面图标数</string>
+		<key>Overwrite</key>
+		<string>覆盖</string>
+		<key>Packages</key>
+		<string>软件包</string>
+		<key>Page icon counts</key>
+		<string>页面图标数量</string>
+		<key>Passcode Style</key>
+		<string>密码样式</string>
+		<key>Performance HUD</key>
+		<string>性能 HUD</string>
+		<key>Position</key>
+		<string>位置</string>
+		<key>Powercuff</key>
+		<string>Powercuff</string>
+		<key>Preparing respring…</key>
+		<string>正在准备 Respring…</string>
+		<key>Preparing…</key>
+		<string>正在准备…</string>
+		<key>Process Viewer</key>
+		<string>进程查看器</string>
+		<key>Quick Actions</key>
+		<string>快捷操作</string>
+		<key>QuickLoader</key>
+		<string>QuickLoader</string>
+		<key>Read Current Status</key>
+		<string>读取当前状态</string>
+		<key>Read Current Value</key>
+		<string>读取当前值</string>
+		<key>Reboot</key>
+		<string>重启</string>
+		<key>Reboot?</key>
+		<string>要重启吗？</string>
+		<key>Rebooting…</key>
+		<string>正在重启…</string>
+		<key>Refresh</key>
+		<string>刷新</string>
+		<key>Refresh rate</key>
+		<string>刷新率</string>
+		<key>Refreshing sources…</key>
+		<string>正在刷新软件源…</string>
+		<key>Remove</key>
+		<string>移除</string>
+		<key>Remove (restore stock)</key>
+		<string>移除（恢复原版）</string>
+		<key>Remove Override</key>
+		<string>移除覆盖</string>
+		<key>Remove from Favorites</key>
+		<string>从收藏中移除</string>
+		<key>Rename</key>
+		<string>重命名</string>
+		<key>Repo sources</key>
+		<string>仓库来源</string>
+		<key>RepoTweaks</key>
+		<string>RepoTweaks</string>
+		<key>Report a Bug</key>
+		<string>报告问题</string>
+		<key>Reset</key>
+		<string>重置</string>
+		<key>Reset All Packages</key>
+		<string>重置所有软件包</string>
+		<key>Reset All Packages?</key>
+		<string>要重置所有软件包吗？</string>
+		<key>Reset to Defaults</key>
+		<string>恢复默认值</string>
+		<key>Resistance</key>
+		<string>阻力</string>
+		<key>Respring</key>
+		<string>Respring</string>
+		<key>Respring and reboot links</key>
+		<string>Respring 和重启链接</string>
+		<key>Respring?</key>
+		<string>要 Respring 吗？</string>
+		<key>Restart Cyanide to apply the new language.</key>
+		<string>重启 Cyanide 以应用新语言。</string>
+		<key>Restore</key>
+		<string>恢复</string>
+		<key>Restore Icon Layout</key>
+		<string>恢复图标布局</string>
+		<key>Restore Original</key>
+		<string>恢复原始</string>
+		<key>Restore Original Digits</key>
+		<string>恢复原始数字</string>
+		<key>Restore Original?</key>
+		<string>恢复原始？</string>
+		<key>Restore Original…</key>
+		<string>恢复原始…</string>
+		<key>Restore Real Location</key>
+		<string>恢复真实位置</string>
+		<key>Restore Stock Switcher</key>
+		<string>恢复原版切换器</string>
+		<key>Retry</key>
+		<string>重试</string>
+		<key>Retry interval</key>
+		<string>重试间隔</string>
+		<key>Revert</key>
+		<string>还原</string>
+		<key>Review Folders</key>
+		<string>查看文件夹</string>
+		<key>Run Exploit</key>
+		<string>运行漏洞利用</string>
+		<key>Run a local .js tweak file</key>
+		<string>运行本地 .js 调整文件</string>
+		<key>SBCustomizer</key>
+		<string>SBCustomizer</string>
+		<key>Save</key>
+		<string>保存</string>
+		<key>Save Not Verified</key>
+		<string>保存未验证</string>
+		<key>Saved originals</key>
+		<string>已保存原始文件</string>
+		<key>Screen Shape</key>
+		<string>屏幕形状</string>
+		<key>Search</key>
+		<string>搜索</string>
+		<key>See All Changes</key>
+		<string>查看所有更改</string>
+		<key>See This Version's Changes</key>
+		<string>查看此版本更改</string>
+		<key>See and quit running processes</key>
+		<string>查看并结束正在运行的进程</string>
+		<key>Select All Apps</key>
+		<string>选择所有应用</string>
+		<key>Select Large Caches (50 MB+)</key>
+		<string>选择大缓存（50 MB 以上）</string>
+		<key>Select Theme</key>
+		<string>选择主题</string>
+		<key>Select Video</key>
+		<string>选择视频</string>
+		<key>Selected Dock app</key>
+		<string>已选程序坞应用</string>
+		<key>Selected Style</key>
+		<string>已选样式</string>
+		<key>Selected Theme</key>
+		<string>已选主题</string>
+		<key>Selected Video</key>
+		<string>已选视频</string>
+		<key>Session note</key>
+		<string>会话备注</string>
+		<key>Set</key>
+		<string>设置</string>
+		<key>Set Exact Coordinates…</key>
+		<string>设置精确坐标…</string>
+		<key>Settings</key>
+		<string>设置</string>
+		<key>Setup Protocol Floor</key>
+		<string>设置协议下限</string>
+		<key>Setup floor</key>
+		<string>设置下限</string>
+		<key>Share</key>
+		<string>分享</string>
+		<key>Share Log</key>
+		<string>分享日志</string>
+		<key>Share…</key>
+		<string>分享…</string>
+		<key>Short date</key>
+		<string>短日期</string>
+		<key>Show CPU %</key>
+		<string>显示 CPU 百分比</string>
+		<key>Show CPU / RAM labels</key>
+		<string>显示 CPU / RAM 标签</string>
+		<key>Show CPU/RAM labels</key>
+		<string>显示 CPU/RAM 标签</string>
+		<key>Show dock labels</key>
+		<string>显示程序坞标签</string>
+		<key>Show net speed</key>
+		<string>显示网速</string>
+		<key>Show network speed</key>
+		<string>显示网速</string>
+		<key>Simplified Chinese</key>
+		<string>简体中文</string>
+		<key>Simulate Current Target</key>
+		<string>模拟当前目标</string>
+		<key>Simulate Rockaway Test Point</key>
+		<string>模拟 Rockaway 测试点</string>
+		<key>SnowBoard Lite</key>
+		<string>SnowBoard Lite</string>
+		<key>Some sources could not be refreshed</key>
+		<string>部分软件源无法刷新</string>
+		<key>Source refresh failed</key>
+		<string>软件源刷新失败</string>
+		<key>Sources</key>
+		<string>软件源</string>
+		<key>Sources up to date</key>
+		<string>软件源已是最新</string>
+		<key>Spin resist.</key>
+		<string>旋转阻力</string>
+		<key>Spin resistance</key>
+		<string>旋转阻力</string>
+		<key>Spoof Device Model</key>
+		<string>伪装设备型号</string>
+		<key>SpringBoard Tools</key>
+		<string>SpringBoard 工具</string>
+		<key>SpringBoard could not be reached.</key>
+		<string>无法连接 SpringBoard。</string>
+		<key>SpringBoard tweaks for stock iOS</key>
+		<string>为原版 iOS 打造的 SpringBoard 调整</string>
+		<key>Starting…</key>
+		<string>正在启动…</string>
+		<key>StatBar</key>
+		<string>StatBar</string>
+		<key>Strength</key>
+		<string>强度</string>
+		<key>Style</key>
+		<string>样式</string>
+		<key>Supervision</key>
+		<string>监管</string>
+		<key>Switch to Fastest</key>
+		<string>切换到最快</string>
+		<key>Switch to pe_v3</key>
+		<string>切换到 pe_v3</string>
+		<key>Switcher style</key>
+		<string>切换器样式</string>
+		<key>System</key>
+		<string>系统</string>
+		<key>System Info</key>
+		<string>系统信息</string>
+		<key>Target</key>
+		<string>目标</string>
+		<key>Tendies Wallpapers</key>
+		<string>Tendies 壁纸</string>
+		<key>The file could not be written.</key>
+		<string>无法写入文件。</string>
+		<key>The list of disabled daemons could not be read. Check the log.</key>
+		<string>无法读取已停用的守护进程列表。请检查日志。</string>
+		<key>Theme</key>
+		<string>主题</string>
+		<key>Theme Format Guide</key>
+		<string>主题格式指南</string>
+		<key>This package cannot be queued yet.</key>
+		<string>此软件包暂时无法加入队列。</string>
+		<key>Time + seconds</key>
+		<string>时间 + 秒</string>
+		<key>Tools</key>
+		<string>工具</string>
+		<key>Top Y offset</key>
+		<string>顶部 Y 偏移</string>
+		<key>Top side inset</key>
+		<string>顶部内边距</string>
+		<key>Traffic History</key>
+		<string>流量历史</string>
+		<key>Try the pe_v3 exploit path?</key>
+		<string>尝试 pe_v3 漏洞路径？</string>
+		<key>Turn system services off and on</key>
+		<string>开启或关闭系统服务</string>
+		<key>Tweak SDK</key>
+		<string>调整 SDK</string>
+		<key>Tweak apply speed</key>
+		<string>调整应用速度</string>
+		<key>Tweaks</key>
+		<string>调整</string>
+		<key>Twitter</key>
+		<string>Twitter</string>
+		<key>UNSUPPORTED</key>
+		<string>不支持</string>
+		<key>Unsupported</key>
+		<string>不支持</string>
+		<key>Update</key>
+		<string>更新</string>
+		<key>Upside Down</key>
+		<string>上下颠倒</string>
+		<key>Use Original</key>
+		<string>使用原始</string>
+		<key>Use watchOS Range 99/23/10/6</key>
+		<string>使用 watchOS 范围 99/23/10/6</string>
+		<key>Verbose logging</key>
+		<string>详细日志</string>
+		<key>Video</key>
+		<string>视频</string>
+		<key>View Log</key>
+		<string>查看日志</string>
+		<key>Wallet Card Art</key>
+		<string>钱包卡片图案</string>
+		<key>Watch Pairing</key>
+		<string>手表配对</string>
+		<key>Weekday + time</key>
+		<string>星期 + 时间</string>
+		<key>What's New</key>
+		<string>新功能</string>
+		<key>Working</key>
+		<string>正在处理</string>
+		<key>iPad Dock</key>
+		<string>iPad 程序坞</string>
+		<key>watchOS Pairing Limit</key>
+		<string>watchOS 配对限制</string>
+		<key>watchOS limit</key>
+		<string>watchOS 限制</string>
+		<key>✓ English</key>
+		<string>✓ 英语</string>
+		<key>✓ Follow System</key>
+		<string>✓ 跟随系统</string>
+	</dict>
+</dict>
+</plist>
