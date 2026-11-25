@@ -719,17 +719,53 @@ static const NSInteger kLaraHUDModeCount = sizeof(kLaraHUDModes) / sizeof(kLaraH
 - (void)confirmDecrypt:(NSDictionary *)app
 {
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"Decrypt %@?", app[@"name"]]
-        message:@"Makes a decrypted IPA of this app for your own use (e.g. tweak injection and sideloading). It can take a while for large apps; keep Cyanide open."
+        message:@"Makes a decrypted IPA of this app for your own use (e.g. tweak injection and sideloading). It can take a while for large apps; keep Cyanide open.\n\nOptional: set a custom bundle ID to install it alongside the original. You must re-sign the IPA for that ID."
         preferredStyle:UIAlertControllerStyleAlert];
+    __block UITextField *bundleField = nil;
+    [ac addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        bundleField = tf;
+        tf.placeholder = app[@"bundleID"];
+        tf.text = nil;
+        tf.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        tf.autocorrectionType = UITextAutocorrectionTypeNo;
+        tf.spellCheckingType = UITextSpellCheckingTypeNo;
+        tf.font = [UIFont monospacedSystemFontOfSize:13.0 weight:UIFontWeightRegular];
+    }];
     [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     __weak typeof(self) weakSelf = self;
     [ac addAction:[UIAlertAction actionWithTitle:@"Decrypt" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-        [weakSelf decrypt:app];
+        NSString *custom = [bundleField.text stringByTrimmingCharactersInSet:
+                            NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (custom.length && ![weakSelf isValidBundleID:custom]) {
+            UIAlertController *bad = [UIAlertController
+                alertControllerWithTitle:@"Invalid Bundle ID"
+                                 message:@"Use a reverse-DNS identifier such as com.example.app."
+                          preferredStyle:UIAlertControllerStyleAlert];
+            [bad addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+            [weakSelf presentViewController:bad animated:YES completion:nil];
+            return;
+        }
+        if (custom.length && [custom isEqualToString:app[@"bundleID"]]) custom = nil;
+        [weakSelf decrypt:app customBundleID:custom.length ? custom : nil];
     }]];
     [self presentViewController:ac animated:YES completion:nil];
 }
 
-- (void)decrypt:(NSDictionary *)app
+- (BOOL)isValidBundleID:(NSString *)bundleID
+{
+    if (bundleID.length == 0 || bundleID.length > 155) return NO;
+    static NSRegularExpression *regex;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        regex = [NSRegularExpression regularExpressionWithPattern:@"^[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$"
+                                                          options:0 error:nil];
+    });
+    return [regex numberOfMatchesInString:bundleID options:0
+                                    range:NSMakeRange(0, bundleID.length)] == 1;
+}
+
+
+- (void)decrypt:(NSDictionary *)app customBundleID:(NSString *)customBundleID
 {
     if (self.busy) return;
     self.busy = YES;
@@ -761,7 +797,7 @@ static const NSInteger kLaraHUDModeCount = sizeof(kLaraHUDModes) / sizeof(kLaraH
     // Inside a SpringBoard session: when iOS won't decrypt in Cyanide,
     // SpringBoard does it (same kernel-access rules as the other tools).
     settings_springboard_tool_async("App Decrypt", ^BOOL{
-        ipa = app_decrypt_make_ipa(app, YES, progress, &error);
+        ipa = app_decrypt_make_ipa(app, YES, customBundleID, progress, &error);
         return ipa != nil;
     }, ^(BOOL ok, NSString *message) {
         if (bg != UIBackgroundTaskInvalid) { [UIApplication.sharedApplication endBackgroundTask:bg]; bg = UIBackgroundTaskInvalid; }
@@ -774,7 +810,7 @@ static const NSInteger kLaraHUDModeCount = sizeof(kLaraHUDModes) / sizeof(kLaraH
         if ([message isEqualToString:kSettingsFullExploitRequiredMessage]) {
             me.status = kSettingsNoKernelAccessHint;
             [me.tableView reloadData];
-            settings_tool_needs_exploit(me, me.tableView, @"App Decrypt", ^{ [weakSelf decrypt:app]; });
+            settings_tool_needs_exploit(me, me.tableView, @"App Decrypt", ^{ [weakSelf decrypt:app customBundleID:customBundleID]; });
             return;
         }
         NSString *failure = error ?: message ?: @"Decryption failed. Check the log.";
@@ -784,7 +820,8 @@ static const NSInteger kLaraHUDModeCount = sizeof(kLaraHUDModes) / sizeof(kLaraH
         // An alert, not just the footer: that is below the whole app list.
         UIAlertController *ac = [UIAlertController
             alertControllerWithTitle:ipa ? @"IPA Ready" : @"Decryption Failed"
-                             message:ipa ? [NSString stringWithFormat:@"%@ is saved in Decrypted IPAs.%@", ipa.lastPathComponent,
+                             message:ipa ? [NSString stringWithFormat:@"%@ is saved in Decrypted IPAs.%@%@", ipa.lastPathComponent,
+                                            customBundleID.length ? [NSString stringWithFormat:@"\n\nCustom bundle ID: %@. Re-sign the IPA with a profile for that ID before installing.", customBundleID] : @"",
                                             error.length ? [@"\n\n" stringByAppendingString:error] : @""] : failure
                       preferredStyle:UIAlertControllerStyleAlert];
         if (ipa) {

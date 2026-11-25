@@ -26,5 +26,9 @@ NSString *app_decrypt_output_dir(void);
 // called on the calling thread. Returns the IPA path, or nil with *errorOut.
 // useSpringBoard: a SpringBoard session is open (caller holds it); when iOS
 // won't decrypt inside Cyanide, SpringBoard does it.
+// customBundleID: optional. When set, the main bundle and its nested
+// extension/Watch bundle IDs are rewritten from the original ID; the caller
+// must re-sign the IPA for the new ID before installing it.
 NSString *app_decrypt_make_ipa(NSDictionary *app, BOOL useSpringBoard,
+                               NSString *customBundleID,
                                void (^progress)(NSString *step, double fraction), NSString **errorOut);

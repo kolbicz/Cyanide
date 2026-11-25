@@ -807,6 +807,81 @@ static BOOL ad_copy_into(int out, NSString *path, uint64_t *written)
 
 #pragma mark - IPA
 
+static NSString *ad_rewritten_bundle_id(NSString *original, NSString *newID, NSString *candidate)
+{
+    if (![candidate isKindOfClass:NSString.class] || !candidate.length ||
+        ![original isKindOfClass:NSString.class] || !original.length) return candidate;
+    if ([candidate isEqualToString:original]) return newID;
+    NSString *prefix = [original stringByAppendingString:@"."];
+    if ([candidate hasPrefix:prefix]) {
+        return [newID stringByAppendingString:[candidate substringFromIndex:original.length]];
+    }
+    return candidate;
+}
+
+// Rewrites CFBundleIdentifier (and the Watch/extension companion keys) in
+// every Info.plist in `files`, writing the modified plist into `work` and
+// registering it in `replaced` so the zip writer picks it up. Returns YES if
+// at least the main Info.plist was changed.
+static BOOL ad_rewrite_bundle_ids(NSString *appPath,
+                                  NSArray<NSString *> *files,
+                                  NSString *work,
+                                  NSString *originalID,
+                                  NSString *newID,
+                                  NSMutableDictionary<NSString *, NSString *> *replaced,
+                                  NSString **errorOut)
+{
+    __block NSUInteger changed = 0;
+    __block NSUInteger index = 0;
+    for (NSString *rel in files) {
+        if (![rel.lastPathComponent isEqualToString:@"Info.plist"]) continue;
+        NSString *src = [appPath stringByAppendingPathComponent:rel];
+        NSDictionary *raw = [NSDictionary dictionaryWithContentsOfFile:src];
+        if (![raw isKindOfClass:NSDictionary.class]) continue;
+        NSMutableDictionary *plist = [raw mutableCopy];
+        BOOL touched = NO;
+        NSString *bid = plist[@"CFBundleIdentifier"];
+        if ([bid isKindOfClass:NSString.class] && bid.length) {
+            NSString *newBid = ad_rewritten_bundle_id(originalID, newID, bid);
+            if (newBid && ![newBid isEqualToString:bid]) {
+                plist[@"CFBundleIdentifier"] = newBid;
+                touched = YES;
+            }
+        }
+        for (NSString *key in @[ @"WKCompanionAppBundleIdentifier", @"WKAppBundleIdentifier" ]) {
+            NSString *value = plist[key];
+            if (![value isKindOfClass:NSString.class] || !value.length) continue;
+            NSString *rewritten = ad_rewritten_bundle_id(originalID, newID, value);
+            if (rewritten && ![rewritten isEqualToString:value]) {
+                plist[key] = rewritten;
+                touched = YES;
+            }
+        }
+        if (!touched) continue;
+        NSData *data = [NSPropertyListSerialization dataWithPropertyList:plist
+                                                                  format:NSPropertyListBinaryFormat_v1_0
+                                                                 options:0
+                                                                   error:nil];
+        if (!data) {
+            if (errorOut) *errorOut = [NSString stringWithFormat:@"Could not rewrite %@.", rel];
+            return NO;
+        }
+        NSString *dst = [work stringByAppendingPathComponent:
+                         [NSString stringWithFormat:@"plist-%lu.bin", (unsigned long)index++]];
+        if (![data writeToFile:dst atomically:YES]) {
+            if (errorOut) *errorOut = [NSString stringWithFormat:@"Could not write %@.", rel];
+            return NO;
+        }
+        replaced[rel] = dst;
+        changed++;
+    }
+    if (changed == 0) {
+        if (errorOut) *errorOut = @"The app's Info.plist could not be rewritten.";
+        return NO;
+    }
+    return YES;
+}
+
 static NSString *ad_safe_name(NSString *s)
 {
     NSCharacterSet *bad = [NSCharacterSet characterSetWithCharactersInString:@"/\\:?*\"<>|"];
@@ -814,6 +889,7 @@ static NSString *ad_safe_name(NSString *s)
 }
 
 NSString *app_decrypt_make_ipa(NSDictionary *app, BOOL useSpringBoard,
+                               NSString *customBundleID,
                                void (^progress)(NSString *, double), NSString **errorOut)
 {
     NSString *appPath = app[@"path"];
@@ -957,10 +1033,32 @@ NSString *app_decrypt_make_ipa(NSDictionary *app, BOOL useSpringBoard,
         return nil;
     }
 
+    // 2b. Optional custom bundle ID: rewrite the main bundle and every nested
+    // extension/Watch bundle ID that is derived from it. The caller still has
+    // to sign the IPA with a profile that covers the new ID.
+    if (!errorText && customBundleID.length) {
+        report(@"Rewriting bundle identifiers", 0.44);
+        NSString *rewriteError = nil;
+        if (!ad_rewrite_bundle_ids(appPath, files, work,
+                                   app[@"bundleID"], customBundleID,
+                                   replaced, &rewriteError)) {
+            errorText = rewriteError ?: @"The bundle identifiers could not be rewritten.";
+        } else {
+            log_user("[DECRYPT] Bundle identifiers rewritten to %s\n", customBundleID.UTF8String);
+        }
+    }
+    if (errorText) {
+        [fm removeItemAtPath:work error:nil];
+        log_user("[DECRYPT] Failed: %s\n", errorText.UTF8String);
+        if (errorOut) *errorOut = errorText;
+        return nil;
+    }
+
     // 3. Pack Payload/<App>.app into the IPA (stored; IPAs don't need deflate).
     NSString *version = [app[@"version"] length] ? app[@"version"] : @"0";
+    NSString *suffix = customBundleID.length ? @"_custom" : @"";
     NSString *ipa = [outDir stringByAppendingPathComponent:
-                     [NSString stringWithFormat:@"%@_%@_decrypted.ipa", ad_safe_name(app[@"name"] ?: @"App"), ad_safe_name(version)]];
+                     [NSString stringWithFormat:@"%@_%@_decrypted%@.ipa", ad_safe_name(app[@"name"] ?: @"App"), ad_safe_name(version), suffix]];
     NSString *partial = [ipa stringByAppendingString:@".part"];
     int fd = open(partial.fileSystemRepresentation, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0) { [fm removeItemAtPath:work error:nil]; if (errorOut) *errorOut = @"The IPA can't be created."; return nil; }
