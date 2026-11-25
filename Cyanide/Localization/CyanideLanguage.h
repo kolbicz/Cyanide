@@ -28,7 +28,13 @@ FOUNDATION_EXPORT void CyanideLanguageInstall(void);
 FOUNDATION_EXPORT NSString *CyanideLanguageCurrentCode(void);
 FOUNDATION_EXPORT NSString *CyanideLanguageSystemCode(void);
 
-/// "English", "简体中文", or "Follow System (…)".
+/// Every code with a bundled pack, in picker order.
+FOUNDATION_EXPORT NSArray<NSString *> *CyanideLanguageSupportedCodes(void);
+
+/// Native name for a language code ("Deutsch", "Français", …).
+FOUNDATION_EXPORT NSString *CyanideLanguageNativeName(NSString *code);
+
+/// Native name, or "Follow System (…)" when no override is stored.
 FOUNDATION_EXPORT NSString *CyanideLanguageDisplayName(void);
 
 /// YES when `actual` is the English title or its active-language translation.

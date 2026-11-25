@@ -15,14 +15,32 @@ static NSString *gLanguageCode;
 static NSDictionary<NSString *, NSString *> *gStrings;
 static NSArray<NSDictionary *> *gPatterns;
 
+NSArray<NSString *> *CyanideLanguageSupportedCodes(void) {
+    return @[ CyanideLanguageEnglish, CyanideLanguageSimplifiedChinese, @"de", @"fr" ];
+}
+
+static BOOL CyanideLanguageIsSupported(NSString *code) {
+    return [CyanideLanguageSupportedCodes() containsObject:code];
+}
+
+NSString *CyanideLanguageNativeName(NSString *code) {
+    if ([code isEqualToString:CyanideLanguageEnglish]) return @"English";
+    if ([code isEqualToString:CyanideLanguageSimplifiedChinese]) return @"简体中文";
+    if ([code isEqualToString:@"de"]) return @"Deutsch";
+    if ([code isEqualToString:@"fr"]) return @"Français";
+    return code ?: @"";
+}
+
 static NSString *CyanideLanguageSystemName(void) {
-    NSString *code = CyanideLanguageSystemCode();
-    return [code isEqualToString:CyanideLanguageSimplifiedChinese] ? @"简体中文" : @"English";
+    return CyanideLanguageNativeName(CyanideLanguageSystemCode());
 }
 
 NSString *CyanideLanguageSystemCode(void) {
-    NSString *preferred = [NSLocale preferredLanguages].firstObject ?: @"en";
-    if ([preferred hasPrefix:@"zh"]) return CyanideLanguageSimplifiedChinese;
+    for (NSString *preferred in [NSLocale preferredLanguages]) {
+        if ([preferred hasPrefix:@"zh"]) return CyanideLanguageSimplifiedChinese;
+        if ([preferred hasPrefix:@"de"]) return @"de";
+        if ([preferred hasPrefix:@"fr"]) return @"fr";
+    }
     return CyanideLanguageEnglish;
 }
 
@@ -30,8 +48,7 @@ NSString *CyanideLanguageCurrentCode(void) {
     if (gLanguageCode.length) return gLanguageCode;
     NSString *stored = [[NSUserDefaults standardUserDefaults]
                         stringForKey:CyanideLanguagePreferenceKey];
-    if ([stored isEqualToString:CyanideLanguageEnglish] ||
-        [stored isEqualToString:CyanideLanguageSimplifiedChinese]) {
+    if (CyanideLanguageIsSupported(stored)) {
         gLanguageCode = [stored copy];
     } else {
         gLanguageCode = [CyanideLanguageSystemCode() copy];
@@ -59,28 +76,27 @@ static void CyanideLanguageLoadPatterns(NSArray *raw) {
 static void CyanideLanguageReload(void) {
     gStrings = @{};
     gPatterns = @[];
-    if (![CyanideLanguageCurrentCode() isEqualToString:CyanideLanguageSimplifiedChinese]) return;
+    NSString *code = CyanideLanguageCurrentCode();
+    if ([code isEqualToString:CyanideLanguageEnglish]) return;
 
-    NSString *path = [[NSBundle mainBundle] pathForResource:@"Localization-zh-Hans"
-                                                      ofType:@"plist"];
+    NSString *resource = [@"Localization-" stringByAppendingString:code];
+    NSString *path = [[NSBundle mainBundle] pathForResource:resource ofType:@"plist"];
     NSDictionary *root = path ? [NSDictionary dictionaryWithContentsOfFile:path] : nil;
     if (![root isKindOfClass:NSDictionary.class]) {
-        NSLog(@"[LANGUAGE] zh-Hans pack missing or malformed at %@", path ?: @"(nil)");
+        NSLog(@"[LANGUAGE] %@ pack missing or malformed at %@", code, path ?: @"(nil)");
         return;
     }
     NSDictionary *strings = root[@"strings"];
     if ([strings isKindOfClass:NSDictionary.class]) gStrings = [strings copy];
     id patterns = root[@"patterns"];
     if ([patterns isKindOfClass:NSArray.class]) CyanideLanguageLoadPatterns(patterns);
-    NSLog(@"[LANGUAGE] loaded zh-Hans (%lu strings, %lu patterns)",
-          (unsigned long)gStrings.count, (unsigned long)gPatterns.count);
+    NSLog(@"[LANGUAGE] loaded %@ (%lu strings, %lu patterns)",
+          code, (unsigned long)gStrings.count, (unsigned long)gPatterns.count);
 }
 
 NSString *CyanideLocalized(NSString *english) {
     if (![english isKindOfClass:NSString.class] || english.length == 0) return english;
-    if (![CyanideLanguageCurrentCode() isEqualToString:CyanideLanguageSimplifiedChinese]) {
-        return english;
-    }
+    if (gStrings.count == 0) return english;
     NSString *exact = gStrings[english];
     if (exact.length) return exact;
 
@@ -110,16 +126,14 @@ BOOL CyanideStringMatchesEnglish(NSString *actual, NSString *english) {
 NSString *CyanideLanguageDisplayName(void) {
     NSString *stored = [[NSUserDefaults standardUserDefaults]
                         stringForKey:CyanideLanguagePreferenceKey];
-    if ([stored isEqualToString:CyanideLanguageEnglish]) return @"English";
-    if ([stored isEqualToString:CyanideLanguageSimplifiedChinese]) return @"简体中文";
+    if (CyanideLanguageIsSupported(stored)) return CyanideLanguageNativeName(stored);
     return [NSString stringWithFormat:@"%@ (%@)",
             CyanideLocalized(@"Follow System"), CyanideLanguageSystemName()];
 }
 
 void CyanideLanguageSetCode(NSString *code) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    if ([code isEqualToString:CyanideLanguageEnglish] ||
-        [code isEqualToString:CyanideLanguageSimplifiedChinese]) {
+    if (CyanideLanguageIsSupported(code)) {
         [defaults setObject:code forKey:CyanideLanguagePreferenceKey];
     } else {
         [defaults removeObjectForKey:CyanideLanguagePreferenceKey];

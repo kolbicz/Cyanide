@@ -307,8 +307,6 @@
 		<string>启用 OTA 更新</string>
 		<key>Enabled</key>
 		<string>已启用</string>
-		<key>English</key>
-		<string>英语</string>
 		<key>Explosion Pulse</key>
 		<string>爆炸脉冲</string>
 		<key>Export</key>
@@ -677,8 +675,6 @@
 		<string>显示网速</string>
 		<key>Show network speed</key>
 		<string>显示网速</string>
-		<key>Simplified Chinese</key>
-		<string>简体中文</string>
 		<key>Simulate Current Target</key>
 		<string>模拟当前目标</string>
 		<key>Simulate Rockaway Test Point</key>
@@ -795,10 +791,6 @@
 		<string>watchOS 配对限制</string>
 		<key>watchOS limit</key>
 		<string>watchOS 限制</string>
-		<key>✓ English</key>
-		<string>✓ 英语</string>
-		<key>✓ Follow System</key>
-		<string>✓ 跟随系统</string>
 	</dict>
 </dict>
 </plist>

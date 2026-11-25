@@ -64,6 +64,8 @@
 	<array>
 		<string>en</string>
 		<string>zh-Hans</string>
+		<string>de</string>
+		<string>fr</string>
 	</array>
 	<key>CFBundleIcons~ipad</key>
 	<dict>

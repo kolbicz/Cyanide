@@ -17613,10 +17613,8 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
 
 - (void)presentLanguagePicker
 {
-    NSString *current = CyanideLanguageCurrentCode();
     NSString *stored = [[NSUserDefaults standardUserDefaults]
                         stringForKey:CyanideLanguagePreferenceKey];
-    (void)current;
 
     UIAlertController *ac = [UIAlertController
         alertControllerWithTitle:@"Language"
@@ -17633,27 +17631,18 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
         [weakSelf languageDidChange];
     }]];
 
-    NSString *english = @"English";
-    if ([stored isEqualToString:CyanideLanguageEnglish]) {
-        english = [@"✓ " stringByAppendingString:english];
+    for (NSString *code in CyanideLanguageSupportedCodes()) {
+        NSString *title = CyanideLanguageNativeName(code);
+        if ([stored isEqualToString:code]) {
+            title = [@"✓ " stringByAppendingString:title];
+        }
+        [ac addAction:[UIAlertAction actionWithTitle:title
+                                               style:UIAlertActionStyleDefault
+                                             handler:^(UIAlertAction *_) {
+            CyanideLanguageSetCode(code);
+            [weakSelf languageDidChange];
+        }]];
     }
-    [ac addAction:[UIAlertAction actionWithTitle:english
-                                           style:UIAlertActionStyleDefault
-                                         handler:^(UIAlertAction *_) {
-        CyanideLanguageSetCode(CyanideLanguageEnglish);
-        [weakSelf languageDidChange];
-    }]];
-
-    NSString *chinese = @"简体中文";
-    if ([stored isEqualToString:CyanideLanguageSimplifiedChinese]) {
-        chinese = [@"✓ " stringByAppendingString:chinese];
-    }
-    [ac addAction:[UIAlertAction actionWithTitle:chinese
-                                           style:UIAlertActionStyleDefault
-                                         handler:^(UIAlertAction *_) {
-        CyanideLanguageSetCode(CyanideLanguageSimplifiedChinese);
-        [weakSelf languageDidChange];
-    }]];
 
     [ac addAction:[UIAlertAction actionWithTitle:@"Cancel"
                                            style:UIAlertActionStyleCancel
