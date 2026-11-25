@@ -449,7 +449,8 @@ CHANGELOG_PENDING_SKIP_LOG="$CHANGELOG_SKIP_LOG" \
 # Logs and backtrace symbols are the same either way (no #if DEBUG code; a
 # plain build is not stripped). CONFIG / ARCHS overrides still pass through.
 export CONFIG="${CONFIG:-Release}"
-./build.sh
+# Use the changelog generated above (with its pending entry) as is.
+CYANIDE_KEEP_CHANGELOG=1 ./build.sh
 
 # Read bundle versions from the just-built app. CFBundleShortVersionString
 # drives the IPA filename and tag; CFBundleVersion must advance too so iOS/Xcode

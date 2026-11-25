@@ -21,11 +21,31 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Settings → What's New and the Home card read Cyanide/Changelog.plist. It is
-# ignored because release.sh regenerates it for each release, so every build
-# entry point generates it only when absent. Keeping this in the low-level
-# script also covers CI, which may invoke scripts/build.sh directly.
-if [ ! -f "$PWD/Cyanide/Changelog.plist" ]; then
-    "$PWD/scripts/gen-changelog.sh" \
+# ignored and regenerated on every build: a copy left over from an earlier
+# release went into later local and test builds and hid their entries.
+# release.sh generates its own pending entry first and sets
+# CYANIDE_KEEP_CHANGELOG=1 so that file is used as is. Keeping this in the
+# low-level script also covers CI, which may invoke scripts/build.sh directly.
+if [ "${CYANIDE_KEEP_CHANGELOG:-0}" = "1" ] && [ -f "$PWD/Cyanide/Changelog.plist" ]; then
+    echo "==> keeping the existing Cyanide/Changelog.plist"
+else
+    # An untagged version with its own notes (RELEASE_NOTES_<version>.md or
+    # Pending bullets) gets its entry at the top, like a release build.
+    BUILD_VERSION=""
+    if [ -f "$PWD/Cyanide.xcodeproj/project.pbxproj" ]; then
+        BUILD_VERSION="$(grep -m1 'MARKETING_VERSION' "$PWD/Cyanide.xcodeproj/project.pbxproj" \
+            | sed -E 's/.*MARKETING_VERSION = ([0-9.]+);.*/\1/')"
+    fi
+    PENDING_FOR_BUILD=""
+    if [ -n "$BUILD_VERSION" ]; then
+        . "$PWD/scripts/release-notes.sh"
+        if [ -n "$(release_notes_bullets_for_version "$BUILD_VERSION" \
+                     "$(release_notes_file_for_version "$BUILD_VERSION" "")")" ]; then
+            PENDING_FOR_BUILD="$BUILD_VERSION"
+        fi
+    fi
+    CHANGELOG_PENDING_VERSION="$PENDING_FOR_BUILD" CHANGELOG_PENDING_SKIP_LOG=1 \
+        "$PWD/scripts/gen-changelog.sh" \
         || echo "==> changelog generation failed (continuing without it)"
 fi
 
