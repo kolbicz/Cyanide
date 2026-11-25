@@ -14,39 +14,211 @@
 			<key>pattern</key>
 			<string>^([0-9]+) pending changes?$</string>
 			<key>template</key>
-			<string>$1 ожидающих изменений</string>
+			<string>Ожидающие изменения: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) changes?$</string>
+			<key>template</key>
+			<string>Изменения: $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) apps?$</string>
 			<key>template</key>
-			<string>$1 приложений</string>
+			<string>Приложения: $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) packages?$</string>
 			<key>template</key>
-			<string>$1 пакетов</string>
+			<string>Пакеты: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) updates?$</string>
+			<key>template</key>
+			<string>Обновления: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) items?$</string>
+			<key>template</key>
+			<string>Элементы: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) files?$</string>
+			<key>template</key>
+			<string>Файлы: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) folders?$</string>
+			<key>template</key>
+			<string>Папки: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) selected$</string>
+			<key>template</key>
+			<string>Выбрано: $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) installed$</string>
 			<key>template</key>
-			<string>$1 установлено</string>
+			<string>Установлено: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) active$</string>
+			<key>template</key>
+			<string>Активно: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending$</string>
+			<key>template</key>
+			<string>В ожидании: $1</string>
 		</dict>
 	</array>
 	<key>strings</key>
 	<dict>
+		<key>Invalid request.</key>
+		<string>Недопустимый запрос.</string>
+		<key>Another Location Services request came first.</key>
+		<string>Другой запрос к службам геолокации пришёл раньше.</string>
+		<key>A newer Location Services request replaced this one.</key>
+		<string>Этот запрос заменён более новым запросом к службам геолокации.</string>
+		<key>The Location Services request was superseded before it finished.</key>
+		<string>Запрос к службам геолокации был заменён до завершения.</string>
+		<key>The Location Services retry was superseded before it finished.</key>
+		<string>Повторная попытка для служб геолокации была заменена до завершения.</string>
+		<key>Location Services request cancelled: kernel access was not acquired.</key>
+		<string>Запрос к службам геолокации отменён: доступ к ядру не получен.</string>
+		<key>Cyanide has no saved kernel access (for example after a restart). Open Cyanide and run it once, then try again.</key>
+		<string>У Cyanide нет сохранённого доступа к ядру (например, после перезагрузки). Откройте Cyanide, запустите его один раз и повторите попытку.</string>
+		<key>(no information)</key>
+		<string>(нет сведений)</string>
+		<key>12h time</key>
+		<string>12-часовой формат</string>
+		<key>24h time</key>
+		<string>24-часовой формат</string>
+		<key>3-App Limit</key>
+		<string>Ограничение в 3 приложения</string>
+		<key>@_kolbicz</key>
+		<string>@_kolbicz</string>
+		<key>A18 bounded search</key>
+		<string>Поиск A18 с ограничением</string>
+		<key>A18 exploit path</key>
+		<string>Метод эксплуатации A18</string>
+		<key>A18 interleaved search</key>
+		<string>Поиск A18 с чередованием</string>
+		<key>A18 memory shaping</key>
+		<string>Настройка размещения памяти A18</string>
 		<key>About</key>
 		<string>О программе</string>
+		<key>Access</key>
+		<string>Доступ</string>
+		<key>Accuracy</key>
+		<string>Точность</string>
+		<key>Activate</key>
+		<string>Активировать</string>
+		<key>Activate Supervision</key>
+		<string>Включить режим надзора</string>
+		<key>Activation pending</key>
+		<string>Ожидает активации</string>
+		<key>Activity</key>
+		<string>Активность</string>
+		<key>Add</key>
+		<string>Добавить</string>
 		<key>Add a Source</key>
 		<string>Добавить источник</string>
+		<key>Add Source</key>
+		<string>Добавить источник</string>
+		<key>Add to Cache Cleaner?</key>
+		<string>Добавить в очистку кэша?</string>
+		<key>Add to Favorites</key>
+		<string>Добавить в избранное</string>
+		<key>All Keys</key>
+		<string>Все ключи</string>
+		<key>Altitude</key>
+		<string>Высота</string>
+		<key>Always On</key>
+		<string>Всегда включённый экран</string>
+		<key>Always Select</key>
+		<string>Всегда выбирать</string>
+		<key>An install is still running.</key>
+		<string>Установка ещё выполняется.</string>
+		<key>Another action is already running. Try again when it has finished.</key>
+		<string>Уже выполняется другое действие. Повторите попытку после его завершения.</string>
+		<key>Another action is running. Try again in a moment.</key>
+		<string>Выполняется другое действие. Повторите попытку чуть позже.</string>
+		<key>Another Cyanide action is running. Try again in a moment.</key>
+		<string>Cyanide выполняет другое действие. Повторите попытку чуть позже.</string>
+		<key>Another Cyanide action is still running. Try again in a moment.</key>
+		<string>Cyanide ещё выполняет другое действие. Повторите попытку чуть позже.</string>
+		<key>App Decrypt</key>
+		<string>Расшифровка приложений</string>
+		<key>App Icon</key>
+		<string>Значок приложения</string>
+		<key>App Switcher Grid</key>
+		<string>Сетка переключателя приложений</string>
 		<key>Apply</key>
 		<string>Применить</string>
+		<key>Apply Changes</key>
+		<string>Применить изменения</string>
+		<key>Apply Changes?</key>
+		<string>Применить изменения?</string>
+		<key>Apply Installer changes right away</key>
+		<string>Сразу применять изменения установщика</string>
+		<key>Apply Lock Screen Duration</key>
+		<string>Применить время отображения экрана блокировки</string>
+		<key>Apply Now</key>
+		<string>Применить сейчас</string>
+		<key>Apply Pairing Override</key>
+		<string>Применить переопределение сопряжения</string>
+		<key>Apply Style Now</key>
+		<string>Применить стиль сейчас</string>
+		<key>Apps in use are left alone.</key>
+		<string>Используемые приложения пропускаются.</string>
+		<key>Arrange icons by page</key>
+		<string>Разместить значки по страницам</string>
+		<key>Arrange pages</key>
+		<string>Упорядочить страницы</string>
+		<key>Auto Refresh</key>
+		<string>Автообновление</string>
+		<key>Auto-add Dock app</key>
+		<string>Автоматическое добавление приложения в док-панель</string>
+		<key>Auto-add selected app to Dock</key>
+		<string>Автоматически добавлять выбранное приложение в док-панель</string>
+		<key>Auto-retry attempt cap</key>
+		<string>Лимит автоматических повторов</string>
+		<key>Auto-retry failed chain runs</key>
+		<string>Автоматически повторять неудачные запуски цепочки</string>
+		<key>Axon Lite</key>
+		<string>Axon Lite</string>
 		<key>Back</key>
 		<string>Назад</string>
 		<key>Battery, uptime, kernel access, storage</key>
 		<string>Батарея, время работы, доступ к ядру, хранилище</string>
+		<key>Before You Clean</key>
+		<string>Перед очисткой</string>
+		<key>Block if flashlight is on — In progress</key>
+		<string>Блокировать при включённом фонарике — в разработке</string>
+		<key>Block if media is active — In progress</key>
+		<string>Блокировать при воспроизведении медиа — в разработке</string>
+		<key>Block in Low Power Mode — In progress</key>
+		<string>Блокировать в режиме энергосбережения — в разработке</string>
+		<key>Blockers</key>
+		<string>Условия блокировки</string>
+		<key>Bottom side inset</key>
+		<string>Нижний боковой отступ</string>
+		<key>Bottom Y offset</key>
+		<string>Нижнее смещение по Y</string>
+		<key>Bounce</key>
+		<string>Отскок</string>
 		<key>Browse and install JS tweaks from repos</key>
 		<string>Просмотр и установка JS-твиков из репозиториев</string>
 		<key>Browse files and edit plists</key>
@@ -55,130 +227,780 @@
 		<string>Очистка кэша</string>
 		<key>Cancel</key>
 		<string>Отмена</string>
+		<key>Cannot Queue Install</key>
+		<string>Не удалось добавить установку в очередь</string>
+		<key>CarPlay is unlocked.</key>
+		<string>CarPlay разблокирован.</string>
+		<key>CarPlay without Siri</key>
+		<string>CarPlay без Siri</string>
+		<key>Celsius</key>
+		<string>Цельсий</string>
+		<key>Center X offset</key>
+		<string>Смещение центра по X</string>
+		<key>Change Type</key>
+		<string>Изменить тип</string>
+		<key>Changes are locked.</key>
+		<string>Внесение изменений заблокировано.</string>
+		<key>Changes are locked. Unlock them in the File Browser first.</key>
+		<string>Внесение изменений заблокировано. Сначала снимите блокировку в файловом браузере.</string>
+		<key>Check Failed</key>
+		<string>Не удалось проверить обновления</string>
+		<key>Check for Updates</key>
+		<string>Проверить обновления</string>
+		<key>Checking Crash Logs</key>
+		<string>Проверка журналов сбоев…</string>
+		<key>Checking for Updates…</key>
+		<string>Проверка обновлений…</string>
+		<key>Checking Running Apps</key>
+		<string>Проверка запущенных приложений…</string>
+		<key>Choose Position…</key>
+		<string>Выбрать положение…</string>
 		<key>Choose the app language.</key>
 		<string>Выберите язык приложения.</string>
+		<key>Choose Video…</key>
+		<string>Выбрать видео…</string>
+		<key>Classic</key>
+		<string>Классический</string>
+		<key>Clean</key>
+		<string>Очистить</string>
+		<key>Clean Caches?</key>
+		<string>Очистить кэш?</string>
+		<key>Clean Up</key>
+		<string>Очистить</string>
+		<key>Clean Up?</key>
+		<string>Начать очистку?</string>
+		<key>Cleaning…</key>
+		<string>Очистка…</string>
+		<key>Clear</key>
+		<string>Очистить</string>
+		<key>Clear Queue</key>
+		<string>Очистить очередь</string>
+		<key>Clear Queue?</key>
+		<string>Очистить очередь?</string>
+		<key>Clear Selected Style</key>
+		<string>Сбросить выбранный стиль</string>
+		<key>Clear Selected Theme</key>
+		<string>Сбросить выбранную тему</string>
+		<key>Clear Selected Video</key>
+		<string>Сбросить выбранное видео</string>
 		<key>Close</key>
 		<string>Закрыть</string>
+		<key>Coefficient</key>
+		<string>Коэффициент</string>
 		<key>Community</key>
 		<string>Сообщество</string>
 		<key>Confirm</key>
 		<string>Подтвердить</string>
+		<key>Contents</key>
+		<string>Содержимое</string>
 		<key>Continue</key>
 		<string>Продолжить</string>
+		<key>Copied</key>
+		<string>Скопировано</string>
 		<key>Copy</key>
 		<string>Копировать</string>
+		<key>Copy Identifier</key>
+		<string>Скопировать идентификатор</string>
+		<key>Copy Key</key>
+		<string>Скопировать ключ</string>
+		<key>Copy Path</key>
+		<string>Скопировать путь</string>
+		<key>Copy Value</key>
+		<string>Скопировать значение</string>
+		<key>Counting…</key>
+		<string>Подсчёт…</string>
+		<key>Create</key>
+		<string>Создать</string>
+		<key>Current (with unsaved changes)</key>
+		<string>Текущее состояние (с несохранёнными изменениями)</string>
+		<key>Cut</key>
+		<string>Вырезать</string>
 		<key>Daemon Manager</key>
 		<string>Менеджер демонов</string>
+		<key>Data</key>
+		<string>Данные</string>
+		<key>Date</key>
+		<string>Дата</string>
+		<key>Date + weekday</key>
+		<string>Дата и день недели</string>
+		<key>Deactivate</key>
+		<string>Деактивировать</string>
+		<key>Deactivate Supervision</key>
+		<string>Выключить режим надзора</string>
+		<key>Deactivation pending</key>
+		<string>Ожидает деактивации</string>
+		<key>Debug Overlay</key>
+		<string>Отладочная панель</string>
 		<key>Delete</key>
 		<string>Удалить</string>
+		<key>Delete Backups</key>
+		<string>Удалить резервные копии</string>
+		<key>Delete?</key>
+		<string>Удалить?</string>
+		<key>Deselect All</key>
+		<string>Снять выделение со всех</string>
+		<key>Device Artwork</key>
+		<string>Графика устройства</string>
+		<key>Digits in style</key>
+		<string>Цифры в стиле</string>
 		<key>Disable</key>
 		<string>Отключить</string>
+		<key>Disable OTA Updates</key>
+		<string>Отключить обновления OTA</string>
 		<key>Disabled</key>
 		<string>Отключено</string>
+		<key>DISABLED</key>
+		<string>ОТКЛЮЧЕНО</string>
+		<key>Discard</key>
+		<string>Отменить</string>
+		<key>Discard all pending activation / deactivation changes.</key>
+		<string>Отменить все ожидающие активации и деактивации.</string>
+		<key>Discard Changes</key>
+		<string>Отменить изменения</string>
+		<key>Discard Changes?</key>
+		<string>Отменить изменения?</string>
+		<key>Dock</key>
+		<string>Док-панель</string>
+		<key>Dock app bundle ID</key>
+		<string>Идентификатор приложения в док-панели</string>
+		<key>Dock extra L/R</key>
+		<string>Доп. поля док-панели слева/справа</string>
+		<key>Dock extra left</key>
+		<string>Доп. поле док-панели слева</string>
+		<key>Dock extra right</key>
+		<string>Доп. поле док-панели справа</string>
+		<key>Dock icon scale</key>
+		<string>Масштаб значков док-панели</string>
+		<key>Dock icons</key>
+		<string>Значки док-панели</string>
+		<key>Dock scale %</key>
+		<string>Масштаб док-панели (%)</string>
 		<key>Done</key>
 		<string>Готово</string>
+		<key>Drag Coefficient</key>
+		<string>Коэффициент сопротивления</string>
+		<key>Duplicate</key>
+		<string>Дублировать</string>
+		<key>Duration</key>
+		<string>Длительность</string>
+		<key>Edit</key>
+		<string>Править</string>
+		<key>Empty folder.</key>
+		<string>Папка пуста.</string>
 		<key>Enable</key>
 		<string>Включить</string>
+		<key>Enable Always On</key>
+		<string>Включить постоянно активный экран</string>
+		<key>Enable Changes?</key>
+		<string>Разрешить изменения?</string>
+		<key>Enable OTA Updates</key>
+		<string>Включить обновления OTA</string>
 		<key>Enabled</key>
 		<string>Включено</string>
+		<key>Explosion Pulse</key>
+		<string>Импульс взрыва</string>
+		<key>Export</key>
+		<string>Экспортировать</string>
+		<key>Export Originals…</key>
+		<string>Экспортировать оригиналы…</string>
+		<key>Faster tweak apply</key>
+		<string>Ускоренное применение твиков</string>
+		<key>FastLockX Lite</key>
+		<string>FastLockX Lite</string>
+		<key>Favorites</key>
+		<string>Избранное</string>
 		<key>File Browser</key>
 		<string>Файловый браузер</string>
+		<key>File Changed</key>
+		<string>Файл изменён</string>
+		<key>Filesystem access is not available.</key>
+		<string>Доступ к файловой системе недоступен.</string>
+		<key>Filter apps</key>
+		<string>Фильтр приложений</string>
+		<key>Filter by name or PID</key>
+		<string>Фильтр по имени или PID</string>
+		<key>Filter keys and values</key>
+		<string>Фильтр ключей и значений</string>
+		<key>Filter this folder</key>
+		<string>Фильтр содержимого папки</string>
+		<key>Finding Apps</key>
+		<string>Поиск приложений…</string>
+		<key>First page icons</key>
+		<string>Значки первой страницы</string>
+		<key>Folder Size</key>
+		<string>Размер папки</string>
+		<key>Folders to Clean</key>
+		<string>Папки для очистки</string>
 		<key>Follow System</key>
 		<string>Как в системе</string>
+		<key>Font Overwrite</key>
+		<string>Замена шрифта</string>
+		<key>Force Quit</key>
+		<string>Завершить принудительно</string>
 		<key>Free space from app caches</key>
 		<string>Освободить место из кэшей приложений</string>
+		<key>Friction</key>
+		<string>Трение</string>
 		<key>Get Started</key>
 		<string>Начать</string>
+		<key>Getting File Access</key>
+		<string>Получение доступа к файлам…</string>
 		<key>GitHub</key>
 		<string>GitHub</string>
+		<key>Go</key>
+		<string>Перейти</string>
+		<key>Go to Container Top</key>
+		<string>Перейти в корень контейнера</string>
+		<key>Go to Folder</key>
+		<string>Перейти к папке</string>
+		<key>Go to Folder…</key>
+		<string>Перейти к папке…</string>
+		<key>Got It</key>
+		<string>Понятно</string>
+		<key>Gravity Lite</key>
+		<string>Gravity Lite</string>
+		<key>Gravity strength</key>
+		<string>Сила гравитации</string>
+		<key>Hidden Settings</key>
+		<string>Скрытые настройки</string>
+		<key>Hide</key>
+		<string>Скрыть</string>
+		<key>Hide icon labels</key>
+		<string>Скрыть подписи значков</string>
 		<key>Home</key>
 		<string>Главная</string>
+		<key>Home columns</key>
+		<string>Столбцы экрана «Домой»</string>
+		<key>Home extra bottom</key>
+		<string>Доп. поле экрана «Домой» снизу</string>
+		<key>Home extra L/R</key>
+		<string>Доп. поля экрана «Домой» слева/справа</string>
+		<key>Home extra left</key>
+		<string>Доп. поле экрана «Домой» слева</string>
+		<key>Home extra right</key>
+		<string>Доп. поле экрана «Домой» справа</string>
+		<key>Home extra T/B</key>
+		<string>Доп. поля экрана «Домой» сверху/снизу</string>
+		<key>Home extra top</key>
+		<string>Доп. поле экрана «Домой» сверху</string>
+		<key>Home icon scale</key>
+		<string>Масштаб значков экрана «Домой»</string>
+		<key>Home Layout Extras</key>
+		<string>Дополнительные настройки экрана «Домой»</string>
+		<key>Home rows</key>
+		<string>Строки экрана «Домой»</string>
+		<key>Home scale %</key>
+		<string>Масштаб экрана «Домой» (%)</string>
+		<key>How to write Cyanide tweaks</key>
+		<string>Как писать твики для Cyanide</string>
+		<key>I Understand</key>
+		<string>Я понимаю</string>
+		<key>Import Custom Theme…</key>
+		<string>Импортировать свою тему…</string>
 		<key>Import Failed</key>
 		<string>Ошибка импорта</string>
+		<key>Import failed.</key>
+		<string>Не удалось импортировать.</string>
+		<key>Import from Files…</key>
+		<string>Импортировать из «Файлов»…</string>
+		<key>Import Originals…</key>
+		<string>Импортировать оригиналы…</string>
+		<key>Import Style (.passthm/ZIP)…</key>
+		<string>Импортировать стиль (.passthm/ZIP)…</string>
+		<key>Import Theme Archive (ZIP/DEB)…</key>
+		<string>Импортировать архив темы (ZIP/DEB)…</string>
+		<key>Import Theme Folder…</key>
+		<string>Импортировать папку темы…</string>
 		<key>In Development</key>
 		<string>В разработке</string>
+		<key>Include Dock</key>
+		<string>Включить док-панель</string>
 		<key>Install</key>
 		<string>Установить</string>
+		<key>Install pending</key>
+		<string>Ожидает установки</string>
+		<key>Install Running</key>
+		<string>Выполняется установка</string>
 		<key>Installed</key>
-		<string>Установленные</string>
+		<string>Установлено</string>
+		<key>INSTALLED</key>
+		<string>УСТАНОВЛЕНО</string>
+		<key>Invalid Value</key>
+		<string>Недопустимое значение</string>
+		<key>iPad Dock</key>
+		<string>Док-панель iPad</string>
+		<key>JIT Enabler</key>
+		<string>Включение JIT</string>
+		<key>Keep app alive in background</key>
+		<string>Поддерживать работу приложения в фоне</string>
+		<key>Keep Current</key>
+		<string>Оставить текущую настройку</string>
+		<key>Kernel access could not be acquired. Run the chain, then try again.</key>
+		<string>Не удалось получить доступ к ядру. Запустите цепочку и повторите попытку.</string>
+		<key>Kernel access isn't active. Run the chain first, then try again.</key>
+		<string>Доступ к ядру не активен. Сначала запустите цепочку, затем повторите попытку.</string>
 		<key>Kernel Access Ready</key>
 		<string>Доступ к ядру готов</string>
 		<key>Kernel access for the tools</key>
 		<string>Доступ к ядру для инструментов</string>
 		<key>Kernel access is not active. Run the chain first.</key>
 		<string>Доступ к ядру не активен. Сначала запустите цепочку.</string>
+		<key>Key</key>
+		<string>Ключ</string>
+		<key>Key Exists</key>
+		<string>Ключ уже существует</string>
 		<key>Language</key>
 		<string>Язык</string>
 		<key>Language changed</key>
 		<string>Язык изменён</string>
+		<key>Lara</key>
+		<string>Lara</string>
 		<key>Later</key>
 		<string>Позже</string>
+		<key>Launch Options</key>
+		<string>Параметры запуска</string>
+		<key>Layout</key>
+		<string>Раскладка</string>
+		<key>Legacy Chip Floor</key>
+		<string>Нижний порог для старых чипов</string>
+		<key>Legacy chip floor</key>
+		<string>Нижний порог для старых чипов</string>
+		<key>Level</key>
+		<string>Уровень</string>
+		<key>LiveWP</key>
+		<string>LiveWP</string>
+		<key>Load Saved Override</key>
+		<string>Загрузить сохранённое переопределение</string>
 		<key>Loading…</key>
 		<string>Загрузка…</string>
+		<key>Location Services</key>
+		<string>Службы геолокации</string>
+		<key>Location Services Link</key>
+		<string>Ссылка для служб геолокации</string>
+		<key>Location Services links</key>
+		<string>Ссылки для служб геолокации</string>
+		<key>Location Services Off</key>
+		<string>Службы геолокации отключены</string>
+		<key>Location Services On</key>
+		<string>Службы геолокации включены</string>
+		<key>Location Simulator</key>
+		<string>Симулятор геолокации</string>
+		<key>Lock Screen Duration</key>
+		<string>Время отображения экрана блокировки</string>
 		<key>Log</key>
 		<string>Журнал</string>
+		<key>Major Cities…</key>
+		<string>Крупные города…</string>
+		<key>Measuring Caches</key>
+		<string>Подсчёт размера кэшей…</string>
+		<key>MobileGestalt</key>
+		<string>MobileGestalt</string>
+		<key>Mode</key>
+		<string>Режим</string>
+		<key>Model Name</key>
+		<string>Название модели</string>
+		<key>Model name</key>
+		<string>Название модели</string>
+		<key>Modern</key>
+		<string>Современный</string>
+		<key>Multi-watch switch</key>
+		<string>Переключение между часами</string>
+		<key>Multi-Watch Switching</key>
+		<string>Переключение между часами</string>
+		<key>Name</key>
+		<string>Имя</string>
+		<key>Network speed only</key>
+		<string>Только скорость сети</string>
+		<key>New File</key>
+		<string>Новый файл</string>
+		<key>New Folder</key>
+		<string>Новая папка</string>
+		<key>NiceBar Lite</key>
+		<string>NiceBar Lite</string>
+		<key>No longer pending</key>
+		<string>Больше не ожидает выполнения</string>
+		<key>No matches.</key>
+		<string>Совпадений нет.</string>
+		<key>No matching container was found for this app.</key>
+		<string>Для этого приложения не найден соответствующий контейнер.</string>
+		<key>Not a regular file.</key>
+		<string>Это не обычный файл.</string>
+		<key>Not Now</key>
+		<string>Не сейчас</string>
+		<key>Not Saved</key>
+		<string>Не сохранено</string>
 		<key>Not Supported</key>
 		<string>Не поддерживается</string>
+		<key>NSBar</key>
+		<string>NSBar</string>
 		<key>OK</key>
 		<string>ОК</string>
 		<key>Off</key>
 		<string>Выкл.</string>
 		<key>On</key>
 		<string>Вкл.</string>
+		<key>On Disk</key>
+		<string>На диске</string>
+		<key>Open as Text / Hex / Info</key>
+		<string>Открыть как текст / Hex / сведения</string>
 		<key>Open QuickLoader</key>
 		<string>Открыть QuickLoader</string>
+		<key>Original Backup</key>
+		<string>Резервная копия оригинала</string>
+		<key>Originals</key>
+		<string>Оригиналы</string>
+		<key>OTA Updates</key>
+		<string>Обновления OTA</string>
+		<key>Other page icons</key>
+		<string>Значки других страниц</string>
+		<key>Overwrite</key>
+		<string>Перезаписать</string>
 		<key>Packages</key>
 		<string>Пакеты</string>
+		<key>Page icon counts</key>
+		<string>Число значков на страницах</string>
+		<key>Passcode Style</key>
+		<string>Стиль код-пароля</string>
+		<key>Performance HUD</key>
+		<string>Индикатор производительности</string>
+		<key>Permissions</key>
+		<string>Права доступа</string>
+		<key>Permissions…</key>
+		<string>Права доступа…</string>
+		<key>Position</key>
+		<string>Положение</string>
+		<key>Powercuff</key>
+		<string>Powercuff</string>
+		<key>Preparing respring…</key>
+		<string>Подготовка к перезапуску SpringBoard…</string>
+		<key>Preparing…</key>
+		<string>Подготовка…</string>
 		<key>Process Viewer</key>
 		<string>Просмотр процессов</string>
+		<key>Queue</key>
+		<string>Очередь</string>
 		<key>Quick Actions</key>
 		<string>Быстрые действия</string>
+		<key>QuickLoader</key>
+		<string>QuickLoader</string>
+		<key>Quit</key>
+		<string>Завершить</string>
+		<key>Read Current Status</key>
+		<string>Прочитать текущее состояние</string>
+		<key>Read Current Value</key>
+		<string>Прочитать текущее значение</string>
+		<key>Reboot</key>
+		<string>Перезагрузить устройство</string>
+		<key>Reboot?</key>
+		<string>Перезагрузить устройство?</string>
+		<key>Rebooting…</key>
+		<string>Перезагрузка…</string>
+		<key>Recent</key>
+		<string>Недавние</string>
+		<key>Reclaimable</key>
+		<string>Можно освободить</string>
 		<key>Refresh</key>
 		<string>Обновить</string>
+		<key>Refresh rate</key>
+		<string>Частота обновления</string>
 		<key>Refreshing sources…</key>
 		<string>Обновление источников…</string>
+		<key>Remind Me Later</key>
+		<string>Напомнить позже</string>
+		<key>Removal pending</key>
+		<string>Ожидает удаления</string>
 		<key>Remove</key>
 		<string>Удалить</string>
+		<key>Remove (restore stock)</key>
+		<string>Удалить (восстановить исходное)</string>
+		<key>Remove from Favorites</key>
+		<string>Удалить из избранного</string>
+		<key>Remove Override</key>
+		<string>Удалить переопределение</string>
+		<key>Rename</key>
+		<string>Переименовать</string>
+		<key>Rename Key</key>
+		<string>Переименовать ключ</string>
+		<key>Repo sources</key>
+		<string>Источники репозиториев</string>
 		<key>Report a Bug</key>
 		<string>Сообщить об ошибке</string>
+		<key>RepoTweaks</key>
+		<string>RepoTweaks</string>
+		<key>Reset</key>
+		<string>Сбросить</string>
+		<key>Reset All Packages</key>
+		<string>Сбросить все пакеты</string>
+		<key>Reset All Packages?</key>
+		<string>Сбросить все пакеты?</string>
+		<key>Reset to Defaults</key>
+		<string>Восстановить настройки по умолчанию</string>
+		<key>Resistance</key>
+		<string>Сопротивление</string>
+		<key>Respring</key>
+		<string>Перезапустить SpringBoard</string>
+		<key>Respring and reboot links</key>
+		<string>Ссылки перезапуска SpringBoard и перезагрузки устройства</string>
+		<key>Respring?</key>
+		<string>Перезапустить SpringBoard?</string>
 		<key>Restart Cyanide to apply the new language.</key>
 		<string>Перезапустите Cyanide, чтобы применить новый язык.</string>
+		<key>Restore</key>
+		<string>Восстановить</string>
+		<key>Restore Icon Layout</key>
+		<string>Восстановить расположение значков</string>
+		<key>Restore Original</key>
+		<string>Восстановить оригинал</string>
+		<key>Restore Original Digits</key>
+		<string>Восстановить исходные цифры</string>
+		<key>Restore Original?</key>
+		<string>Восстановить оригинал?</string>
+		<key>Restore Original…</key>
+		<string>Восстановить оригинал…</string>
+		<key>Restore Real Location</key>
+		<string>Восстановить реальное местоположение</string>
+		<key>Restore Stock Switcher</key>
+		<string>Восстановить исходный переключатель приложений</string>
 		<key>Retry</key>
 		<string>Повторить</string>
+		<key>Retry interval</key>
+		<string>Интервал между попытками</string>
+		<key>Revert</key>
+		<string>Вернуть</string>
+		<key>Review Folders</key>
+		<string>Проверить папки</string>
+		<key>Run Again</key>
+		<string>Запустить снова</string>
 		<key>Run Exploit</key>
 		<string>Запустить эксплойт</string>
 		<key>Run a local .js tweak file</key>
 		<string>Запустить локальный .js-твик</string>
 		<key>Save</key>
 		<string>Сохранить</string>
+		<key>Save Changes?</key>
+		<string>Сохранить изменения?</string>
+		<key>Save Not Verified</key>
+		<string>Сохранение не подтверждено</string>
+		<key>Saved originals</key>
+		<string>Сохранённые оригиналы</string>
+		<key>SBCustomizer</key>
+		<string>SBCustomizer</string>
+		<key>Scanning processes…</key>
+		<string>Сканирование процессов…</string>
+		<key>Screen Shape</key>
+		<string>Форма экрана</string>
 		<key>Search</key>
 		<string>Поиск</string>
+		<key>Search all tweaks</key>
+		<string>Поиск по всем твикам</string>
+		<key>See All Changes</key>
+		<string>Все изменения</string>
 		<key>See and quit running processes</key>
 		<string>Просмотр и завершение процессов</string>
+		<key>See This Version's Changes</key>
+		<string>Изменения в этой версии</string>
+		<key>Select All Apps</key>
+		<string>Выбрать все приложения</string>
+		<key>Select Automatically</key>
+		<string>Выбирать автоматически</string>
+		<key>Select by Hand</key>
+		<string>Выбирать вручную</string>
+		<key>Select Items to Clean</key>
+		<string>Выбрать элементы для очистки</string>
+		<key>Select Large Caches (50 MB+)</key>
+		<string>Выбрать крупные кэши (от 50 МБ)</string>
+		<key>Select Theme</key>
+		<string>Выбрать тему</string>
+		<key>Select Video</key>
+		<string>Выбрать видео</string>
+		<key>Selected Dock app</key>
+		<string>Выбранное приложение для док-панели</string>
+		<key>Selected Style</key>
+		<string>Выбранный стиль</string>
+		<key>Selected Theme</key>
+		<string>Выбранная тема</string>
+		<key>Selected Video</key>
+		<string>Выбранное видео</string>
+		<key>Session note</key>
+		<string>Примечание к сеансу</string>
+		<key>Set</key>
+		<string>Задать</string>
+		<key>Set Exact Coordinates…</key>
+		<string>Указать точные координаты…</string>
 		<key>Settings</key>
 		<string>Настройки</string>
+		<key>Setup floor</key>
+		<string>Нижний порог настройки</string>
+		<key>Setup Protocol Floor</key>
+		<string>Минимальная версия протокола настройки</string>
 		<key>Share</key>
 		<string>Поделиться</string>
+		<key>Share Log</key>
+		<string>Поделиться журналом</string>
+		<key>Share…</key>
+		<string>Поделиться…</string>
+		<key>Short date</key>
+		<string>Краткая дата</string>
+		<key>Show</key>
+		<string>Показать</string>
+		<key>Show Advanced</key>
+		<string>Показать дополнительные параметры</string>
+		<key>Show Backups</key>
+		<string>Показать резервные копии</string>
+		<key>Show CPU %</key>
+		<string>Показывать загрузку ЦП (%)</string>
+		<key>Show CPU / RAM labels</key>
+		<string>Показывать подписи ЦП/ОЗУ</string>
+		<key>Show CPU/RAM labels</key>
+		<string>Показывать подписи ЦП/ОЗУ</string>
+		<key>Show dock labels</key>
+		<string>Показывать подписи в док-панели</string>
+		<key>Show in File Browser</key>
+		<string>Показать в файловом браузере</string>
+		<key>Show in Folder</key>
+		<string>Показать в папке</string>
+		<key>Show net speed</key>
+		<string>Показывать скорость сети</string>
+		<key>Show network speed</key>
+		<string>Показывать скорость сети</string>
+		<key>Simulate Current Target</key>
+		<string>Симулировать выбранное местоположение</string>
+		<key>Simulate Rockaway Test Point</key>
+		<string>Симулировать тестовую точку в Рокавее</string>
+		<key>Size of This Folder</key>
+		<string>Размер этой папки</string>
+		<key>Skip This Version</key>
+		<string>Пропустить эту версию</string>
+		<key>SnowBoard Lite</key>
+		<string>SnowBoard Lite</string>
 		<key>Some sources could not be refreshed</key>
 		<string>Некоторые источники не удалось обновить</string>
+		<key>Sort By</key>
+		<string>Сортировать по</string>
+		<key>Source Failed</key>
+		<string>Ошибка источника</string>
 		<key>Source refresh failed</key>
 		<string>Не удалось обновить источники</string>
 		<key>Sources</key>
 		<string>Источники</string>
 		<key>Sources up to date</key>
 		<string>Источники обновлены</string>
+		<key>Spin resist.</key>
+		<string>Сопротивление вращению</string>
+		<key>Spin resistance</key>
+		<string>Сопротивление вращению</string>
+		<key>Spoof Device Model</key>
+		<string>Подменить модель устройства</string>
+		<key>SpringBoard could not be reached.</key>
+		<string>Не удалось связаться с SpringBoard.</string>
+		<key>SpringBoard Tools</key>
+		<string>Инструменты SpringBoard</string>
 		<key>SpringBoard tweaks for stock iOS</key>
 		<string>Твики SpringBoard для оригинальной iOS</string>
+		<key>Starting…</key>
+		<string>Запуск…</string>
+		<key>StatBar</key>
+		<string>StatBar</string>
+		<key>Strength</key>
+		<string>Сила</string>
+		<key>Style</key>
+		<string>Стиль</string>
+		<key>Supervision</key>
+		<string>Режим надзора</string>
+		<key>Switch to Fastest</key>
+		<string>Переключиться на максимальную скорость</string>
+		<key>Switch to pe_v3</key>
+		<string>Переключиться на pe_v3</string>
+		<key>Switcher style</key>
+		<string>Стиль переключателя приложений</string>
 		<key>System</key>
 		<string>Система</string>
 		<key>System Info</key>
 		<string>Системная информация</string>
+		<key>Target</key>
+		<string>Цель</string>
+		<key>Tendies Wallpapers</key>
+		<string>Tendies Wallpapers</string>
+		<key>The file could not be written.</key>
+		<string>Не удалось записать файл.</string>
+		<key>The file was changed or replaced since you opened it. Overwrite it with your version?</key>
+		<string>Файл был изменён или заменён после открытия. Перезаписать его вашей версией?</string>
+		<key>The list of disabled daemons could not be read. Check the log.</key>
+		<string>Не удалось прочитать список отключённых служб. Проверьте журнал.</string>
+		<key>Theme</key>
+		<string>Тема</string>
+		<key>Theme Format Guide</key>
+		<string>Руководство по формату тем</string>
+		<key>This package cannot be queued yet.</key>
+		<string>Этот пакет пока нельзя добавить в очередь.</string>
+		<key>This queue row was already applied or cleared.</key>
+		<string>Этот элемент очереди уже применён или удалён.</string>
+		<key>Time + seconds</key>
+		<string>Время с секундами</string>
 		<key>Tools</key>
 		<string>Инструменты</string>
+		<key>Top side inset</key>
+		<string>Верхний боковой отступ</string>
+		<key>Top Y offset</key>
+		<string>Верхнее смещение по Y</string>
+		<key>Traffic History</key>
+		<string>История сетевого трафика</string>
+		<key>Try the pe_v3 exploit path?</key>
+		<string>Попробовать метод эксплуатации pe_v3?</string>
 		<key>Turn system services off and on</key>
 		<string>Включение и отключение системных служб</string>
+		<key>Turning Off Location Services</key>
+		<string>Отключение служб геолокации</string>
+		<key>Turning On Location Services</key>
+		<string>Включение служб геолокации</string>
+		<key>Tweak apply speed</key>
+		<string>Скорость применения твиков</string>
+		<key>Tweak SDK</key>
+		<string>SDK для твиков</string>
 		<key>Tweaks</key>
 		<string>Твики</string>
+		<key>Twitter</key>
+		<string>Twitter</string>
+		<key>Unfinished Saves</key>
+		<string>Незавершённые сохранения</string>
+		<key>Unknown Source</key>
+		<string>Неизвестный источник</string>
+		<key>Unsupported</key>
+		<string>Не поддерживается</string>
+		<key>UNSUPPORTED</key>
+		<string>НЕ ПОДДЕРЖИВАЕТСЯ</string>
+		<key>Up to Date</key>
+		<string>Установлена последняя версия</string>
+		<key>Update</key>
+		<string>Обновить</string>
+		<key>UPDATE</key>
+		<string>ОБНОВИТЬ</string>
+		<key>Update Available</key>
+		<string>Доступно обновление</string>
+		<key>Upside Down</key>
+		<string>Вверх ногами</string>
+		<key>Use Original</key>
+		<string>Использовать оригинал</string>
+		<key>Use watchOS Range 99/23/10/6</key>
+		<string>Использовать диапазон watchOS 99/23/10/6</string>
+		<key>Verbose logging</key>
+		<string>Подробный журнал</string>
+		<key>Video</key>
+		<string>Видео</string>
+		<key>View Log</key>
+		<string>Просмотреть журнал</string>
+		<key>View Release</key>
+		<string>Посмотреть выпуск</string>
+		<key>Wallet Card Art</key>
+		<string>Оформление карт в Wallet</string>
+		<key>Watch Pairing</key>
+		<string>Сопряжение Apple Watch</string>
+		<key>watchOS limit</key>
+		<string>Ограничение watchOS</string>
+		<key>watchOS Pairing Limit</key>
+		<string>Ограничение сопряжения watchOS</string>
+		<key>Weekday + time</key>
+		<string>День недели и время</string>
 		<key>What's New</key>
 		<string>Что нового</string>
 		<key>Working</key>

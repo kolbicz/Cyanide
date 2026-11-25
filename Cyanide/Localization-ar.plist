@@ -14,39 +14,211 @@
 			<key>pattern</key>
 			<string>^([0-9]+) pending changes?$</string>
 			<key>template</key>
-			<string>$1 تغييرات قيد الانتظار</string>
+			<string>التغييرات المعلّقة: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) changes?$</string>
+			<key>template</key>
+			<string>التغييرات: $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) apps?$</string>
 			<key>template</key>
-			<string>$1 تطبيقات</string>
+			<string>التطبيقات: $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) packages?$</string>
 			<key>template</key>
-			<string>$1 حزم</string>
+			<string>الحزم: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) updates?$</string>
+			<key>template</key>
+			<string>التحديثات: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) items?$</string>
+			<key>template</key>
+			<string>العناصر: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) files?$</string>
+			<key>template</key>
+			<string>الملفات: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) folders?$</string>
+			<key>template</key>
+			<string>المجلدات: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) selected$</string>
+			<key>template</key>
+			<string>المحدّد: $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) installed$</string>
 			<key>template</key>
-			<string>$1 مثبت</string>
+			<string>المثبّت: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) active$</string>
+			<key>template</key>
+			<string>النشط: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending$</string>
+			<key>template</key>
+			<string>قيد الانتظار: $1</string>
 		</dict>
 	</array>
 	<key>strings</key>
 	<dict>
+		<key>Invalid request.</key>
+		<string>طلب غير صالح.</string>
+		<key>Another Location Services request came first.</key>
+		<string>وصل طلب آخر لخدمات الموقع أولاً.</string>
+		<key>A newer Location Services request replaced this one.</key>
+		<string>استُبدل هذا الطلب بطلب أحدث لخدمات الموقع.</string>
+		<key>The Location Services request was superseded before it finished.</key>
+		<string>استُبدل طلب خدمات الموقع قبل أن يكتمل.</string>
+		<key>The Location Services retry was superseded before it finished.</key>
+		<string>استُبدلت إعادة محاولة خدمات الموقع قبل أن تكتمل.</string>
+		<key>Location Services request cancelled: kernel access was not acquired.</key>
+		<string>أُلغي طلب خدمات الموقع: لم يتم الحصول على الوصول إلى النواة.</string>
+		<key>Cyanide has no saved kernel access (for example after a restart). Open Cyanide and run it once, then try again.</key>
+		<string>لا يملك Cyanide وصولاً محفوظًا إلى النواة (مثلاً بعد إعادة التشغيل). افتح Cyanide وشغّله مرة واحدة، ثم حاول مجددًا.</string>
+		<key>(no information)</key>
+		<string>(لا توجد معلومات)</string>
+		<key>12h time</key>
+		<string>تنسيق ١٢ ساعة</string>
+		<key>24h time</key>
+		<string>تنسيق ٢٤ ساعة</string>
+		<key>3-App Limit</key>
+		<string>حدّ ٣ تطبيقات</string>
+		<key>@_kolbicz</key>
+		<string>@_kolbicz</string>
+		<key>A18 bounded search</key>
+		<string>بحث A18 محدود النطاق</string>
+		<key>A18 exploit path</key>
+		<string>طريقة استغلال A18</string>
+		<key>A18 interleaved search</key>
+		<string>بحث A18 بالتناوب</string>
+		<key>A18 memory shaping</key>
+		<string>ضبط توزيع ذاكرة A18</string>
 		<key>About</key>
 		<string>حول</string>
+		<key>Access</key>
+		<string>الوصول</string>
+		<key>Accuracy</key>
+		<string>الدقة</string>
+		<key>Activate</key>
+		<string>تفعيل</string>
+		<key>Activate Supervision</key>
+		<string>تفعيل الإشراف</string>
+		<key>Activation pending</key>
+		<string>التفعيل قيد الانتظار</string>
+		<key>Activity</key>
+		<string>النشاط</string>
+		<key>Add</key>
+		<string>إضافة</string>
 		<key>Add a Source</key>
 		<string>إضافة مصدر</string>
+		<key>Add Source</key>
+		<string>إضافة مصدر</string>
+		<key>Add to Cache Cleaner?</key>
+		<string>هل تريد الإضافة إلى منظّف ذاكرة التخزين المؤقت؟</string>
+		<key>Add to Favorites</key>
+		<string>إضافة إلى المفضلة</string>
+		<key>All Keys</key>
+		<string>كل المفاتيح</string>
+		<key>Altitude</key>
+		<string>الارتفاع</string>
+		<key>Always On</key>
+		<string>الشاشة دائمة التشغيل</string>
+		<key>Always Select</key>
+		<string>تحديد دائمًا</string>
+		<key>An install is still running.</key>
+		<string>لا يزال التثبيت جاريًا.</string>
+		<key>Another action is already running. Try again when it has finished.</key>
+		<string>يجري تنفيذ إجراء آخر بالفعل. أعد المحاولة بعد انتهائه.</string>
+		<key>Another action is running. Try again in a moment.</key>
+		<string>يجري تنفيذ إجراء آخر. أعد المحاولة بعد قليل.</string>
+		<key>Another Cyanide action is running. Try again in a moment.</key>
+		<string>يجري تنفيذ إجراء آخر في Cyanide. أعد المحاولة بعد قليل.</string>
+		<key>Another Cyanide action is still running. Try again in a moment.</key>
+		<string>لا يزال Cyanide ينفّذ إجراءً آخر. أعد المحاولة بعد قليل.</string>
+		<key>App Decrypt</key>
+		<string>فك تشفير التطبيقات</string>
+		<key>App Icon</key>
+		<string>أيقونة التطبيق</string>
+		<key>App Switcher Grid</key>
+		<string>شبكة مبدّل التطبيقات</string>
 		<key>Apply</key>
 		<string>تطبيق</string>
+		<key>Apply Changes</key>
+		<string>تطبيق التغييرات</string>
+		<key>Apply Changes?</key>
+		<string>هل تريد تطبيق التغييرات؟</string>
+		<key>Apply Installer changes right away</key>
+		<string>تطبيق تغييرات المثبّت فورًا</string>
+		<key>Apply Lock Screen Duration</key>
+		<string>تطبيق مدة عرض شاشة القفل</string>
+		<key>Apply Now</key>
+		<string>تطبيق الآن</string>
+		<key>Apply Pairing Override</key>
+		<string>تطبيق إعدادات الاقتران المخصّصة</string>
+		<key>Apply Style Now</key>
+		<string>تطبيق النمط الآن</string>
+		<key>Apps in use are left alone.</key>
+		<string>يتم تخطّي التطبيقات قيد الاستخدام.</string>
+		<key>Arrange icons by page</key>
+		<string>ترتيب الأيقونات حسب الصفحة</string>
+		<key>Arrange pages</key>
+		<string>ترتيب الصفحات</string>
+		<key>Auto Refresh</key>
+		<string>التحديث التلقائي</string>
+		<key>Auto-add Dock app</key>
+		<string>إضافة التطبيق إلى الشريط تلقائيًا</string>
+		<key>Auto-add selected app to Dock</key>
+		<string>إضافة التطبيق المحدد إلى الشريط تلقائيًا</string>
+		<key>Auto-retry attempt cap</key>
+		<string>الحد الأقصى لإعادة المحاولة تلقائيًا</string>
+		<key>Auto-retry failed chain runs</key>
+		<string>إعادة تشغيل السلسلة تلقائيًا عند فشلها</string>
+		<key>Axon Lite</key>
+		<string>Axon Lite</string>
 		<key>Back</key>
 		<string>رجوع</string>
 		<key>Battery, uptime, kernel access, storage</key>
 		<string>البطارية ومدة التشغيل والوصول إلى النواة والتخزين</string>
+		<key>Before You Clean</key>
+		<string>قبل التنظيف</string>
+		<key>Block if flashlight is on — In progress</key>
+		<string>الحظر عند تشغيل المصباح — قيد التطوير</string>
+		<key>Block if media is active — In progress</key>
+		<string>الحظر أثناء تشغيل الوسائط — قيد التطوير</string>
+		<key>Block in Low Power Mode — In progress</key>
+		<string>الحظر في نمط الطاقة المنخفضة — قيد التطوير</string>
+		<key>Blockers</key>
+		<string>شروط الحظر</string>
+		<key>Bottom side inset</key>
+		<string>الهامش الجانبي السفلي</string>
+		<key>Bottom Y offset</key>
+		<string>إزاحة Y السفلية</string>
+		<key>Bounce</key>
+		<string>الارتداد</string>
 		<key>Browse and install JS tweaks from repos</key>
 		<string>تصفح وتثبيت تعديلات JS من المستودعات</string>
 		<key>Browse files and edit plists</key>
@@ -55,130 +227,780 @@
 		<string>منظّف ذاكرة التخزين المؤقت</string>
 		<key>Cancel</key>
 		<string>إلغاء</string>
+		<key>Cannot Queue Install</key>
+		<string>تعذّرت إضافة التثبيت إلى قائمة الانتظار</string>
+		<key>CarPlay is unlocked.</key>
+		<string>تم فتح قفل CarPlay.</string>
+		<key>CarPlay without Siri</key>
+		<string>CarPlay بدون Siri</string>
+		<key>Celsius</key>
+		<string>مئوية</string>
+		<key>Center X offset</key>
+		<string>إزاحة المركز على محور X</string>
+		<key>Change Type</key>
+		<string>تغيير النوع</string>
+		<key>Changes are locked.</key>
+		<string>التغييرات مقفلة.</string>
+		<key>Changes are locked. Unlock them in the File Browser first.</key>
+		<string>التغييرات مقفلة. ألغِ قفلها في متصفح الملفات أولًا.</string>
+		<key>Check Failed</key>
+		<string>تعذّر التحقق من وجود تحديثات</string>
+		<key>Check for Updates</key>
+		<string>التحقق من وجود تحديثات</string>
+		<key>Checking Crash Logs</key>
+		<string>جارٍ التحقق من سجلات الأعطال…</string>
+		<key>Checking for Updates…</key>
+		<string>جارٍ التحقق من وجود تحديثات…</string>
+		<key>Checking Running Apps</key>
+		<string>جارٍ التحقق من التطبيقات قيد التشغيل…</string>
+		<key>Choose Position…</key>
+		<string>اختيار الموضع…</string>
 		<key>Choose the app language.</key>
 		<string>اختر لغة التطبيق.</string>
+		<key>Choose Video…</key>
+		<string>اختيار فيديو…</string>
+		<key>Classic</key>
+		<string>كلاسيكي</string>
+		<key>Clean</key>
+		<string>تنظيف</string>
+		<key>Clean Caches?</key>
+		<string>هل تريد تنظيف ذاكرة التخزين المؤقت؟</string>
+		<key>Clean Up</key>
+		<string>تنظيف</string>
+		<key>Clean Up?</key>
+		<string>هل تريد بدء التنظيف؟</string>
+		<key>Cleaning…</key>
+		<string>جارٍ التنظيف…</string>
+		<key>Clear</key>
+		<string>مسح</string>
+		<key>Clear Queue</key>
+		<string>مسح قائمة الانتظار</string>
+		<key>Clear Queue?</key>
+		<string>هل تريد مسح قائمة الانتظار؟</string>
+		<key>Clear Selected Style</key>
+		<string>إزالة النمط المحدد</string>
+		<key>Clear Selected Theme</key>
+		<string>إزالة السمة المحددة</string>
+		<key>Clear Selected Video</key>
+		<string>إزالة الفيديو المحدد</string>
 		<key>Close</key>
 		<string>إغلاق</string>
+		<key>Coefficient</key>
+		<string>المعامل</string>
 		<key>Community</key>
 		<string>المجتمع</string>
 		<key>Confirm</key>
 		<string>تأكيد</string>
+		<key>Contents</key>
+		<string>المحتويات</string>
 		<key>Continue</key>
 		<string>متابعة</string>
+		<key>Copied</key>
+		<string>تم النسخ</string>
 		<key>Copy</key>
 		<string>نسخ</string>
+		<key>Copy Identifier</key>
+		<string>نسخ المعرّف</string>
+		<key>Copy Key</key>
+		<string>نسخ المفتاح</string>
+		<key>Copy Path</key>
+		<string>نسخ المسار</string>
+		<key>Copy Value</key>
+		<string>نسخ القيمة</string>
+		<key>Counting…</key>
+		<string>جارٍ العدّ…</string>
+		<key>Create</key>
+		<string>إنشاء</string>
+		<key>Current (with unsaved changes)</key>
+		<string>الحالي (مع تغييرات غير محفوظة)</string>
+		<key>Cut</key>
+		<string>قص</string>
 		<key>Daemon Manager</key>
 		<string>مدير الخدمات</string>
+		<key>Data</key>
+		<string>البيانات</string>
+		<key>Date</key>
+		<string>التاريخ</string>
+		<key>Date + weekday</key>
+		<string>التاريخ ويوم الأسبوع</string>
+		<key>Deactivate</key>
+		<string>إلغاء التفعيل</string>
+		<key>Deactivate Supervision</key>
+		<string>إلغاء تفعيل الإشراف</string>
+		<key>Deactivation pending</key>
+		<string>إلغاء التفعيل قيد الانتظار</string>
+		<key>Debug Overlay</key>
+		<string>طبقة تصحيح الأخطاء</string>
 		<key>Delete</key>
 		<string>حذف</string>
+		<key>Delete Backups</key>
+		<string>حذف النسخ الاحتياطية</string>
+		<key>Delete?</key>
+		<string>هل تريد الحذف؟</string>
+		<key>Deselect All</key>
+		<string>إلغاء تحديد الكل</string>
+		<key>Device Artwork</key>
+		<string>رسومات الجهاز</string>
+		<key>Digits in style</key>
+		<string>الأرقام في النمط</string>
 		<key>Disable</key>
 		<string>تعطيل</string>
+		<key>Disable OTA Updates</key>
+		<string>تعطيل تحديثات OTA</string>
 		<key>Disabled</key>
 		<string>معطّل</string>
+		<key>DISABLED</key>
+		<string>معطّل</string>
+		<key>Discard</key>
+		<string>تجاهل</string>
+		<key>Discard all pending activation / deactivation changes.</key>
+		<string>تجاهل جميع عمليات التفعيل وإلغاء التفعيل المعلّقة.</string>
+		<key>Discard Changes</key>
+		<string>تجاهل التغييرات</string>
+		<key>Discard Changes?</key>
+		<string>هل تريد تجاهل التغييرات؟</string>
+		<key>Dock</key>
+		<string>شريط التطبيقات</string>
+		<key>Dock app bundle ID</key>
+		<string>معرّف حزمة التطبيق في الشريط</string>
+		<key>Dock extra L/R</key>
+		<string>هامش إضافي يمينًا ويسارًا للشريط</string>
+		<key>Dock extra left</key>
+		<string>هامش أيسر إضافي للشريط</string>
+		<key>Dock extra right</key>
+		<string>هامش أيمن إضافي للشريط</string>
+		<key>Dock icon scale</key>
+		<string>مقياس أيقونات الشريط</string>
+		<key>Dock icons</key>
+		<string>أيقونات الشريط</string>
+		<key>Dock scale %</key>
+		<string>مقياس الشريط (%)</string>
 		<key>Done</key>
 		<string>تم</string>
+		<key>Drag Coefficient</key>
+		<string>معامل السحب</string>
+		<key>Duplicate</key>
+		<string>إنشاء نسخة</string>
+		<key>Duration</key>
+		<string>المدة</string>
+		<key>Edit</key>
+		<string>تحرير</string>
+		<key>Empty folder.</key>
+		<string>المجلد فارغ.</string>
 		<key>Enable</key>
 		<string>تفعيل</string>
+		<key>Enable Always On</key>
+		<string>تفعيل الشاشة دائمة التشغيل</string>
+		<key>Enable Changes?</key>
+		<string>هل تريد السماح بالتغييرات؟</string>
+		<key>Enable OTA Updates</key>
+		<string>تفعيل تحديثات OTA</string>
 		<key>Enabled</key>
 		<string>مفعّل</string>
+		<key>Explosion Pulse</key>
+		<string>نبضة الانفجار</string>
+		<key>Export</key>
+		<string>تصدير</string>
+		<key>Export Originals…</key>
+		<string>تصدير النسخ الأصلية…</string>
+		<key>Faster tweak apply</key>
+		<string>تطبيق التعديلات بسرعة أكبر</string>
+		<key>FastLockX Lite</key>
+		<string>FastLockX Lite</string>
+		<key>Favorites</key>
+		<string>المفضلة</string>
 		<key>File Browser</key>
 		<string>متصفح الملفات</string>
+		<key>File Changed</key>
+		<string>تغيّر الملف</string>
+		<key>Filesystem access is not available.</key>
+		<string>الوصول إلى نظام الملفات غير متاح.</string>
+		<key>Filter apps</key>
+		<string>تصفية التطبيقات</string>
+		<key>Filter by name or PID</key>
+		<string>تصفية حسب الاسم أو معرّف العملية</string>
+		<key>Filter keys and values</key>
+		<string>تصفية المفاتيح والقيم</string>
+		<key>Filter this folder</key>
+		<string>تصفية هذا المجلد</string>
+		<key>Finding Apps</key>
+		<string>جارٍ البحث عن التطبيقات…</string>
+		<key>First page icons</key>
+		<string>أيقونات الصفحة الأولى</string>
+		<key>Folder Size</key>
+		<string>حجم المجلد</string>
+		<key>Folders to Clean</key>
+		<string>المجلدات المراد تنظيفها</string>
 		<key>Follow System</key>
-		<string>اتباع النظام</string>
+		<string>استخدام لغة النظام</string>
+		<key>Font Overwrite</key>
+		<string>استبدال الخط</string>
+		<key>Force Quit</key>
+		<string>فرض الإنهاء</string>
 		<key>Free space from app caches</key>
 		<string>تحرير المساحة من ذاكرات تطبيقات</string>
+		<key>Friction</key>
+		<string>الاحتكاك</string>
 		<key>Get Started</key>
 		<string>ابدأ</string>
+		<key>Getting File Access</key>
+		<string>جارٍ الحصول على إذن الوصول إلى الملفات…</string>
 		<key>GitHub</key>
 		<string>GitHub</string>
+		<key>Go</key>
+		<string>انتقال</string>
+		<key>Go to Container Top</key>
+		<string>الانتقال إلى جذر الحاوية</string>
+		<key>Go to Folder</key>
+		<string>الانتقال إلى مجلد</string>
+		<key>Go to Folder…</key>
+		<string>الانتقال إلى مجلد…</string>
+		<key>Got It</key>
+		<string>فهمت</string>
+		<key>Gravity Lite</key>
+		<string>Gravity Lite</string>
+		<key>Gravity strength</key>
+		<string>شدة الجاذبية</string>
+		<key>Hidden Settings</key>
+		<string>الإعدادات المخفية</string>
+		<key>Hide</key>
+		<string>إخفاء</string>
+		<key>Hide icon labels</key>
+		<string>إخفاء تسميات الأيقونات</string>
 		<key>Home</key>
 		<string>الرئيسية</string>
+		<key>Home columns</key>
+		<string>أعمدة الشاشة الرئيسية</string>
+		<key>Home extra bottom</key>
+		<string>هامش سفلي إضافي للشاشة الرئيسية</string>
+		<key>Home extra L/R</key>
+		<string>هامش إضافي يمينًا ويسارًا للشاشة الرئيسية</string>
+		<key>Home extra left</key>
+		<string>هامش أيسر إضافي للشاشة الرئيسية</string>
+		<key>Home extra right</key>
+		<string>هامش أيمن إضافي للشاشة الرئيسية</string>
+		<key>Home extra T/B</key>
+		<string>هامش إضافي أعلى وأسفل الشاشة الرئيسية</string>
+		<key>Home extra top</key>
+		<string>هامش علوي إضافي للشاشة الرئيسية</string>
+		<key>Home icon scale</key>
+		<string>مقياس أيقونات الشاشة الرئيسية</string>
+		<key>Home Layout Extras</key>
+		<string>خيارات إضافية لتخطيط الشاشة الرئيسية</string>
+		<key>Home rows</key>
+		<string>صفوف الشاشة الرئيسية</string>
+		<key>Home scale %</key>
+		<string>مقياس الشاشة الرئيسية (%)</string>
+		<key>How to write Cyanide tweaks</key>
+		<string>كيفية كتابة تعديلات Cyanide</string>
+		<key>I Understand</key>
+		<string>أفهم ذلك</string>
+		<key>Import Custom Theme…</key>
+		<string>استيراد سمة مخصّصة…</string>
 		<key>Import Failed</key>
 		<string>فشل الاستيراد</string>
+		<key>Import failed.</key>
+		<string>تعذّر الاستيراد.</string>
+		<key>Import from Files…</key>
+		<string>استيراد من تطبيق الملفات…</string>
+		<key>Import Originals…</key>
+		<string>استيراد النسخ الأصلية…</string>
+		<key>Import Style (.passthm/ZIP)…</key>
+		<string>استيراد نمط (.passthm/ZIP)…</string>
+		<key>Import Theme Archive (ZIP/DEB)…</key>
+		<string>استيراد أرشيف سمة (ZIP/DEB)…</string>
+		<key>Import Theme Folder…</key>
+		<string>استيراد مجلد السمة…</string>
 		<key>In Development</key>
 		<string>قيد التطوير</string>
+		<key>Include Dock</key>
+		<string>تضمين شريط التطبيقات</string>
 		<key>Install</key>
 		<string>تثبيت</string>
+		<key>Install pending</key>
+		<string>التثبيت قيد الانتظار</string>
+		<key>Install Running</key>
+		<string>التثبيت جارٍ</string>
 		<key>Installed</key>
 		<string>مثبّت</string>
+		<key>INSTALLED</key>
+		<string>مثبّت</string>
+		<key>Invalid Value</key>
+		<string>قيمة غير صالحة</string>
+		<key>iPad Dock</key>
+		<string>شريط تطبيقات iPad</string>
+		<key>JIT Enabler</key>
+		<string>أداة تفعيل JIT</string>
+		<key>Keep app alive in background</key>
+		<string>إبقاء التطبيق قيد التشغيل في الخلفية</string>
+		<key>Keep Current</key>
+		<string>الإبقاء على الحالي</string>
+		<key>Kernel access could not be acquired. Run the chain, then try again.</key>
+		<string>تعذّر الحصول على إمكانية الوصول إلى النواة. شغّل السلسلة ثم أعد المحاولة.</string>
+		<key>Kernel access isn't active. Run the chain first, then try again.</key>
+		<string>الوصول إلى النواة غير مفعّل. شغّل السلسلة أولًا ثم أعد المحاولة.</string>
 		<key>Kernel Access Ready</key>
 		<string>الوصول إلى النواة جاهز</string>
 		<key>Kernel access for the tools</key>
 		<string>الوصول إلى النواة للأدوات</string>
 		<key>Kernel access is not active. Run the chain first.</key>
 		<string>الوصول إلى النواة غير نشط. شغّل السلسلة أولاً.</string>
+		<key>Key</key>
+		<string>المفتاح</string>
+		<key>Key Exists</key>
+		<string>المفتاح موجود بالفعل</string>
 		<key>Language</key>
 		<string>اللغة</string>
 		<key>Language changed</key>
 		<string>تم تغيير اللغة</string>
+		<key>Lara</key>
+		<string>Lara</string>
 		<key>Later</key>
 		<string>لاحقًا</string>
+		<key>Launch Options</key>
+		<string>خيارات التشغيل</string>
+		<key>Layout</key>
+		<string>التخطيط</string>
+		<key>Legacy Chip Floor</key>
+		<string>الحد الأدنى للشريحة القديمة</string>
+		<key>Legacy chip floor</key>
+		<string>الحد الأدنى للشريحة القديمة</string>
+		<key>Level</key>
+		<string>المستوى</string>
+		<key>LiveWP</key>
+		<string>LiveWP</string>
+		<key>Load Saved Override</key>
+		<string>تحميل الإعداد المخصّص المحفوظ</string>
 		<key>Loading…</key>
 		<string>جارٍ التحميل…</string>
+		<key>Location Services</key>
+		<string>خدمات الموقع</string>
+		<key>Location Services Link</key>
+		<string>رابط خدمات الموقع</string>
+		<key>Location Services links</key>
+		<string>روابط خدمات الموقع</string>
+		<key>Location Services Off</key>
+		<string>خدمات الموقع متوقفة</string>
+		<key>Location Services On</key>
+		<string>خدمات الموقع قيد التشغيل</string>
+		<key>Location Simulator</key>
+		<string>محاكي الموقع</string>
+		<key>Lock Screen Duration</key>
+		<string>مدة عرض شاشة القفل</string>
 		<key>Log</key>
 		<string>السجل</string>
+		<key>Major Cities…</key>
+		<string>المدن الكبرى…</string>
+		<key>Measuring Caches</key>
+		<string>جارٍ حساب حجم ذاكرة التخزين المؤقت…</string>
+		<key>MobileGestalt</key>
+		<string>MobileGestalt</string>
+		<key>Mode</key>
+		<string>الوضع</string>
+		<key>Model Name</key>
+		<string>اسم الطراز</string>
+		<key>Model name</key>
+		<string>اسم الطراز</string>
+		<key>Modern</key>
+		<string>عصري</string>
+		<key>Multi-watch switch</key>
+		<string>التبديل بين عدة ساعات Apple Watch</string>
+		<key>Multi-Watch Switching</key>
+		<string>التبديل بين عدة ساعات Apple Watch</string>
+		<key>Name</key>
+		<string>الاسم</string>
+		<key>Network speed only</key>
+		<string>سرعة الشبكة فقط</string>
+		<key>New File</key>
+		<string>ملف جديد</string>
+		<key>New Folder</key>
+		<string>مجلد جديد</string>
+		<key>NiceBar Lite</key>
+		<string>NiceBar Lite</string>
+		<key>No longer pending</key>
+		<string>لم يعد قيد الانتظار</string>
+		<key>No matches.</key>
+		<string>لا توجد نتائج مطابقة.</string>
+		<key>No matching container was found for this app.</key>
+		<string>لم يُعثر على حاوية مطابقة لهذا التطبيق.</string>
+		<key>Not a regular file.</key>
+		<string>هذا ليس ملفًا عاديًا.</string>
+		<key>Not Now</key>
+		<string>ليس الآن</string>
+		<key>Not Saved</key>
+		<string>غير محفوظ</string>
 		<key>Not Supported</key>
 		<string>غير مدعوم</string>
+		<key>NSBar</key>
+		<string>NSBar</string>
 		<key>OK</key>
 		<string>حسناً</string>
 		<key>Off</key>
 		<string>إيقاف</string>
 		<key>On</key>
 		<string>تشغيل</string>
+		<key>On Disk</key>
+		<string>على القرص</string>
+		<key>Open as Text / Hex / Info</key>
+		<string>فتح كنص أو سداسي عشري أو معلومات</string>
 		<key>Open QuickLoader</key>
 		<string>فتح QuickLoader</string>
+		<key>Original Backup</key>
+		<string>النسخة الاحتياطية الأصلية</string>
+		<key>Originals</key>
+		<string>النسخ الأصلية</string>
+		<key>OTA Updates</key>
+		<string>تحديثات OTA</string>
+		<key>Other page icons</key>
+		<string>أيقونات الصفحات الأخرى</string>
+		<key>Overwrite</key>
+		<string>استبدال</string>
 		<key>Packages</key>
 		<string>الحزم</string>
+		<key>Page icon counts</key>
+		<string>عدد الأيقونات في كل صفحة</string>
+		<key>Passcode Style</key>
+		<string>نمط رمز الدخول</string>
+		<key>Performance HUD</key>
+		<string>مؤشر الأداء</string>
+		<key>Permissions</key>
+		<string>الأذونات</string>
+		<key>Permissions…</key>
+		<string>الأذونات…</string>
+		<key>Position</key>
+		<string>الموضع</string>
+		<key>Powercuff</key>
+		<string>Powercuff</string>
+		<key>Preparing respring…</key>
+		<string>جارٍ التحضير لإعادة تشغيل SpringBoard…</string>
+		<key>Preparing…</key>
+		<string>جارٍ التحضير…</string>
 		<key>Process Viewer</key>
 		<string>عارض العمليات</string>
+		<key>Queue</key>
+		<string>قائمة الانتظار</string>
 		<key>Quick Actions</key>
 		<string>إجراءات سريعة</string>
+		<key>QuickLoader</key>
+		<string>QuickLoader</string>
+		<key>Quit</key>
+		<string>إنهاء</string>
+		<key>Read Current Status</key>
+		<string>قراءة الحالة الحالية</string>
+		<key>Read Current Value</key>
+		<string>قراءة القيمة الحالية</string>
+		<key>Reboot</key>
+		<string>إعادة تشغيل الجهاز</string>
+		<key>Reboot?</key>
+		<string>هل تريد إعادة تشغيل الجهاز؟</string>
+		<key>Rebooting…</key>
+		<string>جارٍ إعادة التشغيل…</string>
+		<key>Recent</key>
+		<string>الأخيرة</string>
+		<key>Reclaimable</key>
+		<string>المساحة القابلة للتحرير</string>
 		<key>Refresh</key>
 		<string>تحديث</string>
+		<key>Refresh rate</key>
+		<string>معدل التحديث</string>
 		<key>Refreshing sources…</key>
 		<string>جارٍ تحديث المصادر…</string>
+		<key>Remind Me Later</key>
+		<string>ذكّرني لاحقًا</string>
+		<key>Removal pending</key>
+		<string>الإزالة قيد الانتظار</string>
 		<key>Remove</key>
 		<string>إزالة</string>
+		<key>Remove (restore stock)</key>
+		<string>إزالة (استعادة الوضع الأصلي)</string>
+		<key>Remove from Favorites</key>
+		<string>إزالة من المفضلة</string>
+		<key>Remove Override</key>
+		<string>إزالة الإعداد المخصّص</string>
+		<key>Rename</key>
+		<string>إعادة تسمية</string>
+		<key>Rename Key</key>
+		<string>إعادة تسمية المفتاح</string>
+		<key>Repo sources</key>
+		<string>مصادر المستودعات</string>
 		<key>Report a Bug</key>
 		<string>الإبلاغ عن خطأ</string>
+		<key>RepoTweaks</key>
+		<string>RepoTweaks</string>
+		<key>Reset</key>
+		<string>إعادة تعيين</string>
+		<key>Reset All Packages</key>
+		<string>إعادة تعيين كل الحزم</string>
+		<key>Reset All Packages?</key>
+		<string>هل تريد إعادة تعيين كل الحزم؟</string>
+		<key>Reset to Defaults</key>
+		<string>استعادة الإعدادات الافتراضية</string>
+		<key>Resistance</key>
+		<string>المقاومة</string>
+		<key>Respring</key>
+		<string>إعادة تشغيل SpringBoard</string>
+		<key>Respring and reboot links</key>
+		<string>روابط إعادة تشغيل SpringBoard والجهاز</string>
+		<key>Respring?</key>
+		<string>هل تريد إعادة تشغيل SpringBoard؟</string>
 		<key>Restart Cyanide to apply the new language.</key>
 		<string>أعد تشغيل Cyanide لتطبيق اللغة الجديدة.</string>
+		<key>Restore</key>
+		<string>استعادة</string>
+		<key>Restore Icon Layout</key>
+		<string>استعادة ترتيب الأيقونات</string>
+		<key>Restore Original</key>
+		<string>استعادة الأصل</string>
+		<key>Restore Original Digits</key>
+		<string>استعادة الأرقام الأصلية</string>
+		<key>Restore Original?</key>
+		<string>هل تريد استعادة الأصل؟</string>
+		<key>Restore Original…</key>
+		<string>استعادة الأصل…</string>
+		<key>Restore Real Location</key>
+		<string>استعادة الموقع الفعلي</string>
+		<key>Restore Stock Switcher</key>
+		<string>استعادة مبدّل التطبيقات الأصلي</string>
 		<key>Retry</key>
 		<string>إعادة المحاولة</string>
+		<key>Retry interval</key>
+		<string>الفاصل بين المحاولات</string>
+		<key>Revert</key>
+		<string>تراجع</string>
+		<key>Review Folders</key>
+		<string>مراجعة المجلدات</string>
+		<key>Run Again</key>
+		<string>تشغيل مجددًا</string>
 		<key>Run Exploit</key>
 		<string>تشغيل الاستغلال</string>
 		<key>Run a local .js tweak file</key>
 		<string>تشغيل ملف تعديل .js محلي</string>
 		<key>Save</key>
 		<string>حفظ</string>
+		<key>Save Changes?</key>
+		<string>هل تريد حفظ التغييرات؟</string>
+		<key>Save Not Verified</key>
+		<string>لم يتم التحقق من الحفظ</string>
+		<key>Saved originals</key>
+		<string>النسخ الأصلية المحفوظة</string>
+		<key>SBCustomizer</key>
+		<string>SBCustomizer</string>
+		<key>Scanning processes…</key>
+		<string>جارٍ فحص العمليات…</string>
+		<key>Screen Shape</key>
+		<string>شكل الشاشة</string>
 		<key>Search</key>
 		<string>بحث</string>
+		<key>Search all tweaks</key>
+		<string>البحث في كل التعديلات</string>
+		<key>See All Changes</key>
+		<string>عرض كل التغييرات</string>
 		<key>See and quit running processes</key>
 		<string>عرض العمليات الجارية وإنهائها</string>
+		<key>See This Version's Changes</key>
+		<string>عرض تغييرات هذا الإصدار</string>
+		<key>Select All Apps</key>
+		<string>تحديد كل التطبيقات</string>
+		<key>Select Automatically</key>
+		<string>تحديد تلقائي</string>
+		<key>Select by Hand</key>
+		<string>تحديد يدويًا</string>
+		<key>Select Items to Clean</key>
+		<string>تحديد العناصر المراد تنظيفها</string>
+		<key>Select Large Caches (50 MB+)</key>
+		<string>تحديد ذاكرات التخزين المؤقت الكبيرة (٥٠ م.ب. فأكثر)</string>
+		<key>Select Theme</key>
+		<string>اختيار سمة</string>
+		<key>Select Video</key>
+		<string>اختيار فيديو</string>
+		<key>Selected Dock app</key>
+		<string>التطبيق المحدد لشريط التطبيقات</string>
+		<key>Selected Style</key>
+		<string>النمط المحدد</string>
+		<key>Selected Theme</key>
+		<string>السمة المحددة</string>
+		<key>Selected Video</key>
+		<string>الفيديو المحدد</string>
+		<key>Session note</key>
+		<string>ملاحظة الجلسة</string>
+		<key>Set</key>
+		<string>تعيين</string>
+		<key>Set Exact Coordinates…</key>
+		<string>تعيين الإحداثيات الدقيقة…</string>
 		<key>Settings</key>
 		<string>الإعدادات</string>
+		<key>Setup floor</key>
+		<string>الحد الأدنى للإعداد</string>
+		<key>Setup Protocol Floor</key>
+		<string>الحد الأدنى لإصدار بروتوكول الإعداد</string>
 		<key>Share</key>
 		<string>مشاركة</string>
+		<key>Share Log</key>
+		<string>مشاركة السجل</string>
+		<key>Share…</key>
+		<string>مشاركة…</string>
+		<key>Short date</key>
+		<string>تاريخ مختصر</string>
+		<key>Show</key>
+		<string>إظهار</string>
+		<key>Show Advanced</key>
+		<string>إظهار الخيارات المتقدمة</string>
+		<key>Show Backups</key>
+		<string>عرض النسخ الاحتياطية</string>
+		<key>Show CPU %</key>
+		<string>إظهار نسبة استخدام المعالج</string>
+		<key>Show CPU / RAM labels</key>
+		<string>إظهار تسميات المعالج وذاكرة الوصول العشوائي</string>
+		<key>Show CPU/RAM labels</key>
+		<string>إظهار تسميات المعالج وذاكرة الوصول العشوائي</string>
+		<key>Show dock labels</key>
+		<string>إظهار تسميات الشريط</string>
+		<key>Show in File Browser</key>
+		<string>إظهار في متصفح الملفات</string>
+		<key>Show in Folder</key>
+		<string>إظهار في المجلد</string>
+		<key>Show net speed</key>
+		<string>إظهار سرعة الشبكة</string>
+		<key>Show network speed</key>
+		<string>إظهار سرعة الشبكة</string>
+		<key>Simulate Current Target</key>
+		<string>محاكاة الموقع المستهدف الحالي</string>
+		<key>Simulate Rockaway Test Point</key>
+		<string>محاكاة نقطة الاختبار في روكاواي</string>
+		<key>Size of This Folder</key>
+		<string>حجم هذا المجلد</string>
+		<key>Skip This Version</key>
+		<string>تخطّي هذا الإصدار</string>
+		<key>SnowBoard Lite</key>
+		<string>SnowBoard Lite</string>
 		<key>Some sources could not be refreshed</key>
 		<string>تعذر تحديث بعض المصادر</string>
+		<key>Sort By</key>
+		<string>الترتيب حسب</string>
+		<key>Source Failed</key>
+		<string>خطأ في المصدر</string>
 		<key>Source refresh failed</key>
 		<string>فشل تحديث المصادر</string>
 		<key>Sources</key>
 		<string>المصادر</string>
 		<key>Sources up to date</key>
 		<string>المصادر محدثة</string>
+		<key>Spin resist.</key>
+		<string>مقاومة الدوران</string>
+		<key>Spin resistance</key>
+		<string>مقاومة الدوران</string>
+		<key>Spoof Device Model</key>
+		<string>انتحال طراز الجهاز</string>
+		<key>SpringBoard could not be reached.</key>
+		<string>تعذّر الاتصال بـ SpringBoard.</string>
+		<key>SpringBoard Tools</key>
+		<string>أدوات SpringBoard</string>
 		<key>SpringBoard tweaks for stock iOS</key>
 		<string>تعديلات SpringBoard لنظام iOS الأصلي</string>
+		<key>Starting…</key>
+		<string>جارٍ البدء…</string>
+		<key>StatBar</key>
+		<string>StatBar</string>
+		<key>Strength</key>
+		<string>القوة</string>
+		<key>Style</key>
+		<string>النمط</string>
+		<key>Supervision</key>
+		<string>الإشراف</string>
+		<key>Switch to Fastest</key>
+		<string>التبديل إلى السرعة القصوى</string>
+		<key>Switch to pe_v3</key>
+		<string>التبديل إلى pe_v3</string>
+		<key>Switcher style</key>
+		<string>نمط مبدّل التطبيقات</string>
 		<key>System</key>
 		<string>النظام</string>
 		<key>System Info</key>
 		<string>معلومات النظام</string>
+		<key>Target</key>
+		<string>الهدف</string>
+		<key>Tendies Wallpapers</key>
+		<string>Tendies Wallpapers</string>
+		<key>The file could not be written.</key>
+		<string>تعذّرت الكتابة إلى الملف.</string>
+		<key>The file was changed or replaced since you opened it. Overwrite it with your version?</key>
+		<string>تغيّر الملف أو استُبدل منذ فتحه. هل تريد الكتابة فوقه بنسختك؟</string>
+		<key>The list of disabled daemons could not be read. Check the log.</key>
+		<string>تعذّرت قراءة قائمة خدمات الخلفية المعطّلة. راجع السجل.</string>
+		<key>Theme</key>
+		<string>السمة</string>
+		<key>Theme Format Guide</key>
+		<string>دليل تنسيق السمات</string>
+		<key>This package cannot be queued yet.</key>
+		<string>لا يمكن إضافة هذه الحزمة إلى قائمة الانتظار بعد.</string>
+		<key>This queue row was already applied or cleared.</key>
+		<string>تم تطبيق عنصر قائمة الانتظار هذا أو مسحه بالفعل.</string>
+		<key>Time + seconds</key>
+		<string>الوقت والثواني</string>
 		<key>Tools</key>
 		<string>الأدوات</string>
+		<key>Top side inset</key>
+		<string>الهامش الجانبي العلوي</string>
+		<key>Top Y offset</key>
+		<string>إزاحة Y العلوية</string>
+		<key>Traffic History</key>
+		<string>سجل حركة الشبكة</string>
+		<key>Try the pe_v3 exploit path?</key>
+		<string>هل تريد تجربة طريقة الاستغلال pe_v3؟</string>
 		<key>Turn system services off and on</key>
 		<string>تشغيل خدمات النظام وإيقافها</string>
+		<key>Turning Off Location Services</key>
+		<string>جارٍ إيقاف خدمات الموقع</string>
+		<key>Turning On Location Services</key>
+		<string>جارٍ تشغيل خدمات الموقع</string>
+		<key>Tweak apply speed</key>
+		<string>سرعة تطبيق التعديلات</string>
+		<key>Tweak SDK</key>
+		<string>حزمة تطوير التعديلات</string>
 		<key>Tweaks</key>
 		<string>التعديلات</string>
+		<key>Twitter</key>
+		<string>Twitter</string>
+		<key>Unfinished Saves</key>
+		<string>عمليات الحفظ غير المكتملة</string>
+		<key>Unknown Source</key>
+		<string>مصدر غير معروف</string>
+		<key>Unsupported</key>
+		<string>غير مدعوم</string>
+		<key>UNSUPPORTED</key>
+		<string>غير مدعوم</string>
+		<key>Up to Date</key>
+		<string>محدّث</string>
+		<key>Update</key>
+		<string>تحديث</string>
+		<key>UPDATE</key>
+		<string>تحديث</string>
+		<key>Update Available</key>
+		<string>يتوفر تحديث</string>
+		<key>Upside Down</key>
+		<string>مقلوب رأسًا على عقب</string>
+		<key>Use Original</key>
+		<string>استخدام الأصل</string>
+		<key>Use watchOS Range 99/23/10/6</key>
+		<string>استخدام نطاق watchOS ‏99/23/10/6</string>
+		<key>Verbose logging</key>
+		<string>التسجيل المفصّل</string>
+		<key>Video</key>
+		<string>فيديو</string>
+		<key>View Log</key>
+		<string>عرض السجل</string>
+		<key>View Release</key>
+		<string>عرض الإصدار</string>
+		<key>Wallet Card Art</key>
+		<string>صورة البطاقة في المحفظة</string>
+		<key>Watch Pairing</key>
+		<string>اقتران Apple Watch</string>
+		<key>watchOS limit</key>
+		<string>حد watchOS</string>
+		<key>watchOS Pairing Limit</key>
+		<string>حد اقتران watchOS</string>
+		<key>Weekday + time</key>
+		<string>يوم الأسبوع والوقت</string>
 		<key>What's New</key>
 		<string>الجديد</string>
 		<key>Working</key>

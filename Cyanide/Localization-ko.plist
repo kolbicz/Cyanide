@@ -14,39 +14,211 @@
 			<key>pattern</key>
 			<string>^([0-9]+) pending changes?$</string>
 			<key>template</key>
-			<string>$1개의 보류 중인 변경 사항</string>
+			<string>보류 중인 변경 사항: $1개</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) changes?$</string>
+			<key>template</key>
+			<string>변경 사항: $1개</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) apps?$</string>
 			<key>template</key>
-			<string>$1개의 앱</string>
+			<string>앱: $1개</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) packages?$</string>
 			<key>template</key>
-			<string>$1개의 패키지</string>
+			<string>패키지: $1개</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) updates?$</string>
+			<key>template</key>
+			<string>업데이트: $1개</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) items?$</string>
+			<key>template</key>
+			<string>항목: $1개</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) files?$</string>
+			<key>template</key>
+			<string>파일: $1개</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) folders?$</string>
+			<key>template</key>
+			<string>폴더: $1개</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) selected$</string>
+			<key>template</key>
+			<string>선택됨: $1개</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) installed$</string>
 			<key>template</key>
-			<string>$1개 설치됨</string>
+			<string>설치됨: $1개</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) active$</string>
+			<key>template</key>
+			<string>활성 상태: $1개</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending$</string>
+			<key>template</key>
+			<string>보류 중: $1개</string>
 		</dict>
 	</array>
 	<key>strings</key>
 	<dict>
+		<key>Invalid request.</key>
+		<string>잘못된 요청입니다.</string>
+		<key>Another Location Services request came first.</key>
+		<string>다른 위치 서비스 요청이 먼저 도착했습니다.</string>
+		<key>A newer Location Services request replaced this one.</key>
+		<string>더 새로운 위치 서비스 요청이 이 요청을 대체했습니다.</string>
+		<key>The Location Services request was superseded before it finished.</key>
+		<string>위치 서비스 요청이 완료되기 전에 대체되었습니다.</string>
+		<key>The Location Services retry was superseded before it finished.</key>
+		<string>위치 서비스 재시도가 완료되기 전에 대체되었습니다.</string>
+		<key>Location Services request cancelled: kernel access was not acquired.</key>
+		<string>위치 서비스 요청이 취소되었습니다: 커널 액세스를 얻지 못했습니다.</string>
+		<key>Cyanide has no saved kernel access (for example after a restart). Open Cyanide and run it once, then try again.</key>
+		<string>Cyanide에 저장된 커널 액세스가 없습니다(예: 재시동 후). Cyanide를 열어 한 번 실행한 다음 다시 시도하세요.</string>
+		<key>(no information)</key>
+		<string>(정보 없음)</string>
+		<key>12h time</key>
+		<string>12시간제</string>
+		<key>24h time</key>
+		<string>24시간제</string>
+		<key>3-App Limit</key>
+		<string>앱 3개 제한</string>
+		<key>@_kolbicz</key>
+		<string>@_kolbicz</string>
+		<key>A18 bounded search</key>
+		<string>A18 제한 범위 검색</string>
+		<key>A18 exploit path</key>
+		<string>A18 익스플로잇 방식</string>
+		<key>A18 interleaved search</key>
+		<string>A18 인터리브 검색</string>
+		<key>A18 memory shaping</key>
+		<string>A18 메모리 배치 조정</string>
 		<key>About</key>
 		<string>정보</string>
+		<key>Access</key>
+		<string>접근</string>
+		<key>Accuracy</key>
+		<string>정확도</string>
+		<key>Activate</key>
+		<string>활성화</string>
+		<key>Activate Supervision</key>
+		<string>감독 모드 활성화</string>
+		<key>Activation pending</key>
+		<string>활성화 대기 중</string>
+		<key>Activity</key>
+		<string>활동</string>
+		<key>Add</key>
+		<string>추가</string>
 		<key>Add a Source</key>
 		<string>소스 추가</string>
+		<key>Add Source</key>
+		<string>소스 추가</string>
+		<key>Add to Cache Cleaner?</key>
+		<string>캐시 정리기에 추가할까요?</string>
+		<key>Add to Favorites</key>
+		<string>즐겨찾기에 추가</string>
+		<key>All Keys</key>
+		<string>모든 키</string>
+		<key>Altitude</key>
+		<string>고도</string>
+		<key>Always On</key>
+		<string>항상 켬</string>
+		<key>Always Select</key>
+		<string>항상 선택</string>
+		<key>An install is still running.</key>
+		<string>설치가 아직 진행 중입니다.</string>
+		<key>Another action is already running. Try again when it has finished.</key>
+		<string>이미 다른 작업이 진행 중입니다. 작업이 끝나면 다시 시도하세요.</string>
+		<key>Another action is running. Try again in a moment.</key>
+		<string>다른 작업이 진행 중입니다. 잠시 후 다시 시도하세요.</string>
+		<key>Another Cyanide action is running. Try again in a moment.</key>
+		<string>Cyanide에서 다른 작업을 진행 중입니다. 잠시 후 다시 시도하세요.</string>
+		<key>Another Cyanide action is still running. Try again in a moment.</key>
+		<string>Cyanide에서 다른 작업이 아직 진행 중입니다. 잠시 후 다시 시도하세요.</string>
+		<key>App Decrypt</key>
+		<string>앱 복호화</string>
+		<key>App Icon</key>
+		<string>앱 아이콘</string>
+		<key>App Switcher Grid</key>
+		<string>앱 전환기 격자</string>
 		<key>Apply</key>
 		<string>적용</string>
+		<key>Apply Changes</key>
+		<string>변경 사항 적용</string>
+		<key>Apply Changes?</key>
+		<string>변경 사항을 적용할까요?</string>
+		<key>Apply Installer changes right away</key>
+		<string>설치 프로그램 변경 사항 즉시 적용</string>
+		<key>Apply Lock Screen Duration</key>
+		<string>잠금 화면 표시 시간 적용</string>
+		<key>Apply Now</key>
+		<string>지금 적용</string>
+		<key>Apply Pairing Override</key>
+		<string>페어링 재정의 적용</string>
+		<key>Apply Style Now</key>
+		<string>지금 스타일 적용</string>
+		<key>Apps in use are left alone.</key>
+		<string>사용 중인 앱은 건너뜁니다.</string>
+		<key>Arrange icons by page</key>
+		<string>페이지별로 아이콘 정렬</string>
+		<key>Arrange pages</key>
+		<string>페이지 정렬</string>
+		<key>Auto Refresh</key>
+		<string>자동 새로 고침</string>
+		<key>Auto-add Dock app</key>
+		<string>Dock에 앱 자동 추가</string>
+		<key>Auto-add selected app to Dock</key>
+		<string>선택한 앱을 Dock에 자동 추가</string>
+		<key>Auto-retry attempt cap</key>
+		<string>자동 재시도 횟수 제한</string>
+		<key>Auto-retry failed chain runs</key>
+		<string>체인 실행 실패 시 자동 재시도</string>
+		<key>Axon Lite</key>
+		<string>Axon Lite</string>
 		<key>Back</key>
 		<string>뒤로</string>
 		<key>Battery, uptime, kernel access, storage</key>
 		<string>배터리, 가동 시간, 커널 액세스, 저장 공간</string>
+		<key>Before You Clean</key>
+		<string>정리하기 전에</string>
+		<key>Block if flashlight is on — In progress</key>
+		<string>손전등이 켜져 있으면 차단 — 개발 중</string>
+		<key>Block if media is active — In progress</key>
+		<string>미디어가 재생 중이면 차단 — 개발 중</string>
+		<key>Block in Low Power Mode — In progress</key>
+		<string>저전력 모드에서 차단 — 개발 중</string>
+		<key>Blockers</key>
+		<string>차단 조건</string>
+		<key>Bottom side inset</key>
+		<string>하단 좌우 여백</string>
+		<key>Bottom Y offset</key>
+		<string>하단 Y 오프셋</string>
+		<key>Bounce</key>
+		<string>반동</string>
 		<key>Browse and install JS tweaks from repos</key>
 		<string>저장소에서 JS 트윅 탐색 및 설치</string>
 		<key>Browse files and edit plists</key>
@@ -55,130 +227,780 @@
 		<string>캐시 정리기</string>
 		<key>Cancel</key>
 		<string>취소</string>
+		<key>Cannot Queue Install</key>
+		<string>설치를 대기열에 추가할 수 없음</string>
+		<key>CarPlay is unlocked.</key>
+		<string>CarPlay 잠금이 해제되었습니다.</string>
+		<key>CarPlay without Siri</key>
+		<string>Siri 없이 CarPlay</string>
+		<key>Celsius</key>
+		<string>섭씨</string>
+		<key>Center X offset</key>
+		<string>중앙 X 오프셋</string>
+		<key>Change Type</key>
+		<string>유형 변경</string>
+		<key>Changes are locked.</key>
+		<string>변경이 잠겨 있습니다.</string>
+		<key>Changes are locked. Unlock them in the File Browser first.</key>
+		<string>변경이 잠겨 있습니다. 먼저 파일 브라우저에서 잠금을 해제하세요.</string>
+		<key>Check Failed</key>
+		<string>확인 실패</string>
+		<key>Check for Updates</key>
+		<string>업데이트 확인</string>
+		<key>Checking Crash Logs</key>
+		<string>충돌 로그 확인 중…</string>
+		<key>Checking for Updates…</key>
+		<string>업데이트 확인 중…</string>
+		<key>Checking Running Apps</key>
+		<string>실행 중인 앱 확인 중…</string>
+		<key>Choose Position…</key>
+		<string>위치 선택…</string>
 		<key>Choose the app language.</key>
 		<string>앱 언어를 선택하세요.</string>
+		<key>Choose Video…</key>
+		<string>비디오 선택…</string>
+		<key>Classic</key>
+		<string>클래식</string>
+		<key>Clean</key>
+		<string>정리</string>
+		<key>Clean Caches?</key>
+		<string>캐시를 정리할까요?</string>
+		<key>Clean Up</key>
+		<string>정리</string>
+		<key>Clean Up?</key>
+		<string>정리할까요?</string>
+		<key>Cleaning…</key>
+		<string>정리 중…</string>
+		<key>Clear</key>
+		<string>지우기</string>
+		<key>Clear Queue</key>
+		<string>대기열 지우기</string>
+		<key>Clear Queue?</key>
+		<string>대기열을 지울까요?</string>
+		<key>Clear Selected Style</key>
+		<string>선택한 스타일 지우기</string>
+		<key>Clear Selected Theme</key>
+		<string>선택한 테마 지우기</string>
+		<key>Clear Selected Video</key>
+		<string>선택한 비디오 지우기</string>
 		<key>Close</key>
 		<string>닫기</string>
+		<key>Coefficient</key>
+		<string>계수</string>
 		<key>Community</key>
 		<string>커뮤니티</string>
 		<key>Confirm</key>
 		<string>확인</string>
+		<key>Contents</key>
+		<string>내용</string>
 		<key>Continue</key>
 		<string>계속</string>
+		<key>Copied</key>
+		<string>복사됨</string>
 		<key>Copy</key>
 		<string>복사</string>
+		<key>Copy Identifier</key>
+		<string>식별자 복사</string>
+		<key>Copy Key</key>
+		<string>키 복사</string>
+		<key>Copy Path</key>
+		<string>경로 복사</string>
+		<key>Copy Value</key>
+		<string>값 복사</string>
+		<key>Counting…</key>
+		<string>계산 중…</string>
+		<key>Create</key>
+		<string>만들기</string>
+		<key>Current (with unsaved changes)</key>
+		<string>현재(저장하지 않은 변경 사항 포함)</string>
+		<key>Cut</key>
+		<string>오려두기</string>
 		<key>Daemon Manager</key>
 		<string>데몬 관리자</string>
+		<key>Data</key>
+		<string>데이터</string>
+		<key>Date</key>
+		<string>날짜</string>
+		<key>Date + weekday</key>
+		<string>날짜 및 요일</string>
+		<key>Deactivate</key>
+		<string>비활성화</string>
+		<key>Deactivate Supervision</key>
+		<string>감독 모드 비활성화</string>
+		<key>Deactivation pending</key>
+		<string>비활성화 대기 중</string>
+		<key>Debug Overlay</key>
+		<string>디버그 오버레이</string>
 		<key>Delete</key>
 		<string>삭제</string>
+		<key>Delete Backups</key>
+		<string>백업 삭제</string>
+		<key>Delete?</key>
+		<string>삭제할까요?</string>
+		<key>Deselect All</key>
+		<string>모두 선택 해제</string>
+		<key>Device Artwork</key>
+		<string>기기 그래픽</string>
+		<key>Digits in style</key>
+		<string>스타일의 숫자</string>
 		<key>Disable</key>
 		<string>비활성화</string>
+		<key>Disable OTA Updates</key>
+		<string>OTA 업데이트 비활성화</string>
 		<key>Disabled</key>
 		<string>비활성화됨</string>
+		<key>DISABLED</key>
+		<string>비활성화됨</string>
+		<key>Discard</key>
+		<string>폐기</string>
+		<key>Discard all pending activation / deactivation changes.</key>
+		<string>대기 중인 모든 활성화 및 비활성화 변경을 폐기합니다.</string>
+		<key>Discard Changes</key>
+		<string>변경 사항 폐기</string>
+		<key>Discard Changes?</key>
+		<string>변경 사항을 폐기할까요?</string>
+		<key>Dock</key>
+		<string>Dock</string>
+		<key>Dock app bundle ID</key>
+		<string>Dock 앱 번들 ID</string>
+		<key>Dock extra L/R</key>
+		<string>Dock 좌우 추가 여백</string>
+		<key>Dock extra left</key>
+		<string>Dock 왼쪽 추가 여백</string>
+		<key>Dock extra right</key>
+		<string>Dock 오른쪽 추가 여백</string>
+		<key>Dock icon scale</key>
+		<string>Dock 아이콘 배율</string>
+		<key>Dock icons</key>
+		<string>Dock 아이콘</string>
+		<key>Dock scale %</key>
+		<string>Dock 배율(%)</string>
 		<key>Done</key>
 		<string>완료</string>
+		<key>Drag Coefficient</key>
+		<string>항력 계수</string>
+		<key>Duplicate</key>
+		<string>복제</string>
+		<key>Duration</key>
+		<string>지속 시간</string>
+		<key>Edit</key>
+		<string>편집</string>
+		<key>Empty folder.</key>
+		<string>빈 폴더입니다.</string>
 		<key>Enable</key>
 		<string>활성화</string>
+		<key>Enable Always On</key>
+		<string>항상 켬 활성화</string>
+		<key>Enable Changes?</key>
+		<string>변경을 허용할까요?</string>
+		<key>Enable OTA Updates</key>
+		<string>OTA 업데이트 활성화</string>
 		<key>Enabled</key>
 		<string>활성화됨</string>
+		<key>Explosion Pulse</key>
+		<string>폭발 펄스</string>
+		<key>Export</key>
+		<string>내보내기</string>
+		<key>Export Originals…</key>
+		<string>원본 내보내기…</string>
+		<key>Faster tweak apply</key>
+		<string>트윅 적용 속도 향상</string>
+		<key>FastLockX Lite</key>
+		<string>FastLockX Lite</string>
+		<key>Favorites</key>
+		<string>즐겨찾기</string>
 		<key>File Browser</key>
 		<string>파일 브라우저</string>
+		<key>File Changed</key>
+		<string>파일이 변경됨</string>
+		<key>Filesystem access is not available.</key>
+		<string>파일 시스템에 접근할 수 없습니다.</string>
+		<key>Filter apps</key>
+		<string>앱 필터링</string>
+		<key>Filter by name or PID</key>
+		<string>이름 또는 PID로 필터링</string>
+		<key>Filter keys and values</key>
+		<string>키 및 값 필터링</string>
+		<key>Filter this folder</key>
+		<string>이 폴더 필터링</string>
+		<key>Finding Apps</key>
+		<string>앱 찾는 중…</string>
+		<key>First page icons</key>
+		<string>첫 페이지 아이콘</string>
+		<key>Folder Size</key>
+		<string>폴더 크기</string>
+		<key>Folders to Clean</key>
+		<string>정리할 폴더</string>
 		<key>Follow System</key>
-		<string>시스템 따르기</string>
+		<string>시스템 언어 사용</string>
+		<key>Font Overwrite</key>
+		<string>서체 덮어쓰기</string>
+		<key>Force Quit</key>
+		<string>강제 종료</string>
 		<key>Free space from app caches</key>
 		<string>앱 캐시에서 공간 확보</string>
+		<key>Friction</key>
+		<string>마찰</string>
 		<key>Get Started</key>
 		<string>시작하기</string>
+		<key>Getting File Access</key>
+		<string>파일 접근 권한을 얻는 중…</string>
 		<key>GitHub</key>
 		<string>GitHub</string>
+		<key>Go</key>
+		<string>이동</string>
+		<key>Go to Container Top</key>
+		<string>컨테이너 최상위로 이동</string>
+		<key>Go to Folder</key>
+		<string>폴더로 이동</string>
+		<key>Go to Folder…</key>
+		<string>폴더로 이동…</string>
+		<key>Got It</key>
+		<string>확인</string>
+		<key>Gravity Lite</key>
+		<string>Gravity Lite</string>
+		<key>Gravity strength</key>
+		<string>중력 강도</string>
+		<key>Hidden Settings</key>
+		<string>숨겨진 설정</string>
+		<key>Hide</key>
+		<string>가리기</string>
+		<key>Hide icon labels</key>
+		<string>아이콘 이름 가리기</string>
 		<key>Home</key>
 		<string>홈</string>
+		<key>Home columns</key>
+		<string>홈 화면 열 수</string>
+		<key>Home extra bottom</key>
+		<string>홈 화면 하단 추가 여백</string>
+		<key>Home extra L/R</key>
+		<string>홈 화면 좌우 추가 여백</string>
+		<key>Home extra left</key>
+		<string>홈 화면 왼쪽 추가 여백</string>
+		<key>Home extra right</key>
+		<string>홈 화면 오른쪽 추가 여백</string>
+		<key>Home extra T/B</key>
+		<string>홈 화면 상하 추가 여백</string>
+		<key>Home extra top</key>
+		<string>홈 화면 상단 추가 여백</string>
+		<key>Home icon scale</key>
+		<string>홈 화면 아이콘 배율</string>
+		<key>Home Layout Extras</key>
+		<string>홈 화면 레이아웃 추가 옵션</string>
+		<key>Home rows</key>
+		<string>홈 화면 행 수</string>
+		<key>Home scale %</key>
+		<string>홈 화면 배율(%)</string>
+		<key>How to write Cyanide tweaks</key>
+		<string>Cyanide 트윅 작성법</string>
+		<key>I Understand</key>
+		<string>이해했습니다</string>
+		<key>Import Custom Theme…</key>
+		<string>사용자 설정 테마 가져오기…</string>
 		<key>Import Failed</key>
 		<string>가져오기 실패</string>
+		<key>Import failed.</key>
+		<string>가져오지 못했습니다.</string>
+		<key>Import from Files…</key>
+		<string>파일에서 가져오기…</string>
+		<key>Import Originals…</key>
+		<string>원본 가져오기…</string>
+		<key>Import Style (.passthm/ZIP)…</key>
+		<string>스타일 가져오기(.passthm/ZIP)…</string>
+		<key>Import Theme Archive (ZIP/DEB)…</key>
+		<string>테마 아카이브 가져오기(ZIP/DEB)…</string>
+		<key>Import Theme Folder…</key>
+		<string>테마 폴더 가져오기…</string>
 		<key>In Development</key>
 		<string>개발 중</string>
+		<key>Include Dock</key>
+		<string>Dock 포함</string>
 		<key>Install</key>
 		<string>설치</string>
+		<key>Install pending</key>
+		<string>설치 대기 중</string>
+		<key>Install Running</key>
+		<string>설치 진행 중</string>
 		<key>Installed</key>
 		<string>설치됨</string>
+		<key>INSTALLED</key>
+		<string>설치됨</string>
+		<key>Invalid Value</key>
+		<string>유효하지 않은 값</string>
+		<key>iPad Dock</key>
+		<string>iPad Dock</string>
+		<key>JIT Enabler</key>
+		<string>JIT 활성화</string>
+		<key>Keep app alive in background</key>
+		<string>백그라운드에서 앱 실행 유지</string>
+		<key>Keep Current</key>
+		<string>현재 설정 유지</string>
+		<key>Kernel access could not be acquired. Run the chain, then try again.</key>
+		<string>커널 접근 권한을 얻지 못했습니다. 체인을 실행한 후 다시 시도하세요.</string>
+		<key>Kernel access isn't active. Run the chain first, then try again.</key>
+		<string>커널 접근이 활성화되지 않았습니다. 먼저 체인을 실행한 후 다시 시도하세요.</string>
 		<key>Kernel Access Ready</key>
 		<string>커널 액세스 준비됨</string>
 		<key>Kernel access for the tools</key>
 		<string>도구의 커널 액세스</string>
 		<key>Kernel access is not active. Run the chain first.</key>
 		<string>커널 액세스가 활성화되지 않았습니다. 먼저 체인을 실행하세요.</string>
+		<key>Key</key>
+		<string>키</string>
+		<key>Key Exists</key>
+		<string>키가 이미 있음</string>
 		<key>Language</key>
 		<string>언어</string>
 		<key>Language changed</key>
 		<string>언어가 변경됨</string>
+		<key>Lara</key>
+		<string>Lara</string>
 		<key>Later</key>
 		<string>나중에</string>
+		<key>Launch Options</key>
+		<string>실행 옵션</string>
+		<key>Layout</key>
+		<string>레이아웃</string>
+		<key>Legacy Chip Floor</key>
+		<string>레거시 칩 최솟값</string>
+		<key>Legacy chip floor</key>
+		<string>레거시 칩 최솟값</string>
+		<key>Level</key>
+		<string>수준</string>
+		<key>LiveWP</key>
+		<string>LiveWP</string>
+		<key>Load Saved Override</key>
+		<string>저장된 재정의 불러오기</string>
 		<key>Loading…</key>
 		<string>로드 중…</string>
+		<key>Location Services</key>
+		<string>위치 서비스</string>
+		<key>Location Services Link</key>
+		<string>위치 서비스 링크</string>
+		<key>Location Services links</key>
+		<string>위치 서비스 링크</string>
+		<key>Location Services Off</key>
+		<string>위치 서비스 꺼짐</string>
+		<key>Location Services On</key>
+		<string>위치 서비스 켜짐</string>
+		<key>Location Simulator</key>
+		<string>위치 시뮬레이터</string>
+		<key>Lock Screen Duration</key>
+		<string>잠금 화면 표시 시간</string>
 		<key>Log</key>
 		<string>로그</string>
+		<key>Major Cities…</key>
+		<string>주요 도시…</string>
+		<key>Measuring Caches</key>
+		<string>캐시 크기를 계산하는 중…</string>
+		<key>MobileGestalt</key>
+		<string>MobileGestalt</string>
+		<key>Mode</key>
+		<string>모드</string>
+		<key>Model Name</key>
+		<string>모델 이름</string>
+		<key>Model name</key>
+		<string>모델 이름</string>
+		<key>Modern</key>
+		<string>모던</string>
+		<key>Multi-watch switch</key>
+		<string>여러 Apple Watch 간 전환</string>
+		<key>Multi-Watch Switching</key>
+		<string>여러 Apple Watch 간 전환</string>
+		<key>Name</key>
+		<string>이름</string>
+		<key>Network speed only</key>
+		<string>네트워크 속도만</string>
+		<key>New File</key>
+		<string>새 파일</string>
+		<key>New Folder</key>
+		<string>새 폴더</string>
+		<key>NiceBar Lite</key>
+		<string>NiceBar Lite</string>
+		<key>No longer pending</key>
+		<string>더 이상 대기 중이 아님</string>
+		<key>No matches.</key>
+		<string>일치하는 항목이 없습니다.</string>
+		<key>No matching container was found for this app.</key>
+		<string>이 앱에 해당하는 컨테이너를 찾을 수 없습니다.</string>
+		<key>Not a regular file.</key>
+		<string>일반 파일이 아닙니다.</string>
+		<key>Not Now</key>
+		<string>나중에</string>
+		<key>Not Saved</key>
+		<string>저장되지 않음</string>
 		<key>Not Supported</key>
 		<string>지원되지 않음</string>
+		<key>NSBar</key>
+		<string>NSBar</string>
 		<key>OK</key>
 		<string>확인</string>
 		<key>Off</key>
 		<string>꺼짐</string>
 		<key>On</key>
 		<string>켜짐</string>
+		<key>On Disk</key>
+		<string>디스크에 저장됨</string>
+		<key>Open as Text / Hex / Info</key>
+		<string>텍스트 / 16진수 / 정보로 열기</string>
 		<key>Open QuickLoader</key>
 		<string>QuickLoader 열기</string>
+		<key>Original Backup</key>
+		<string>원본 백업</string>
+		<key>Originals</key>
+		<string>원본</string>
+		<key>OTA Updates</key>
+		<string>OTA 업데이트</string>
+		<key>Other page icons</key>
+		<string>다른 페이지 아이콘</string>
+		<key>Overwrite</key>
+		<string>덮어쓰기</string>
 		<key>Packages</key>
 		<string>패키지</string>
+		<key>Page icon counts</key>
+		<string>페이지별 아이콘 수</string>
+		<key>Passcode Style</key>
+		<string>암호 스타일</string>
+		<key>Performance HUD</key>
+		<string>성능 HUD</string>
+		<key>Permissions</key>
+		<string>권한</string>
+		<key>Permissions…</key>
+		<string>권한…</string>
+		<key>Position</key>
+		<string>위치</string>
+		<key>Powercuff</key>
+		<string>Powercuff</string>
+		<key>Preparing respring…</key>
+		<string>SpringBoard 재시동 준비 중…</string>
+		<key>Preparing…</key>
+		<string>준비 중…</string>
 		<key>Process Viewer</key>
 		<string>프로세스 뷰어</string>
+		<key>Queue</key>
+		<string>대기열</string>
 		<key>Quick Actions</key>
 		<string>빠른 작업</string>
+		<key>QuickLoader</key>
+		<string>QuickLoader</string>
+		<key>Quit</key>
+		<string>종료</string>
+		<key>Read Current Status</key>
+		<string>현재 상태 읽기</string>
+		<key>Read Current Value</key>
+		<string>현재 값 읽기</string>
+		<key>Reboot</key>
+		<string>기기 재시동</string>
+		<key>Reboot?</key>
+		<string>기기를 재시동할까요?</string>
+		<key>Rebooting…</key>
+		<string>재시동 중…</string>
+		<key>Recent</key>
+		<string>최근 항목</string>
+		<key>Reclaimable</key>
+		<string>확보 가능한 공간</string>
 		<key>Refresh</key>
 		<string>새로 고침</string>
+		<key>Refresh rate</key>
+		<string>새로 고침 빈도</string>
 		<key>Refreshing sources…</key>
 		<string>소스 새로 고치는 중…</string>
+		<key>Remind Me Later</key>
+		<string>나중에 알리기</string>
+		<key>Removal pending</key>
+		<string>제거 대기 중</string>
 		<key>Remove</key>
 		<string>제거</string>
+		<key>Remove (restore stock)</key>
+		<string>제거(기본값 복원)</string>
+		<key>Remove from Favorites</key>
+		<string>즐겨찾기에서 제거</string>
+		<key>Remove Override</key>
+		<string>재정의 제거</string>
+		<key>Rename</key>
+		<string>이름 변경</string>
+		<key>Rename Key</key>
+		<string>키 이름 변경</string>
+		<key>Repo sources</key>
+		<string>저장소 소스</string>
 		<key>Report a Bug</key>
 		<string>버그 신고</string>
+		<key>RepoTweaks</key>
+		<string>RepoTweaks</string>
+		<key>Reset</key>
+		<string>재설정</string>
+		<key>Reset All Packages</key>
+		<string>모든 패키지 재설정</string>
+		<key>Reset All Packages?</key>
+		<string>모든 패키지를 재설정할까요?</string>
+		<key>Reset to Defaults</key>
+		<string>기본값으로 재설정</string>
+		<key>Resistance</key>
+		<string>저항</string>
+		<key>Respring</key>
+		<string>SpringBoard 재시동</string>
+		<key>Respring and reboot links</key>
+		<string>SpringBoard 및 기기 재시동 링크</string>
+		<key>Respring?</key>
+		<string>SpringBoard를 재시동할까요?</string>
 		<key>Restart Cyanide to apply the new language.</key>
 		<string>새 언어를 적용하려면 Cyanide를 재시작하세요.</string>
+		<key>Restore</key>
+		<string>복원</string>
+		<key>Restore Icon Layout</key>
+		<string>아이콘 배치 복원</string>
+		<key>Restore Original</key>
+		<string>원본 복원</string>
+		<key>Restore Original Digits</key>
+		<string>원래 숫자 복원</string>
+		<key>Restore Original?</key>
+		<string>원본을 복원할까요?</string>
+		<key>Restore Original…</key>
+		<string>원본 복원…</string>
+		<key>Restore Real Location</key>
+		<string>실제 위치 복원</string>
+		<key>Restore Stock Switcher</key>
+		<string>기본 앱 전환기 복원</string>
 		<key>Retry</key>
 		<string>재시도</string>
+		<key>Retry interval</key>
+		<string>재시도 간격</string>
+		<key>Revert</key>
+		<string>되돌리기</string>
+		<key>Review Folders</key>
+		<string>폴더 검토</string>
+		<key>Run Again</key>
+		<string>다시 실행</string>
 		<key>Run Exploit</key>
 		<string>익스플로잇 실행</string>
 		<key>Run a local .js tweak file</key>
 		<string>로컬 .js 트윅 실행</string>
 		<key>Save</key>
 		<string>저장</string>
+		<key>Save Changes?</key>
+		<string>변경 사항을 저장할까요?</string>
+		<key>Save Not Verified</key>
+		<string>저장 여부를 확인하지 못함</string>
+		<key>Saved originals</key>
+		<string>저장된 원본</string>
+		<key>SBCustomizer</key>
+		<string>SBCustomizer</string>
+		<key>Scanning processes…</key>
+		<string>프로세스 검색 중…</string>
+		<key>Screen Shape</key>
+		<string>화면 모양</string>
 		<key>Search</key>
 		<string>검색</string>
+		<key>Search all tweaks</key>
+		<string>모든 트윅 검색</string>
+		<key>See All Changes</key>
+		<string>모든 변경 사항 보기</string>
 		<key>See and quit running processes</key>
 		<string>실행 중인 프로세스 보기 및 종료</string>
+		<key>See This Version's Changes</key>
+		<string>이 버전의 변경 사항 보기</string>
+		<key>Select All Apps</key>
+		<string>모든 앱 선택</string>
+		<key>Select Automatically</key>
+		<string>자동으로 선택</string>
+		<key>Select by Hand</key>
+		<string>수동으로 선택</string>
+		<key>Select Items to Clean</key>
+		<string>정리할 항목 선택</string>
+		<key>Select Large Caches (50 MB+)</key>
+		<string>대용량 캐시 선택(50MB 이상)</string>
+		<key>Select Theme</key>
+		<string>테마 선택</string>
+		<key>Select Video</key>
+		<string>비디오 선택</string>
+		<key>Selected Dock app</key>
+		<string>선택한 Dock 앱</string>
+		<key>Selected Style</key>
+		<string>선택한 스타일</string>
+		<key>Selected Theme</key>
+		<string>선택한 테마</string>
+		<key>Selected Video</key>
+		<string>선택한 비디오</string>
+		<key>Session note</key>
+		<string>세션 메모</string>
+		<key>Set</key>
+		<string>설정</string>
+		<key>Set Exact Coordinates…</key>
+		<string>정확한 좌표 설정…</string>
 		<key>Settings</key>
 		<string>설정</string>
+		<key>Setup floor</key>
+		<string>설정 최솟값</string>
+		<key>Setup Protocol Floor</key>
+		<string>설정 프로토콜 최솟값</string>
 		<key>Share</key>
 		<string>공유</string>
+		<key>Share Log</key>
+		<string>로그 공유</string>
+		<key>Share…</key>
+		<string>공유…</string>
+		<key>Short date</key>
+		<string>짧은 날짜</string>
+		<key>Show</key>
+		<string>표시</string>
+		<key>Show Advanced</key>
+		<string>고급 옵션 보기</string>
+		<key>Show Backups</key>
+		<string>백업 보기</string>
+		<key>Show CPU %</key>
+		<string>CPU 사용률 표시</string>
+		<key>Show CPU / RAM labels</key>
+		<string>CPU/RAM 레이블 표시</string>
+		<key>Show CPU/RAM labels</key>
+		<string>CPU/RAM 레이블 표시</string>
+		<key>Show dock labels</key>
+		<string>Dock 이름 표시</string>
+		<key>Show in File Browser</key>
+		<string>파일 브라우저에서 보기</string>
+		<key>Show in Folder</key>
+		<string>폴더에서 보기</string>
+		<key>Show net speed</key>
+		<string>네트워크 속도 표시</string>
+		<key>Show network speed</key>
+		<string>네트워크 속도 표시</string>
+		<key>Simulate Current Target</key>
+		<string>현재 대상 위치 시뮬레이션</string>
+		<key>Simulate Rockaway Test Point</key>
+		<string>Rockaway 테스트 지점 시뮬레이션</string>
+		<key>Size of This Folder</key>
+		<string>이 폴더의 크기</string>
+		<key>Skip This Version</key>
+		<string>이 버전 건너뛰기</string>
+		<key>SnowBoard Lite</key>
+		<string>SnowBoard Lite</string>
 		<key>Some sources could not be refreshed</key>
 		<string>일부 소스를 새로 고칠 수 없습니다</string>
+		<key>Sort By</key>
+		<string>정렬 기준</string>
+		<key>Source Failed</key>
+		<string>소스 오류</string>
 		<key>Source refresh failed</key>
 		<string>소스 새로 고침 실패</string>
 		<key>Sources</key>
 		<string>소스</string>
 		<key>Sources up to date</key>
 		<string>소스가 최신 상태입니다</string>
+		<key>Spin resist.</key>
+		<string>회전 저항</string>
+		<key>Spin resistance</key>
+		<string>회전 저항</string>
+		<key>Spoof Device Model</key>
+		<string>기기 모델 위장</string>
+		<key>SpringBoard could not be reached.</key>
+		<string>SpringBoard에 연결할 수 없습니다.</string>
+		<key>SpringBoard Tools</key>
+		<string>SpringBoard 도구</string>
 		<key>SpringBoard tweaks for stock iOS</key>
 		<string>순정 iOS용 SpringBoard Tweaks</string>
+		<key>Starting…</key>
+		<string>시작 중…</string>
+		<key>StatBar</key>
+		<string>StatBar</string>
+		<key>Strength</key>
+		<string>강도</string>
+		<key>Style</key>
+		<string>스타일</string>
+		<key>Supervision</key>
+		<string>감독 모드</string>
+		<key>Switch to Fastest</key>
+		<string>‘가장 빠름’으로 전환</string>
+		<key>Switch to pe_v3</key>
+		<string>pe_v3로 전환</string>
+		<key>Switcher style</key>
+		<string>앱 전환기 스타일</string>
 		<key>System</key>
 		<string>시스템</string>
 		<key>System Info</key>
 		<string>시스템 정보</string>
+		<key>Target</key>
+		<string>대상</string>
+		<key>Tendies Wallpapers</key>
+		<string>Tendies Wallpapers</string>
+		<key>The file could not be written.</key>
+		<string>파일에 쓸 수 없습니다.</string>
+		<key>The file was changed or replaced since you opened it. Overwrite it with your version?</key>
+		<string>파일을 연 이후 변경되거나 교체되었습니다. 내 버전으로 덮어쓸까요?</string>
+		<key>The list of disabled daemons could not be read. Check the log.</key>
+		<string>비활성화된 데몬 목록을 읽지 못했습니다. 로그를 확인하세요.</string>
+		<key>Theme</key>
+		<string>테마</string>
+		<key>Theme Format Guide</key>
+		<string>테마 형식 가이드</string>
+		<key>This package cannot be queued yet.</key>
+		<string>이 패키지는 아직 대기열에 추가할 수 없습니다.</string>
+		<key>This queue row was already applied or cleared.</key>
+		<string>이 대기열 항목은 이미 적용되었거나 삭제되었습니다.</string>
+		<key>Time + seconds</key>
+		<string>시간 및 초</string>
 		<key>Tools</key>
 		<string>도구</string>
+		<key>Top side inset</key>
+		<string>상단 좌우 여백</string>
+		<key>Top Y offset</key>
+		<string>상단 Y 오프셋</string>
+		<key>Traffic History</key>
+		<string>네트워크 트래픽 기록</string>
+		<key>Try the pe_v3 exploit path?</key>
+		<string>pe_v3 익스플로잇 방식을 사용해 볼까요?</string>
 		<key>Turn system services off and on</key>
 		<string>시스템 서비스 켜기/끄기</string>
+		<key>Turning Off Location Services</key>
+		<string>위치 서비스 끄는 중</string>
+		<key>Turning On Location Services</key>
+		<string>위치 서비스 켜는 중</string>
+		<key>Tweak apply speed</key>
+		<string>트윅 적용 속도</string>
+		<key>Tweak SDK</key>
+		<string>트윅 SDK</string>
 		<key>Tweaks</key>
-		<string>Tweaks</string>
+		<string>트윅</string>
+		<key>Twitter</key>
+		<string>Twitter</string>
+		<key>Unfinished Saves</key>
+		<string>완료되지 않은 저장</string>
+		<key>Unknown Source</key>
+		<string>알 수 없는 소스</string>
+		<key>Unsupported</key>
+		<string>지원되지 않음</string>
+		<key>UNSUPPORTED</key>
+		<string>지원되지 않음</string>
+		<key>Up to Date</key>
+		<string>최신 버전</string>
+		<key>Update</key>
+		<string>업데이트</string>
+		<key>UPDATE</key>
+		<string>업데이트</string>
+		<key>Update Available</key>
+		<string>업데이트 사용 가능</string>
+		<key>Upside Down</key>
+		<string>상하 반전</string>
+		<key>Use Original</key>
+		<string>원본 사용</string>
+		<key>Use watchOS Range 99/23/10/6</key>
+		<string>watchOS 범위 99/23/10/6 사용</string>
+		<key>Verbose logging</key>
+		<string>상세 로그</string>
+		<key>Video</key>
+		<string>비디오</string>
+		<key>View Log</key>
+		<string>로그 보기</string>
+		<key>View Release</key>
+		<string>릴리스 보기</string>
+		<key>Wallet Card Art</key>
+		<string>지갑 카드 이미지</string>
+		<key>Watch Pairing</key>
+		<string>Apple Watch 페어링</string>
+		<key>watchOS limit</key>
+		<string>watchOS 제한</string>
+		<key>watchOS Pairing Limit</key>
+		<string>watchOS 페어링 제한</string>
+		<key>Weekday + time</key>
+		<string>요일 및 시간</string>
 		<key>What's New</key>
 		<string>새로운 기능</string>
 		<key>Working</key>

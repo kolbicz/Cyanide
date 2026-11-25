@@ -33,7 +33,8 @@ struct LocationServicesControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: Self.kind, provider: Provider()) { isOn in
             ControlWidgetToggle("Location Services", isOn: isOn, action: SetLocationServicesIntent()) { on in
-                Label(on ? "On" : "Off", systemImage: on ? "location.fill" : "location.slash.fill")
+                let status: LocalizedStringKey = on ? "On" : "Off"
+                Label(status, systemImage: on ? "location.fill" : "location.slash.fill")
             }
             .tint(.blue)
         }

@@ -14,71 +14,93 @@
 			<key>pattern</key>
 			<string>^([0-9]+) pending changes?$</string>
 			<key>template</key>
-			<string>$1 modifications en attente</string>
+			<string>Modifications en attente : $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) changes?$</string>
 			<key>template</key>
-			<string>$1 modifications</string>
+			<string>Modifications : $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) apps?$</string>
 			<key>template</key>
-			<string>$1 apps</string>
+			<string>Apps : $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) packages?$</string>
 			<key>template</key>
-			<string>$1 paquets</string>
+			<string>Paquets : $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) updates?$</string>
+			<key>template</key>
+			<string>Mises à jour : $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) items?$</string>
 			<key>template</key>
-			<string>$1 éléments</string>
+			<string>Éléments : $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) files?$</string>
 			<key>template</key>
-			<string>$1 fichiers</string>
+			<string>Fichiers : $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) folders?$</string>
 			<key>template</key>
-			<string>$1 dossiers</string>
+			<string>Dossiers : $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) selected$</string>
 			<key>template</key>
-			<string>$1 sélectionné(s)</string>
+			<string>Sélection : $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) installed$</string>
 			<key>template</key>
-			<string>$1 installé(s)</string>
+			<string>Installations : $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) active$</string>
 			<key>template</key>
-			<string>$1 actif(s)</string>
+			<string>Total actif : $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) pending$</string>
 			<key>template</key>
-			<string>$1 en attente</string>
+			<string>En attente : $1</string>
 		</dict>
 	</array>
 	<key>strings</key>
 	<dict>
+		<key>Invalid request.</key>
+		<string>Demande non valide.</string>
+		<key>Another Location Services request came first.</key>
+		<string>Une autre demande pour les services de localisation est arrivée avant.</string>
+		<key>A newer Location Services request replaced this one.</key>
+		<string>Une demande plus récente pour les services de localisation a remplacé celle-ci.</string>
+		<key>The Location Services request was superseded before it finished.</key>
+		<string>La demande pour les services de localisation a été remplacée avant d’être terminée.</string>
+		<key>The Location Services retry was superseded before it finished.</key>
+		<string>La nouvelle tentative pour les services de localisation a été remplacée avant d’être terminée.</string>
+		<key>Location Services request cancelled: kernel access was not acquired.</key>
+		<string>Demande pour les services de localisation annulée : l’accès au noyau n’a pas été obtenu.</string>
+		<key>Cyanide has no saved kernel access (for example after a restart). Open Cyanide and run it once, then try again.</key>
+		<string>Cyanide n’a pas d’accès au noyau enregistré (par exemple après un redémarrage). Ouvrez Cyanide, exécutez-le une fois, puis réessayez.</string>
+		<key>(no information)</key>
+		<string>(aucune information)</string>
 		<key>12h time</key>
 		<string>Format 12 h</string>
 		<key>24h time</key>
@@ -97,14 +119,26 @@
 		<string>Façonnage mémoire A18</string>
 		<key>About</key>
 		<string>À propos</string>
+		<key>Access</key>
+		<string>Accès</string>
 		<key>Accuracy</key>
 		<string>Précision</string>
 		<key>Activate</key>
 		<string>Activer</string>
 		<key>Activate Supervision</key>
 		<string>Activer la supervision</string>
+		<key>Activation pending</key>
+		<string>Activation en attente</string>
+		<key>Activity</key>
+		<string>Activité</string>
+		<key>Add</key>
+		<string>Ajouter</string>
 		<key>Add a Source</key>
 		<string>Ajouter une source</string>
+		<key>Add Source</key>
+		<string>Ajouter une source</string>
+		<key>Add to Cache Cleaner?</key>
+		<string>Ajouter au nettoyeur de cache ?</string>
 		<key>Add to Favorites</key>
 		<string>Ajouter aux favoris</string>
 		<key>All Keys</key>
@@ -113,6 +147,10 @@
 		<string>Altitude</string>
 		<key>Always On</key>
 		<string>Toujours activé</string>
+		<key>Always Select</key>
+		<string>Toujours sélectionner</string>
+		<key>An install is still running.</key>
+		<string>Une installation est toujours en cours.</string>
 		<key>Another Cyanide action is running. Try again in a moment.</key>
 		<string>Une autre action Cyanide est en cours. Réessayez dans un instant.</string>
 		<key>Another Cyanide action is still running. Try again in a moment.</key>
@@ -143,10 +181,14 @@
 		<string>Appliquer la dérogation d’appairage</string>
 		<key>Apply Style Now</key>
 		<string>Appliquer le style maintenant</string>
+		<key>Apps in use are left alone.</key>
+		<string>Les apps utilisées sont ignorées.</string>
 		<key>Arrange icons by page</key>
 		<string>Organiser les icônes par page</string>
 		<key>Arrange pages</key>
 		<string>Organiser les pages</string>
+		<key>Auto Refresh</key>
+		<string>Actualisation automatique</string>
 		<key>Auto-add Dock app</key>
 		<string>Ajouter automatiquement l’app au Dock</string>
 		<key>Auto-add selected app to Dock</key>
@@ -187,16 +229,30 @@
 		<string>Annuler</string>
 		<key>Cannot Queue Install</key>
 		<string>Impossible de mettre l’installation en file</string>
+		<key>CarPlay is unlocked.</key>
+		<string>CarPlay est déverrouillé.</string>
+		<key>CarPlay without Siri</key>
+		<string>CarPlay sans Siri</string>
 		<key>Celsius</key>
 		<string>Celsius</string>
 		<key>Center X offset</key>
 		<string>Décalage X central</string>
+		<key>Change Type</key>
+		<string>Modifier le type</string>
 		<key>Changes are locked.</key>
 		<string>Les modifications sont verrouillées.</string>
 		<key>Changes are locked. Unlock them in the File Browser first.</key>
 		<string>Les modifications sont verrouillées. Déverrouillez-les d’abord dans le navigateur de fichiers.</string>
+		<key>Check Failed</key>
+		<string>Échec de la vérification</string>
 		<key>Check for Updates</key>
 		<string>Rechercher des mises à jour</string>
+		<key>Checking Crash Logs</key>
+		<string>Vérification des journaux de plantage…</string>
+		<key>Checking for Updates…</key>
+		<string>Recherche de mises à jour…</string>
+		<key>Checking Running Apps</key>
+		<string>Vérification des apps en cours…</string>
 		<key>Choose Position…</key>
 		<string>Choisir la position…</string>
 		<key>Choose Video…</key>
@@ -217,6 +273,10 @@
 		<string>Nettoyage…</string>
 		<key>Clear</key>
 		<string>Effacer</string>
+		<key>Clear Queue</key>
+		<string>Vider la file d’attente</string>
+		<key>Clear Queue?</key>
+		<string>Vider la file d’attente ?</string>
 		<key>Clear Selected Style</key>
 		<string>Effacer le style sélectionné</string>
 		<key>Clear Selected Theme</key>
@@ -231,16 +291,38 @@
 		<string>Communauté</string>
 		<key>Confirm</key>
 		<string>Confirmer</string>
+		<key>Contents</key>
+		<string>Contenu</string>
 		<key>Continue</key>
 		<string>Continuer</string>
+		<key>Copied</key>
+		<string>Copié</string>
 		<key>Copy</key>
 		<string>Copier</string>
+		<key>Copy Identifier</key>
+		<string>Copier l’identifiant</string>
 		<key>Copy Key</key>
 		<string>Copier la clé</string>
+		<key>Copy Path</key>
+		<string>Copier le chemin</string>
 		<key>Copy Value</key>
 		<string>Copier la valeur</string>
+		<key>Counting…</key>
+		<string>Comptage…</string>
+		<key>Create</key>
+		<string>Créer</string>
 		<key>Current (with unsaved changes)</key>
 		<string>Actuel (avec modifications non enregistrées)</string>
+		<key>Cut</key>
+		<string>Couper</string>
+		<key>Data</key>
+		<string>Données</string>
+		<key>Deactivation pending</key>
+		<string>Désactivation en attente</string>
+		<key>Delete Backups</key>
+		<string>Supprimer les sauvegardes</string>
+		<key>Delete?</key>
+		<string>Supprimer ?</string>
 		<key>DISABLED</key>
 		<string>DÉSACTIVÉ</string>
 		<key>Daemon Manager</key>
@@ -271,8 +353,12 @@
 		<string>Désactivé</string>
 		<key>Discard</key>
 		<string>Abandonner</string>
+		<key>Discard all pending activation / deactivation changes.</key>
+		<string>Annuler toutes les activations et désactivations en attente.</string>
 		<key>Discard Changes</key>
 		<string>Abandonner les modifications</string>
+		<key>Discard Changes?</key>
+		<string>Ignorer les modifications ?</string>
 		<key>Dock</key>
 		<string>Dock</string>
 		<key>Dock app bundle ID</key>
@@ -293,6 +379,8 @@
 		<string>Terminé</string>
 		<key>Drag Coefficient</key>
 		<string>Coefficient de glissement</string>
+		<key>Duplicate</key>
+		<string>Dupliquer</string>
 		<key>Duration</key>
 		<string>Durée</string>
 		<key>Edit</key>
@@ -303,6 +391,8 @@
 		<string>Activer</string>
 		<key>Enable Always On</key>
 		<string>Activer Toujours activé</string>
+		<key>Enable Changes?</key>
+		<string>Autoriser les modifications ?</string>
 		<key>Enable OTA Updates</key>
 		<string>Activer les mises à jour OTA</string>
 		<key>Enabled</key>
@@ -317,6 +407,8 @@
 		<string>FastLockX Lite</string>
 		<key>Faster tweak apply</key>
 		<string>Application des tweaks plus rapide</string>
+		<key>Favorites</key>
+		<string>Favoris</string>
 		<key>File Browser</key>
 		<string>Navigateur de fichiers</string>
 		<key>File Changed</key>
@@ -325,22 +417,44 @@
 		<string>L’accès au système de fichiers n’est pas disponible.</string>
 		<key>Filter apps</key>
 		<string>Filtrer les apps</string>
+		<key>Filter by name or PID</key>
+		<string>Filtrer par nom ou PID</string>
+		<key>Filter keys and values</key>
+		<string>Filtrer les clés et valeurs</string>
 		<key>Filter this folder</key>
 		<string>Filtrer ce dossier</string>
+		<key>Finding Apps</key>
+		<string>Recherche d’applications…</string>
 		<key>First page icons</key>
 		<string>Icônes de la première page</string>
+		<key>Folder Size</key>
+		<string>Taille du dossier</string>
+		<key>Folders to Clean</key>
+		<string>Dossiers à nettoyer</string>
 		<key>Follow System</key>
-		<string>Suivre le système</string>
+		<string>Utiliser la langue du système</string>
 		<key>Font Overwrite</key>
 		<string>Remplacement de police</string>
+		<key>Force Quit</key>
+		<string>Forcer à quitter</string>
 		<key>Free space from app caches</key>
 		<string>Libérer de l’espace depuis les caches des apps</string>
 		<key>Friction</key>
 		<string>Frottement</string>
 		<key>Get Started</key>
 		<string>Commencer</string>
+		<key>Getting File Access</key>
+		<string>Obtention de l’accès aux fichiers…</string>
 		<key>GitHub</key>
 		<string>GitHub</string>
+		<key>Go</key>
+		<string>Aller</string>
+		<key>Go to Container Top</key>
+		<string>Aller à la racine du conteneur</string>
+		<key>Go to Folder</key>
+		<string>Aller au dossier</string>
+		<key>Go to Folder…</key>
+		<string>Aller au dossier…</string>
 		<key>Got It</key>
 		<string>Compris</string>
 		<key>Gravity Lite</key>
@@ -379,6 +493,14 @@
 		<string>Échelle de l’accueil %</string>
 		<key>How to write Cyanide tweaks</key>
 		<string>Comment écrire des tweaks Cyanide</string>
+		<key>I Understand</key>
+		<string>Je comprends</string>
+		<key>Import from Files…</key>
+		<string>Importer depuis Fichiers…</string>
+		<key>Install pending</key>
+		<string>Installation en attente</string>
+		<key>Install Running</key>
+		<string>Installation en cours</string>
 		<key>INSTALLED</key>
 		<string>INSTALLÉ</string>
 		<key>Import Custom Theme…</key>
@@ -403,6 +525,8 @@
 		<string>Installer</string>
 		<key>Installed</key>
 		<string>Installé</string>
+		<key>Invalid Value</key>
+		<string>Valeur non valide</string>
 		<key>JIT Enabler</key>
 		<string>Activateur JIT</string>
 		<key>Keep Current</key>
@@ -419,6 +543,10 @@
 		<string>L’accès au noyau n’est pas actif. Exécutez d’abord la chaîne.</string>
 		<key>Kernel access isn't active. Run the chain first, then try again.</key>
 		<string>L’accès au noyau n’est pas actif. Exécutez d’abord la chaîne, puis réessayez.</string>
+		<key>Key</key>
+		<string>Clé</string>
+		<key>Key Exists</key>
+		<string>Clé déjà présente</string>
 		<key>Language</key>
 		<string>Langue</string>
 		<key>Language changed</key>
@@ -445,8 +573,14 @@
 		<string>Chargement…</string>
 		<key>Location Services</key>
 		<string>Services de localisation</string>
+		<key>Location Services Link</key>
+		<string>Lien du service de localisation</string>
 		<key>Location Services links</key>
 		<string>Liens des services de localisation</string>
+		<key>Location Services Off</key>
+		<string>Service de localisation désactivé</string>
+		<key>Location Services On</key>
+		<string>Service de localisation activé</string>
 		<key>Location Simulator</key>
 		<string>Simulateur de localisation</string>
 		<key>Lock Screen Duration</key>
@@ -455,6 +589,8 @@
 		<string>Journal</string>
 		<key>Major Cities…</key>
 		<string>Grandes villes…</string>
+		<key>Measuring Caches</key>
+		<string>Calcul de la taille des caches…</string>
 		<key>MobileGestalt</key>
 		<string>MobileGestalt</string>
 		<key>Mode</key>
@@ -469,6 +605,10 @@
 		<string>Bascule multi-montres</string>
 		<key>Multi-watch switch</key>
 		<string>Bascule multi-montres</string>
+		<key>No longer pending</key>
+		<string>Plus en attente</string>
+		<key>No matching container was found for this app.</key>
+		<string>Aucun conteneur correspondant à cette app n’a été trouvé.</string>
 		<key>NSBar</key>
 		<string>NSBar</string>
 		<key>Name</key>
@@ -493,6 +633,10 @@
 		<string>Ce n’est pas un fichier ordinaire.</string>
 		<key>OK</key>
 		<string>OK</string>
+		<key>On Disk</key>
+		<string>Sur le disque</string>
+		<key>Open as Text / Hex / Info</key>
+		<string>Ouvrir en texte / hexadécimal / infos</string>
 		<key>OTA Updates</key>
 		<string>Mises à jour OTA</string>
 		<key>Off</key>
@@ -517,6 +661,10 @@
 		<string>Style du code</string>
 		<key>Performance HUD</key>
 		<string>HUD de performance</string>
+		<key>Permissions</key>
+		<string>Autorisations</string>
+		<key>Permissions…</key>
+		<string>Autorisations…</string>
 		<key>Position</key>
 		<string>Position</string>
 		<key>Powercuff</key>
@@ -527,10 +675,14 @@
 		<string>Préparation…</string>
 		<key>Process Viewer</key>
 		<string>Observateur de processus</string>
+		<key>Queue</key>
+		<string>File d’attente</string>
 		<key>Quick Actions</key>
 		<string>Actions rapides</string>
 		<key>QuickLoader</key>
 		<string>QuickLoader</string>
+		<key>Quit</key>
+		<string>Quitter</string>
 		<key>Read Current Status</key>
 		<string>Lire l’état actuel</string>
 		<key>Read Current Value</key>
@@ -541,12 +693,20 @@
 		<string>Redémarrer ?</string>
 		<key>Rebooting…</key>
 		<string>Redémarrage…</string>
+		<key>Recent</key>
+		<string>Récents</string>
+		<key>Reclaimable</key>
+		<string>Espace récupérable</string>
 		<key>Refresh</key>
 		<string>Actualiser</string>
 		<key>Refresh rate</key>
 		<string>Fréquence de rafraîchissement</string>
 		<key>Refreshing sources…</key>
 		<string>Actualisation des sources…</string>
+		<key>Remind Me Later</key>
+		<string>Me le rappeler plus tard</string>
+		<key>Removal pending</key>
+		<string>Suppression en attente</string>
 		<key>Remove</key>
 		<string>Supprimer</string>
 		<key>Remove (restore stock)</key>
@@ -557,6 +717,8 @@
 		<string>Retirer des favoris</string>
 		<key>Rename</key>
 		<string>Renommer</string>
+		<key>Rename Key</key>
+		<string>Renommer la clé</string>
 		<key>Repo sources</key>
 		<string>Sources de dépôts</string>
 		<key>RepoTweaks</key>
@@ -605,10 +767,14 @@
 		<string>Rétablir</string>
 		<key>Review Folders</key>
 		<string>Vérifier les dossiers</string>
+		<key>Run Again</key>
+		<string>Relancer</string>
 		<key>Run Exploit</key>
 		<string>Exécuter l’exploit</string>
 		<key>Run a local .js tweak file</key>
 		<string>Exécuter un fichier de tweak .js local</string>
+		<key>Save Changes?</key>
+		<string>Enregistrer les modifications ?</string>
 		<key>SBCustomizer</key>
 		<string>SBCustomizer</string>
 		<key>Save</key>
@@ -617,10 +783,14 @@
 		<string>Enregistrement non vérifié</string>
 		<key>Saved originals</key>
 		<string>Originaux enregistrés</string>
+		<key>Scanning processes…</key>
+		<string>Analyse des processus…</string>
 		<key>Screen Shape</key>
 		<string>Forme de l’écran</string>
 		<key>Search</key>
 		<string>Rechercher</string>
+		<key>Search all tweaks</key>
+		<string>Rechercher dans tous les tweaks</string>
 		<key>See All Changes</key>
 		<string>Voir toutes les modifications</string>
 		<key>See This Version's Changes</key>
@@ -629,6 +799,12 @@
 		<string>Voir et quitter les processus en cours</string>
 		<key>Select All Apps</key>
 		<string>Sélectionner toutes les apps</string>
+		<key>Select Automatically</key>
+		<string>Sélectionner automatiquement</string>
+		<key>Select by Hand</key>
+		<string>Sélectionner manuellement</string>
+		<key>Select Items to Clean</key>
+		<string>Choisir les éléments à nettoyer</string>
 		<key>Select Large Caches (50 MB+)</key>
 		<string>Sélectionner les gros caches (50 Mo+)</string>
 		<key>Select Theme</key>
@@ -663,6 +839,12 @@
 		<string>Partager…</string>
 		<key>Short date</key>
 		<string>Date courte</string>
+		<key>Show</key>
+		<string>Afficher</string>
+		<key>Show Advanced</key>
+		<string>Afficher les options avancées</string>
+		<key>Show Backups</key>
+		<string>Afficher les sauvegardes</string>
 		<key>Show CPU %</key>
 		<string>Afficher le CPU %</string>
 		<key>Show CPU / RAM labels</key>
@@ -671,6 +853,10 @@
 		<string>Afficher les libellés CPU/RAM</string>
 		<key>Show dock labels</key>
 		<string>Afficher les libellés du Dock</string>
+		<key>Show in File Browser</key>
+		<string>Afficher dans le navigateur de fichiers</string>
+		<key>Show in Folder</key>
+		<string>Afficher dans le dossier</string>
 		<key>Show net speed</key>
 		<string>Afficher la vitesse réseau</string>
 		<key>Show network speed</key>
@@ -679,10 +865,18 @@
 		<string>Simuler la cible actuelle</string>
 		<key>Simulate Rockaway Test Point</key>
 		<string>Simuler le point de test Rockaway</string>
+		<key>Size of This Folder</key>
+		<string>Taille de ce dossier</string>
+		<key>Skip This Version</key>
+		<string>Ignorer cette version</string>
 		<key>SnowBoard Lite</key>
 		<string>SnowBoard Lite</string>
 		<key>Some sources could not be refreshed</key>
 		<string>Certaines sources n’ont pas pu être actualisées</string>
+		<key>Sort By</key>
+		<string>Trier par</string>
+		<key>Source Failed</key>
+		<string>Échec de la source</string>
 		<key>Source refresh failed</key>
 		<string>Échec de l’actualisation des sources</string>
 		<key>Sources</key>
@@ -727,6 +921,8 @@
 		<string>Fonds d’écran Tendies</string>
 		<key>The file could not be written.</key>
 		<string>Le fichier n’a pas pu être écrit.</string>
+		<key>The file was changed or replaced since you opened it. Overwrite it with your version?</key>
+		<string>Le fichier a été modifié ou remplacé depuis son ouverture. L’écraser avec votre version ?</string>
 		<key>The list of disabled daemons could not be read. Check the log.</key>
 		<string>La liste des daemons désactivés n’a pas pu être lue. Consultez le journal.</string>
 		<key>Theme</key>
@@ -735,6 +931,8 @@
 		<string>Guide du format de thème</string>
 		<key>This package cannot be queued yet.</key>
 		<string>Ce paquet ne peut pas encore être mis en file.</string>
+		<key>This queue row was already applied or cleared.</key>
+		<string>Cet élément de la file a déjà été appliqué ou supprimé.</string>
 		<key>Time + seconds</key>
 		<string>Heure + secondes</string>
 		<key>Tools</key>
@@ -748,7 +946,11 @@
 		<key>Try the pe_v3 exploit path?</key>
 		<string>Essayer le chemin d’exploit pe_v3 ?</string>
 		<key>Turn system services off and on</key>
-		<string>Activer/désactiver les services</string>
+		<string>Activer ou désactiver les services système</string>
+		<key>Turning Off Location Services</key>
+		<string>Désactivation du service de localisation</string>
+		<key>Turning On Location Services</key>
+		<string>Activation du service de localisation</string>
 		<key>Tweak SDK</key>
 		<string>SDK de tweaks</string>
 		<key>Tweak apply speed</key>
@@ -757,12 +959,22 @@
 		<string>Tweaks</string>
 		<key>Twitter</key>
 		<string>Twitter</string>
+		<key>Unfinished Saves</key>
+		<string>Enregistrements inachevés</string>
+		<key>Unknown Source</key>
+		<string>Source inconnue</string>
 		<key>UNSUPPORTED</key>
 		<string>NON PRIS EN CHARGE</string>
 		<key>Unsupported</key>
 		<string>Non pris en charge</string>
+		<key>Up to Date</key>
+		<string>À jour</string>
 		<key>Update</key>
 		<string>Mettre à jour</string>
+		<key>UPDATE</key>
+		<string>MISE À JOUR</string>
+		<key>Update Available</key>
+		<string>Mise à jour disponible</string>
 		<key>Upside Down</key>
 		<string>À l’envers</string>
 		<key>Use Original</key>
@@ -775,6 +987,8 @@
 		<string>Vidéo</string>
 		<key>View Log</key>
 		<string>Voir le journal</string>
+		<key>View Release</key>
+		<string>Voir la version</string>
 		<key>Wallet Card Art</key>
 		<string>Illustration de carte Wallet</string>
 		<key>Watch Pairing</key>

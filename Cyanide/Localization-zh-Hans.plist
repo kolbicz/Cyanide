@@ -14,43 +14,49 @@
 			<key>pattern</key>
 			<string>^([0-9]+) pending changes?$</string>
 			<key>template</key>
-			<string>$1 项待处理更改</string>
+			<string>待处理更改：$1 项</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) changes?$</string>
 			<key>template</key>
-			<string>$1 项更改</string>
+			<string>更改：$1 项</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) apps?$</string>
 			<key>template</key>
-			<string>$1 个应用</string>
+			<string>应用：$1 个</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) packages?$</string>
 			<key>template</key>
-			<string>$1 个软件包</string>
+			<string>软件包：$1 个</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) updates?$</string>
+			<key>template</key>
+			<string>更新：$1 个</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) items?$</string>
 			<key>template</key>
-			<string>$1 个项目</string>
+			<string>项目：$1 个</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) files?$</string>
 			<key>template</key>
-			<string>$1 个文件</string>
+			<string>文件：$1 个</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) folders?$</string>
 			<key>template</key>
-			<string>$1 个文件夹</string>
+			<string>文件夹：$1 个</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
@@ -68,17 +74,33 @@
 			<key>pattern</key>
 			<string>^([0-9]+) active$</string>
 			<key>template</key>
-			<string>$1 个活动</string>
+			<string>活动中：$1 个</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) pending$</string>
 			<key>template</key>
-			<string>$1 项待处理</string>
+			<string>待处理：$1 项</string>
 		</dict>
 	</array>
 	<key>strings</key>
 	<dict>
+		<key>Invalid request.</key>
+		<string>无效的请求。</string>
+		<key>Another Location Services request came first.</key>
+		<string>另一个定位服务请求先到达。</string>
+		<key>A newer Location Services request replaced this one.</key>
+		<string>此请求已被更新的定位服务请求取代。</string>
+		<key>The Location Services request was superseded before it finished.</key>
+		<string>定位服务请求在完成前已被取代。</string>
+		<key>The Location Services retry was superseded before it finished.</key>
+		<string>定位服务重试在完成前已被取代。</string>
+		<key>Location Services request cancelled: kernel access was not acquired.</key>
+		<string>定位服务请求已取消：未获得内核访问。</string>
+		<key>Cyanide has no saved kernel access (for example after a restart). Open Cyanide and run it once, then try again.</key>
+		<string>Cyanide 没有已保存的内核访问（例如重启后）。请打开 Cyanide 运行一次，然后重试。</string>
+		<key>(no information)</key>
+		<string>（无信息）</string>
 		<key>12h time</key>
 		<string>12 小时制</string>
 		<key>24h time</key>
@@ -97,14 +119,26 @@
 		<string>A18 内存塑造</string>
 		<key>About</key>
 		<string>关于</string>
+		<key>Access</key>
+		<string>访问权限</string>
 		<key>Accuracy</key>
 		<string>精度</string>
 		<key>Activate</key>
 		<string>启用</string>
 		<key>Activate Supervision</key>
 		<string>启用监管</string>
+		<key>Activation pending</key>
+		<string>等待启用</string>
+		<key>Activity</key>
+		<string>活动</string>
+		<key>Add</key>
+		<string>添加</string>
 		<key>Add a Source</key>
 		<string>添加软件源</string>
+		<key>Add Source</key>
+		<string>添加源</string>
+		<key>Add to Cache Cleaner?</key>
+		<string>添加到缓存清理？</string>
 		<key>Add to Favorites</key>
 		<string>添加到收藏</string>
 		<key>All Keys</key>
@@ -113,6 +147,10 @@
 		<string>海拔</string>
 		<key>Always On</key>
 		<string>常亮</string>
+		<key>Always Select</key>
+		<string>始终选择</string>
+		<key>An install is still running.</key>
+		<string>安装仍在进行中。</string>
 		<key>Another Cyanide action is running. Try again in a moment.</key>
 		<string>另一个 Cyanide 操作正在运行。请稍后再试。</string>
 		<key>Another Cyanide action is still running. Try again in a moment.</key>
@@ -143,10 +181,14 @@
 		<string>应用配对覆盖</string>
 		<key>Apply Style Now</key>
 		<string>立即应用样式</string>
+		<key>Apps in use are left alone.</key>
+		<string>正在使用的应用会被跳过。</string>
 		<key>Arrange icons by page</key>
 		<string>按页排列图标</string>
 		<key>Arrange pages</key>
 		<string>排列页面</string>
+		<key>Auto Refresh</key>
+		<string>自动刷新</string>
 		<key>Auto-add Dock app</key>
 		<string>自动添加程序坞应用</string>
 		<key>Auto-add selected app to Dock</key>
@@ -187,16 +229,30 @@
 		<string>取消</string>
 		<key>Cannot Queue Install</key>
 		<string>无法加入安装队列</string>
+		<key>CarPlay is unlocked.</key>
+		<string>CarPlay 已解锁。</string>
+		<key>CarPlay without Siri</key>
+		<string>无需 Siri 的 CarPlay</string>
 		<key>Celsius</key>
 		<string>摄氏度</string>
 		<key>Center X offset</key>
 		<string>中心 X 偏移</string>
+		<key>Change Type</key>
+		<string>更改类型</string>
 		<key>Changes are locked.</key>
 		<string>更改已锁定。</string>
 		<key>Changes are locked. Unlock them in the File Browser first.</key>
 		<string>更改已锁定。请先在文件浏览器中解锁。</string>
+		<key>Check Failed</key>
+		<string>检查失败</string>
 		<key>Check for Updates</key>
 		<string>检查更新</string>
+		<key>Checking Crash Logs</key>
+		<string>正在检查崩溃日志…</string>
+		<key>Checking for Updates…</key>
+		<string>正在检查更新…</string>
+		<key>Checking Running Apps</key>
+		<string>正在检查运行中的应用…</string>
 		<key>Choose Position…</key>
 		<string>选择位置…</string>
 		<key>Choose Video…</key>
@@ -217,6 +273,10 @@
 		<string>正在清理…</string>
 		<key>Clear</key>
 		<string>清除</string>
+		<key>Clear Queue</key>
+		<string>清空队列</string>
+		<key>Clear Queue?</key>
+		<string>清空队列？</string>
 		<key>Clear Selected Style</key>
 		<string>清除已选样式</string>
 		<key>Clear Selected Theme</key>
@@ -231,16 +291,38 @@
 		<string>社区</string>
 		<key>Confirm</key>
 		<string>确认</string>
+		<key>Contents</key>
+		<string>内容</string>
 		<key>Continue</key>
 		<string>继续</string>
+		<key>Copied</key>
+		<string>已复制</string>
 		<key>Copy</key>
 		<string>复制</string>
+		<key>Copy Identifier</key>
+		<string>复制标识符</string>
 		<key>Copy Key</key>
 		<string>复制键</string>
+		<key>Copy Path</key>
+		<string>复制路径</string>
 		<key>Copy Value</key>
 		<string>复制值</string>
+		<key>Counting…</key>
+		<string>正在统计…</string>
+		<key>Create</key>
+		<string>创建</string>
 		<key>Current (with unsaved changes)</key>
 		<string>当前（有未保存更改）</string>
+		<key>Cut</key>
+		<string>剪切</string>
+		<key>Data</key>
+		<string>数据</string>
+		<key>Deactivation pending</key>
+		<string>等待停用</string>
+		<key>Delete Backups</key>
+		<string>删除备份</string>
+		<key>Delete?</key>
+		<string>删除？</string>
 		<key>DISABLED</key>
 		<string>已停用</string>
 		<key>Daemon Manager</key>
@@ -271,8 +353,12 @@
 		<string>已停用</string>
 		<key>Discard</key>
 		<string>放弃</string>
+		<key>Discard all pending activation / deactivation changes.</key>
+		<string>放弃所有待处理的启用和停用更改。</string>
 		<key>Discard Changes</key>
 		<string>放弃更改</string>
+		<key>Discard Changes?</key>
+		<string>放弃更改？</string>
 		<key>Dock</key>
 		<string>程序坞</string>
 		<key>Dock app bundle ID</key>
@@ -293,6 +379,8 @@
 		<string>完成</string>
 		<key>Drag Coefficient</key>
 		<string>拖拽系数</string>
+		<key>Duplicate</key>
+		<string>创建副本</string>
 		<key>Duration</key>
 		<string>时长</string>
 		<key>Edit</key>
@@ -303,6 +391,8 @@
 		<string>启用</string>
 		<key>Enable Always On</key>
 		<string>启用常亮</string>
+		<key>Enable Changes?</key>
+		<string>允许修改？</string>
 		<key>Enable OTA Updates</key>
 		<string>启用 OTA 更新</string>
 		<key>Enabled</key>
@@ -317,6 +407,8 @@
 		<string>FastLockX Lite</string>
 		<key>Faster tweak apply</key>
 		<string>更快的调整应用</string>
+		<key>Favorites</key>
+		<string>收藏</string>
 		<key>File Browser</key>
 		<string>文件浏览器</string>
 		<key>File Changed</key>
@@ -325,22 +417,44 @@
 		<string>文件系统访问不可用。</string>
 		<key>Filter apps</key>
 		<string>过滤应用</string>
+		<key>Filter by name or PID</key>
+		<string>按名称或 PID 筛选</string>
+		<key>Filter keys and values</key>
+		<string>筛选键和值</string>
 		<key>Filter this folder</key>
 		<string>过滤此文件夹</string>
+		<key>Finding Apps</key>
+		<string>正在查找应用…</string>
 		<key>First page icons</key>
 		<string>首页图标数</string>
+		<key>Folder Size</key>
+		<string>文件夹大小</string>
+		<key>Folders to Clean</key>
+		<string>要清理的文件夹</string>
 		<key>Follow System</key>
 		<string>跟随系统</string>
 		<key>Font Overwrite</key>
 		<string>字体覆盖</string>
+		<key>Force Quit</key>
+		<string>强制退出</string>
 		<key>Free space from app caches</key>
 		<string>释放应用缓存空间</string>
 		<key>Friction</key>
 		<string>摩擦</string>
 		<key>Get Started</key>
 		<string>开始使用</string>
+		<key>Getting File Access</key>
+		<string>正在获取文件访问权限…</string>
 		<key>GitHub</key>
 		<string>GitHub</string>
+		<key>Go</key>
+		<string>前往</string>
+		<key>Go to Container Top</key>
+		<string>前往容器根目录</string>
+		<key>Go to Folder</key>
+		<string>前往文件夹</string>
+		<key>Go to Folder…</key>
+		<string>前往文件夹…</string>
 		<key>Got It</key>
 		<string>知道了</string>
 		<key>Gravity Lite</key>
@@ -379,6 +493,14 @@
 		<string>主屏幕缩放 %</string>
 		<key>How to write Cyanide tweaks</key>
 		<string>如何编写 Cyanide 调整</string>
+		<key>I Understand</key>
+		<string>我已了解</string>
+		<key>Import from Files…</key>
+		<string>从“文件”导入…</string>
+		<key>Install pending</key>
+		<string>等待安装</string>
+		<key>Install Running</key>
+		<string>正在安装</string>
 		<key>INSTALLED</key>
 		<string>已安装</string>
 		<key>Import Custom Theme…</key>
@@ -403,6 +525,8 @@
 		<string>安装</string>
 		<key>Installed</key>
 		<string>已安装</string>
+		<key>Invalid Value</key>
+		<string>值无效</string>
 		<key>JIT Enabler</key>
 		<string>JIT 启用器</string>
 		<key>Keep Current</key>
@@ -419,6 +543,10 @@
 		<string>内核访问未启用。请先运行链。</string>
 		<key>Kernel access isn't active. Run the chain first, then try again.</key>
 		<string>内核访问未启用。请先运行链后重试。</string>
+		<key>Key</key>
+		<string>键</string>
+		<key>Key Exists</key>
+		<string>键已存在</string>
 		<key>Language</key>
 		<string>语言</string>
 		<key>Language changed</key>
@@ -445,8 +573,14 @@
 		<string>正在加载…</string>
 		<key>Location Services</key>
 		<string>定位服务</string>
+		<key>Location Services Link</key>
+		<string>定位服务链接</string>
 		<key>Location Services links</key>
 		<string>定位服务链接</string>
+		<key>Location Services Off</key>
+		<string>定位服务已关闭</string>
+		<key>Location Services On</key>
+		<string>定位服务已开启</string>
 		<key>Location Simulator</key>
 		<string>位置模拟器</string>
 		<key>Lock Screen Duration</key>
@@ -455,6 +589,8 @@
 		<string>日志</string>
 		<key>Major Cities…</key>
 		<string>主要城市…</string>
+		<key>Measuring Caches</key>
+		<string>正在计算缓存大小…</string>
 		<key>MobileGestalt</key>
 		<string>MobileGestalt</string>
 		<key>Mode</key>
@@ -469,6 +605,10 @@
 		<string>多手表切换</string>
 		<key>Multi-watch switch</key>
 		<string>多手表切换</string>
+		<key>No longer pending</key>
+		<string>已不在队列中</string>
+		<key>No matching container was found for this app.</key>
+		<string>未找到与此应用匹配的容器。</string>
 		<key>NSBar</key>
 		<string>NSBar</string>
 		<key>Name</key>
@@ -493,6 +633,10 @@
 		<string>不是普通文件。</string>
 		<key>OK</key>
 		<string>好</string>
+		<key>On Disk</key>
+		<string>磁盘上的版本</string>
+		<key>Open as Text / Hex / Info</key>
+		<string>以文本／十六进制／信息模式打开</string>
 		<key>OTA Updates</key>
 		<string>OTA 更新</string>
 		<key>Off</key>
@@ -517,6 +661,10 @@
 		<string>密码样式</string>
 		<key>Performance HUD</key>
 		<string>性能 HUD</string>
+		<key>Permissions</key>
+		<string>权限</string>
+		<key>Permissions…</key>
+		<string>权限…</string>
 		<key>Position</key>
 		<string>位置</string>
 		<key>Powercuff</key>
@@ -527,10 +675,14 @@
 		<string>正在准备…</string>
 		<key>Process Viewer</key>
 		<string>进程查看器</string>
+		<key>Queue</key>
+		<string>队列</string>
 		<key>Quick Actions</key>
 		<string>快捷操作</string>
 		<key>QuickLoader</key>
 		<string>QuickLoader</string>
+		<key>Quit</key>
+		<string>退出</string>
 		<key>Read Current Status</key>
 		<string>读取当前状态</string>
 		<key>Read Current Value</key>
@@ -541,12 +693,20 @@
 		<string>要重启吗？</string>
 		<key>Rebooting…</key>
 		<string>正在重启…</string>
+		<key>Recent</key>
+		<string>最近使用</string>
+		<key>Reclaimable</key>
+		<string>可释放空间</string>
 		<key>Refresh</key>
 		<string>刷新</string>
 		<key>Refresh rate</key>
 		<string>刷新率</string>
 		<key>Refreshing sources…</key>
 		<string>正在刷新软件源…</string>
+		<key>Remind Me Later</key>
+		<string>稍后提醒我</string>
+		<key>Removal pending</key>
+		<string>等待移除</string>
 		<key>Remove</key>
 		<string>移除</string>
 		<key>Remove (restore stock)</key>
@@ -557,6 +717,8 @@
 		<string>从收藏中移除</string>
 		<key>Rename</key>
 		<string>重命名</string>
+		<key>Rename Key</key>
+		<string>重命名键</string>
 		<key>Repo sources</key>
 		<string>仓库来源</string>
 		<key>RepoTweaks</key>
@@ -605,10 +767,14 @@
 		<string>还原</string>
 		<key>Review Folders</key>
 		<string>查看文件夹</string>
+		<key>Run Again</key>
+		<string>再次运行</string>
 		<key>Run Exploit</key>
 		<string>运行漏洞利用</string>
 		<key>Run a local .js tweak file</key>
 		<string>运行本地 .js 调整文件</string>
+		<key>Save Changes?</key>
+		<string>保存更改？</string>
 		<key>SBCustomizer</key>
 		<string>SBCustomizer</string>
 		<key>Save</key>
@@ -617,10 +783,14 @@
 		<string>保存未验证</string>
 		<key>Saved originals</key>
 		<string>已保存原始文件</string>
+		<key>Scanning processes…</key>
+		<string>正在扫描进程…</string>
 		<key>Screen Shape</key>
 		<string>屏幕形状</string>
 		<key>Search</key>
 		<string>搜索</string>
+		<key>Search all tweaks</key>
+		<string>搜索所有微调</string>
 		<key>See All Changes</key>
 		<string>查看所有更改</string>
 		<key>See This Version's Changes</key>
@@ -629,6 +799,12 @@
 		<string>查看并结束正在运行的进程</string>
 		<key>Select All Apps</key>
 		<string>选择所有应用</string>
+		<key>Select Automatically</key>
+		<string>自动选择</string>
+		<key>Select by Hand</key>
+		<string>手动选择</string>
+		<key>Select Items to Clean</key>
+		<string>选择要清理的项目</string>
 		<key>Select Large Caches (50 MB+)</key>
 		<string>选择大缓存（50 MB 以上）</string>
 		<key>Select Theme</key>
@@ -663,6 +839,12 @@
 		<string>分享…</string>
 		<key>Short date</key>
 		<string>短日期</string>
+		<key>Show</key>
+		<string>显示</string>
+		<key>Show Advanced</key>
+		<string>显示高级选项</string>
+		<key>Show Backups</key>
+		<string>显示备份</string>
 		<key>Show CPU %</key>
 		<string>显示 CPU 百分比</string>
 		<key>Show CPU / RAM labels</key>
@@ -671,6 +853,10 @@
 		<string>显示 CPU/RAM 标签</string>
 		<key>Show dock labels</key>
 		<string>显示程序坞标签</string>
+		<key>Show in File Browser</key>
+		<string>在文件浏览器中显示</string>
+		<key>Show in Folder</key>
+		<string>在文件夹中显示</string>
 		<key>Show net speed</key>
 		<string>显示网速</string>
 		<key>Show network speed</key>
@@ -679,10 +865,18 @@
 		<string>模拟当前目标</string>
 		<key>Simulate Rockaway Test Point</key>
 		<string>模拟 Rockaway 测试点</string>
+		<key>Size of This Folder</key>
+		<string>此文件夹的大小</string>
+		<key>Skip This Version</key>
+		<string>跳过此版本</string>
 		<key>SnowBoard Lite</key>
 		<string>SnowBoard Lite</string>
 		<key>Some sources could not be refreshed</key>
 		<string>部分软件源无法刷新</string>
+		<key>Sort By</key>
+		<string>排序方式</string>
+		<key>Source Failed</key>
+		<string>源出错</string>
 		<key>Source refresh failed</key>
 		<string>软件源刷新失败</string>
 		<key>Sources</key>
@@ -727,6 +921,8 @@
 		<string>Tendies 壁纸</string>
 		<key>The file could not be written.</key>
 		<string>无法写入文件。</string>
+		<key>The file was changed or replaced since you opened it. Overwrite it with your version?</key>
+		<string>此文件自打开以来已被修改或替换。要用你的版本覆盖吗？</string>
 		<key>The list of disabled daemons could not be read. Check the log.</key>
 		<string>无法读取已停用的守护进程列表。请检查日志。</string>
 		<key>Theme</key>
@@ -735,6 +931,8 @@
 		<string>主题格式指南</string>
 		<key>This package cannot be queued yet.</key>
 		<string>此软件包暂时无法加入队列。</string>
+		<key>This queue row was already applied or cleared.</key>
+		<string>此队列项目已应用或已清除。</string>
 		<key>Time + seconds</key>
 		<string>时间 + 秒</string>
 		<key>Tools</key>
@@ -749,20 +947,34 @@
 		<string>尝试 pe_v3 漏洞路径？</string>
 		<key>Turn system services off and on</key>
 		<string>开启或关闭系统服务</string>
+		<key>Turning Off Location Services</key>
+		<string>正在关闭定位服务</string>
+		<key>Turning On Location Services</key>
+		<string>正在开启定位服务</string>
 		<key>Tweak SDK</key>
 		<string>调整 SDK</string>
 		<key>Tweak apply speed</key>
 		<string>调整应用速度</string>
 		<key>Tweaks</key>
-		<string>调整</string>
+		<string>微调</string>
 		<key>Twitter</key>
 		<string>Twitter</string>
+		<key>Unfinished Saves</key>
+		<string>未完成的保存</string>
+		<key>Unknown Source</key>
+		<string>未知源</string>
 		<key>UNSUPPORTED</key>
 		<string>不支持</string>
 		<key>Unsupported</key>
 		<string>不支持</string>
+		<key>Up to Date</key>
+		<string>已是最新版本</string>
 		<key>Update</key>
 		<string>更新</string>
+		<key>UPDATE</key>
+		<string>更新</string>
+		<key>Update Available</key>
+		<string>有可用更新</string>
 		<key>Upside Down</key>
 		<string>上下颠倒</string>
 		<key>Use Original</key>
@@ -775,6 +987,8 @@
 		<string>视频</string>
 		<key>View Log</key>
 		<string>查看日志</string>
+		<key>View Release</key>
+		<string>查看发行版</string>
 		<key>Wallet Card Art</key>
 		<string>钱包卡片图案</string>
 		<key>Watch Pairing</key>

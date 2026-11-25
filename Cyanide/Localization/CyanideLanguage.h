@@ -24,7 +24,7 @@ FOUNDATION_EXPORT NSString * _Nullable CyanideLocalized(NSString * _Nullable eng
 /// before UIApplicationMain.
 FOUNDATION_EXPORT void CyanideLanguageInstall(void);
 
-/// "en" or "zh-Hans"; follows the system when no override is stored.
+/// Active supported language code. Follows the system when no override is stored.
 FOUNDATION_EXPORT NSString *CyanideLanguageCurrentCode(void);
 FOUNDATION_EXPORT NSString *CyanideLanguageSystemCode(void);
 

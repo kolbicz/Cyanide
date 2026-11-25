@@ -14,39 +14,211 @@
 			<key>pattern</key>
 			<string>^([0-9]+) pending changes?$</string>
 			<key>template</key>
-			<string>$1 oczekujących zmian</string>
+			<string>Oczekujące zmiany: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) changes?$</string>
+			<key>template</key>
+			<string>Zmiany: $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) apps?$</string>
 			<key>template</key>
-			<string>$1 aplikacji</string>
+			<string>Aplikacje: $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) packages?$</string>
 			<key>template</key>
-			<string>$1 pakietów</string>
+			<string>Pakiety: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) updates?$</string>
+			<key>template</key>
+			<string>Aktualizacje: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) items?$</string>
+			<key>template</key>
+			<string>Elementy: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) files?$</string>
+			<key>template</key>
+			<string>Pliki: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) folders?$</string>
+			<key>template</key>
+			<string>Foldery: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) selected$</string>
+			<key>template</key>
+			<string>Zaznaczono: $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) installed$</string>
 			<key>template</key>
-			<string>$1 zainstalowanych</string>
+			<string>Zainstalowano: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) active$</string>
+			<key>template</key>
+			<string>Aktywne: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending$</string>
+			<key>template</key>
+			<string>Oczekujące: $1</string>
 		</dict>
 	</array>
 	<key>strings</key>
 	<dict>
+		<key>Invalid request.</key>
+		<string>Nieprawidłowe żądanie.</string>
+		<key>Another Location Services request came first.</key>
+		<string>Inne żądanie dotyczące usług lokalizacji dotarło wcześniej.</string>
+		<key>A newer Location Services request replaced this one.</key>
+		<string>Nowsze żądanie dotyczące usług lokalizacji zastąpiło to żądanie.</string>
+		<key>The Location Services request was superseded before it finished.</key>
+		<string>Żądanie dotyczące usług lokalizacji zostało zastąpione przed zakończeniem.</string>
+		<key>The Location Services retry was superseded before it finished.</key>
+		<string>Ponowna próba dotycząca usług lokalizacji została zastąpiona przed zakończeniem.</string>
+		<key>Location Services request cancelled: kernel access was not acquired.</key>
+		<string>Anulowano żądanie dotyczące usług lokalizacji: nie uzyskano dostępu do jądra.</string>
+		<key>Cyanide has no saved kernel access (for example after a restart). Open Cyanide and run it once, then try again.</key>
+		<string>Cyanide nie ma zapisanego dostępu do jądra (na przykład po ponownym uruchomieniu). Otwórz Cyanide, uruchom go raz i spróbuj ponownie.</string>
+		<key>(no information)</key>
+		<string>(brak informacji)</string>
+		<key>12h time</key>
+		<string>Format 12-godzinny</string>
+		<key>24h time</key>
+		<string>Format 24-godzinny</string>
+		<key>3-App Limit</key>
+		<string>Limit 3 aplikacji</string>
+		<key>@_kolbicz</key>
+		<string>@_kolbicz</string>
+		<key>A18 bounded search</key>
+		<string>Ograniczone wyszukiwanie A18</string>
+		<key>A18 exploit path</key>
+		<string>Metoda exploita A18</string>
+		<key>A18 interleaved search</key>
+		<string>Wyszukiwanie z przeplotem A18</string>
+		<key>A18 memory shaping</key>
+		<string>Kształtowanie pamięci A18</string>
 		<key>About</key>
 		<string>Informacje</string>
+		<key>Access</key>
+		<string>Dostęp</string>
+		<key>Accuracy</key>
+		<string>Dokładność</string>
+		<key>Activate</key>
+		<string>Aktywuj</string>
+		<key>Activate Supervision</key>
+		<string>Włącz nadzór</string>
+		<key>Activation pending</key>
+		<string>Aktywacja oczekuje</string>
+		<key>Activity</key>
+		<string>Aktywność</string>
+		<key>Add</key>
+		<string>Dodaj</string>
 		<key>Add a Source</key>
 		<string>Dodaj źródło</string>
+		<key>Add Source</key>
+		<string>Dodaj źródło</string>
+		<key>Add to Cache Cleaner?</key>
+		<string>Dodać do czyszczenia pamięci podręcznej?</string>
+		<key>Add to Favorites</key>
+		<string>Dodaj do ulubionych</string>
+		<key>All Keys</key>
+		<string>Wszystkie klucze</string>
+		<key>Altitude</key>
+		<string>Wysokość</string>
+		<key>Always On</key>
+		<string>Zawsze włączony ekran</string>
+		<key>Always Select</key>
+		<string>Zawsze zaznaczaj</string>
+		<key>An install is still running.</key>
+		<string>Instalacja nadal trwa.</string>
+		<key>Another action is already running. Try again when it has finished.</key>
+		<string>Trwa już inna operacja. Spróbuj ponownie po jej zakończeniu.</string>
+		<key>Another action is running. Try again in a moment.</key>
+		<string>Trwa inna operacja. Spróbuj ponownie za chwilę.</string>
+		<key>Another Cyanide action is running. Try again in a moment.</key>
+		<string>Cyanide wykonuje inną operację. Spróbuj ponownie za chwilę.</string>
+		<key>Another Cyanide action is still running. Try again in a moment.</key>
+		<string>Cyanide nadal wykonuje inną operację. Spróbuj ponownie za chwilę.</string>
+		<key>App Decrypt</key>
+		<string>Odszyfrowywanie aplikacji</string>
+		<key>App Icon</key>
+		<string>Ikona aplikacji</string>
+		<key>App Switcher Grid</key>
+		<string>Siatka przełącznika aplikacji</string>
 		<key>Apply</key>
 		<string>Zastosuj</string>
+		<key>Apply Changes</key>
+		<string>Zastosuj zmiany</string>
+		<key>Apply Changes?</key>
+		<string>Zastosować zmiany?</string>
+		<key>Apply Installer changes right away</key>
+		<string>Stosuj zmiany instalatora od razu</string>
+		<key>Apply Lock Screen Duration</key>
+		<string>Zastosuj czas wyświetlania ekranu blokady</string>
+		<key>Apply Now</key>
+		<string>Zastosuj teraz</string>
+		<key>Apply Pairing Override</key>
+		<string>Zastosuj niestandardowe ustawienia parowania</string>
+		<key>Apply Style Now</key>
+		<string>Zastosuj styl teraz</string>
+		<key>Apps in use are left alone.</key>
+		<string>Używane aplikacje są pomijane.</string>
+		<key>Arrange icons by page</key>
+		<string>Rozmieść ikony według stron</string>
+		<key>Arrange pages</key>
+		<string>Uporządkuj strony</string>
+		<key>Auto Refresh</key>
+		<string>Automatyczne odświeżanie</string>
+		<key>Auto-add Dock app</key>
+		<string>Automatycznie dodawaj aplikację do Docka</string>
+		<key>Auto-add selected app to Dock</key>
+		<string>Automatycznie dodaj wybraną aplikację do Docka</string>
+		<key>Auto-retry attempt cap</key>
+		<string>Limit automatycznych ponowień</string>
+		<key>Auto-retry failed chain runs</key>
+		<string>Automatycznie ponawiaj nieudane uruchomienia łańcucha</string>
+		<key>Axon Lite</key>
+		<string>Axon Lite</string>
 		<key>Back</key>
 		<string>Wstecz</string>
 		<key>Battery, uptime, kernel access, storage</key>
 		<string>Bateria, czas działania, dostęp do jądra, pamięć</string>
+		<key>Before You Clean</key>
+		<string>Przed czyszczeniem</string>
+		<key>Block if flashlight is on — In progress</key>
+		<string>Blokuj przy włączonej latarce — w przygotowaniu</string>
+		<key>Block if media is active — In progress</key>
+		<string>Blokuj podczas odtwarzania multimediów — w przygotowaniu</string>
+		<key>Block in Low Power Mode — In progress</key>
+		<string>Blokuj w trybie niskiego zużycia energii — w przygotowaniu</string>
+		<key>Blockers</key>
+		<string>Warunki blokowania</string>
+		<key>Bottom side inset</key>
+		<string>Dolny margines boczny</string>
+		<key>Bottom Y offset</key>
+		<string>Dolne przesunięcie Y</string>
+		<key>Bounce</key>
+		<string>Odbicie</string>
 		<key>Browse and install JS tweaks from repos</key>
 		<string>Przeglądaj i instaluj tweaki JS z repozytoriów</string>
 		<key>Browse files and edit plists</key>
@@ -55,130 +227,780 @@
 		<string>Czyszczenie pamięci podręcznej</string>
 		<key>Cancel</key>
 		<string>Anuluj</string>
+		<key>Cannot Queue Install</key>
+		<string>Nie można dodać instalacji do kolejki</string>
+		<key>CarPlay is unlocked.</key>
+		<string>CarPlay jest odblokowany.</string>
+		<key>CarPlay without Siri</key>
+		<string>CarPlay bez Siri</string>
+		<key>Celsius</key>
+		<string>Celsjusz</string>
+		<key>Center X offset</key>
+		<string>Przesunięcie środka w osi X</string>
+		<key>Change Type</key>
+		<string>Zmień typ</string>
+		<key>Changes are locked.</key>
+		<string>Wprowadzanie zmian jest zablokowane.</string>
+		<key>Changes are locked. Unlock them in the File Browser first.</key>
+		<string>Wprowadzanie zmian jest zablokowane. Najpierw odblokuj je w przeglądarce plików.</string>
+		<key>Check Failed</key>
+		<string>Sprawdzanie nie powiodło się</string>
+		<key>Check for Updates</key>
+		<string>Sprawdź aktualizacje</string>
+		<key>Checking Crash Logs</key>
+		<string>Sprawdzanie dzienników awarii…</string>
+		<key>Checking for Updates…</key>
+		<string>Sprawdzanie aktualizacji…</string>
+		<key>Checking Running Apps</key>
+		<string>Sprawdzanie uruchomionych aplikacji…</string>
+		<key>Choose Position…</key>
+		<string>Wybierz pozycję…</string>
 		<key>Choose the app language.</key>
 		<string>Wybierz język aplikacji.</string>
+		<key>Choose Video…</key>
+		<string>Wybierz wideo…</string>
+		<key>Classic</key>
+		<string>Klasyczny</string>
+		<key>Clean</key>
+		<string>Wyczyść</string>
+		<key>Clean Caches?</key>
+		<string>Wyczyścić pamięć podręczną?</string>
+		<key>Clean Up</key>
+		<string>Wyczyść</string>
+		<key>Clean Up?</key>
+		<string>Rozpocząć czyszczenie?</string>
+		<key>Cleaning…</key>
+		<string>Czyszczenie…</string>
+		<key>Clear</key>
+		<string>Wyczyść</string>
+		<key>Clear Queue</key>
+		<string>Wyczyść kolejkę</string>
+		<key>Clear Queue?</key>
+		<string>Wyczyścić kolejkę?</string>
+		<key>Clear Selected Style</key>
+		<string>Usuń wybrany styl</string>
+		<key>Clear Selected Theme</key>
+		<string>Usuń wybrany motyw</string>
+		<key>Clear Selected Video</key>
+		<string>Usuń wybrane wideo</string>
 		<key>Close</key>
 		<string>Zamknij</string>
+		<key>Coefficient</key>
+		<string>Współczynnik</string>
 		<key>Community</key>
 		<string>Społeczność</string>
 		<key>Confirm</key>
 		<string>Potwierdź</string>
+		<key>Contents</key>
+		<string>Zawartość</string>
 		<key>Continue</key>
 		<string>Kontynuuj</string>
+		<key>Copied</key>
+		<string>Skopiowano</string>
 		<key>Copy</key>
 		<string>Kopiuj</string>
+		<key>Copy Identifier</key>
+		<string>Kopiuj identyfikator</string>
+		<key>Copy Key</key>
+		<string>Kopiuj klucz</string>
+		<key>Copy Path</key>
+		<string>Kopiuj ścieżkę</string>
+		<key>Copy Value</key>
+		<string>Kopiuj wartość</string>
+		<key>Counting…</key>
+		<string>Zliczanie…</string>
+		<key>Create</key>
+		<string>Utwórz</string>
+		<key>Current (with unsaved changes)</key>
+		<string>Bieżące (z niezapisanymi zmianami)</string>
+		<key>Cut</key>
+		<string>Wytnij</string>
 		<key>Daemon Manager</key>
 		<string>Menedżer demonów</string>
+		<key>Data</key>
+		<string>Dane</string>
+		<key>Date</key>
+		<string>Data</string>
+		<key>Date + weekday</key>
+		<string>Data i dzień tygodnia</string>
+		<key>Deactivate</key>
+		<string>Dezaktywuj</string>
+		<key>Deactivate Supervision</key>
+		<string>Wyłącz nadzór</string>
+		<key>Deactivation pending</key>
+		<string>Dezaktywacja oczekuje</string>
+		<key>Debug Overlay</key>
+		<string>Nakładka debugowania</string>
 		<key>Delete</key>
 		<string>Usuń</string>
+		<key>Delete Backups</key>
+		<string>Usuń kopie zapasowe</string>
+		<key>Delete?</key>
+		<string>Usunąć?</string>
+		<key>Deselect All</key>
+		<string>Odznacz wszystko</string>
+		<key>Device Artwork</key>
+		<string>Grafika urządzenia</string>
+		<key>Digits in style</key>
+		<string>Cyfry w stylu</string>
 		<key>Disable</key>
 		<string>Wyłącz</string>
+		<key>Disable OTA Updates</key>
+		<string>Wyłącz aktualizacje OTA</string>
 		<key>Disabled</key>
 		<string>Wyłączone</string>
+		<key>DISABLED</key>
+		<string>WYŁĄCZONO</string>
+		<key>Discard</key>
+		<string>Odrzuć</string>
+		<key>Discard all pending activation / deactivation changes.</key>
+		<string>Odrzuć wszystkie oczekujące aktywacje i dezaktywacje.</string>
+		<key>Discard Changes</key>
+		<string>Odrzuć zmiany</string>
+		<key>Discard Changes?</key>
+		<string>Odrzucić zmiany?</string>
+		<key>Dock</key>
+		<string>Dock</string>
+		<key>Dock app bundle ID</key>
+		<string>ID pakietu aplikacji w Docku</string>
+		<key>Dock extra L/R</key>
+		<string>Dodatkowy margines L/P Docka</string>
+		<key>Dock extra left</key>
+		<string>Dodatkowy lewy margines Docka</string>
+		<key>Dock extra right</key>
+		<string>Dodatkowy prawy margines Docka</string>
+		<key>Dock icon scale</key>
+		<string>Skala ikon Docka</string>
+		<key>Dock icons</key>
+		<string>Ikony Docka</string>
+		<key>Dock scale %</key>
+		<string>Skala Docka (%)</string>
 		<key>Done</key>
 		<string>Gotowe</string>
+		<key>Drag Coefficient</key>
+		<string>Współczynnik oporu</string>
+		<key>Duplicate</key>
+		<string>Powiel</string>
+		<key>Duration</key>
+		<string>Czas trwania</string>
+		<key>Edit</key>
+		<string>Edytuj</string>
+		<key>Empty folder.</key>
+		<string>Folder jest pusty.</string>
 		<key>Enable</key>
 		<string>Włącz</string>
+		<key>Enable Always On</key>
+		<string>Włącz zawsze włączony ekran</string>
+		<key>Enable Changes?</key>
+		<string>Zezwolić na zmiany?</string>
+		<key>Enable OTA Updates</key>
+		<string>Włącz aktualizacje OTA</string>
 		<key>Enabled</key>
 		<string>Włączone</string>
+		<key>Explosion Pulse</key>
+		<string>Impuls eksplozji</string>
+		<key>Export</key>
+		<string>Eksportuj</string>
+		<key>Export Originals…</key>
+		<string>Eksportuj oryginały…</string>
+		<key>Faster tweak apply</key>
+		<string>Szybsze stosowanie modyfikacji</string>
+		<key>FastLockX Lite</key>
+		<string>FastLockX Lite</string>
+		<key>Favorites</key>
+		<string>Ulubione</string>
 		<key>File Browser</key>
 		<string>Przeglądarka plików</string>
+		<key>File Changed</key>
+		<string>Plik został zmieniony</string>
+		<key>Filesystem access is not available.</key>
+		<string>Brak dostępu do systemu plików.</string>
+		<key>Filter apps</key>
+		<string>Filtruj aplikacje</string>
+		<key>Filter by name or PID</key>
+		<string>Filtruj według nazwy lub PID</string>
+		<key>Filter keys and values</key>
+		<string>Filtruj klucze i wartości</string>
+		<key>Filter this folder</key>
+		<string>Filtruj ten folder</string>
+		<key>Finding Apps</key>
+		<string>Wyszukiwanie aplikacji…</string>
+		<key>First page icons</key>
+		<string>Ikony pierwszej strony</string>
+		<key>Folder Size</key>
+		<string>Rozmiar folderu</string>
+		<key>Folders to Clean</key>
+		<string>Foldery do wyczyszczenia</string>
 		<key>Follow System</key>
 		<string>Używaj języka systemu</string>
+		<key>Font Overwrite</key>
+		<string>Zastępowanie czcionki</string>
+		<key>Force Quit</key>
+		<string>Wymuś zakończenie</string>
 		<key>Free space from app caches</key>
 		<string>Zwolnij miejsce z pamięci podręcznych aplikacji</string>
+		<key>Friction</key>
+		<string>Tarcie</string>
 		<key>Get Started</key>
 		<string>Rozpocznij</string>
+		<key>Getting File Access</key>
+		<string>Uzyskiwanie dostępu do plików…</string>
 		<key>GitHub</key>
 		<string>GitHub</string>
+		<key>Go</key>
+		<string>Przejdź</string>
+		<key>Go to Container Top</key>
+		<string>Przejdź do katalogu głównego kontenera</string>
+		<key>Go to Folder</key>
+		<string>Przejdź do folderu</string>
+		<key>Go to Folder…</key>
+		<string>Przejdź do folderu…</string>
+		<key>Got It</key>
+		<string>Rozumiem</string>
+		<key>Gravity Lite</key>
+		<string>Gravity Lite</string>
+		<key>Gravity strength</key>
+		<string>Siła grawitacji</string>
+		<key>Hidden Settings</key>
+		<string>Ukryte ustawienia</string>
+		<key>Hide</key>
+		<string>Ukryj</string>
+		<key>Hide icon labels</key>
+		<string>Ukryj etykiety ikon</string>
 		<key>Home</key>
 		<string>Początek</string>
+		<key>Home columns</key>
+		<string>Kolumny ekranu początkowego</string>
+		<key>Home extra bottom</key>
+		<string>Dodatkowy dolny margines ekranu początkowego</string>
+		<key>Home extra L/R</key>
+		<string>Dodatkowy margines L/P ekranu początkowego</string>
+		<key>Home extra left</key>
+		<string>Dodatkowy lewy margines ekranu początkowego</string>
+		<key>Home extra right</key>
+		<string>Dodatkowy prawy margines ekranu początkowego</string>
+		<key>Home extra T/B</key>
+		<string>Dodatkowy górny/dolny margines ekranu początkowego</string>
+		<key>Home extra top</key>
+		<string>Dodatkowy górny margines ekranu początkowego</string>
+		<key>Home icon scale</key>
+		<string>Skala ikon ekranu początkowego</string>
+		<key>Home Layout Extras</key>
+		<string>Dodatkowe opcje układu ekranu początkowego</string>
+		<key>Home rows</key>
+		<string>Wiersze ekranu początkowego</string>
+		<key>Home scale %</key>
+		<string>Skala ekranu początkowego (%)</string>
+		<key>How to write Cyanide tweaks</key>
+		<string>Jak pisać modyfikacje dla Cyanide</string>
+		<key>I Understand</key>
+		<string>Rozumiem</string>
+		<key>Import Custom Theme…</key>
+		<string>Importuj własny motyw…</string>
 		<key>Import Failed</key>
 		<string>Import nie powiódł się</string>
+		<key>Import failed.</key>
+		<string>Import nie powiódł się.</string>
+		<key>Import from Files…</key>
+		<string>Importuj z aplikacji Pliki…</string>
+		<key>Import Originals…</key>
+		<string>Importuj oryginały…</string>
+		<key>Import Style (.passthm/ZIP)…</key>
+		<string>Importuj styl (.passthm/ZIP)…</string>
+		<key>Import Theme Archive (ZIP/DEB)…</key>
+		<string>Importuj archiwum motywu (ZIP/DEB)…</string>
+		<key>Import Theme Folder…</key>
+		<string>Importuj folder motywu…</string>
 		<key>In Development</key>
 		<string>W opracowaniu</string>
+		<key>Include Dock</key>
+		<string>Uwzględnij Dock</string>
 		<key>Install</key>
 		<string>Zainstaluj</string>
+		<key>Install pending</key>
+		<string>Instalacja oczekuje</string>
+		<key>Install Running</key>
+		<string>Instalacja w toku</string>
 		<key>Installed</key>
-		<string>Zainstalowane</string>
+		<string>Zainstalowano</string>
+		<key>INSTALLED</key>
+		<string>ZAINSTALOWANO</string>
+		<key>Invalid Value</key>
+		<string>Nieprawidłowa wartość</string>
+		<key>iPad Dock</key>
+		<string>Dock iPada</string>
+		<key>JIT Enabler</key>
+		<string>Włączanie JIT</string>
+		<key>Keep app alive in background</key>
+		<string>Utrzymuj aplikację aktywną w tle</string>
+		<key>Keep Current</key>
+		<string>Zachowaj bieżące</string>
+		<key>Kernel access could not be acquired. Run the chain, then try again.</key>
+		<string>Nie udało się uzyskać dostępu do jądra. Uruchom łańcuch i spróbuj ponownie.</string>
+		<key>Kernel access isn't active. Run the chain first, then try again.</key>
+		<string>Dostęp do jądra nie jest aktywny. Najpierw uruchom łańcuch, a potem spróbuj ponownie.</string>
 		<key>Kernel Access Ready</key>
 		<string>Dostęp do jądra gotowy</string>
 		<key>Kernel access for the tools</key>
 		<string>Dostęp do jądra dla narzędzi</string>
 		<key>Kernel access is not active. Run the chain first.</key>
 		<string>Dostęp do jądra nie jest aktywny. Najpierw uruchom łańcuch.</string>
+		<key>Key</key>
+		<string>Klucz</string>
+		<key>Key Exists</key>
+		<string>Klucz już istnieje</string>
 		<key>Language</key>
 		<string>Język</string>
 		<key>Language changed</key>
 		<string>Zmieniono język</string>
+		<key>Lara</key>
+		<string>Lara</string>
 		<key>Later</key>
 		<string>Później</string>
+		<key>Launch Options</key>
+		<string>Opcje uruchamiania</string>
+		<key>Layout</key>
+		<string>Układ</string>
+		<key>Legacy Chip Floor</key>
+		<string>Minimalna wartość starszego układu</string>
+		<key>Legacy chip floor</key>
+		<string>Minimalna wartość starszego układu</string>
+		<key>Level</key>
+		<string>Poziom</string>
+		<key>LiveWP</key>
+		<string>LiveWP</string>
+		<key>Load Saved Override</key>
+		<string>Wczytaj zapisane ustawienia niestandardowe</string>
 		<key>Loading…</key>
 		<string>Wczytywanie…</string>
+		<key>Location Services</key>
+		<string>Usługi lokalizacji</string>
+		<key>Location Services Link</key>
+		<string>Łącze usług lokalizacji</string>
+		<key>Location Services links</key>
+		<string>Łącza usług lokalizacji</string>
+		<key>Location Services Off</key>
+		<string>Usługi lokalizacji wyłączone</string>
+		<key>Location Services On</key>
+		<string>Usługi lokalizacji włączone</string>
+		<key>Location Simulator</key>
+		<string>Symulator lokalizacji</string>
+		<key>Lock Screen Duration</key>
+		<string>Czas wyświetlania ekranu blokady</string>
 		<key>Log</key>
-		<string>Log</string>
+		<string>Dziennik</string>
+		<key>Major Cities…</key>
+		<string>Główne miasta…</string>
+		<key>Measuring Caches</key>
+		<string>Obliczanie rozmiaru pamięci podręcznych…</string>
+		<key>MobileGestalt</key>
+		<string>MobileGestalt</string>
+		<key>Mode</key>
+		<string>Tryb</string>
+		<key>Model Name</key>
+		<string>Nazwa modelu</string>
+		<key>Model name</key>
+		<string>Nazwa modelu</string>
+		<key>Modern</key>
+		<string>Nowoczesny</string>
+		<key>Multi-watch switch</key>
+		<string>Przełączanie między zegarkami</string>
+		<key>Multi-Watch Switching</key>
+		<string>Przełączanie między zegarkami</string>
+		<key>Name</key>
+		<string>Nazwa</string>
+		<key>Network speed only</key>
+		<string>Tylko prędkość sieci</string>
+		<key>New File</key>
+		<string>Nowy plik</string>
+		<key>New Folder</key>
+		<string>Nowy folder</string>
+		<key>NiceBar Lite</key>
+		<string>NiceBar Lite</string>
+		<key>No longer pending</key>
+		<string>Już nie oczekuje</string>
+		<key>No matches.</key>
+		<string>Brak wyników.</string>
+		<key>No matching container was found for this app.</key>
+		<string>Nie znaleziono kontenera dla tej aplikacji.</string>
+		<key>Not a regular file.</key>
+		<string>To nie jest zwykły plik.</string>
+		<key>Not Now</key>
+		<string>Nie teraz</string>
+		<key>Not Saved</key>
+		<string>Nie zapisano</string>
 		<key>Not Supported</key>
 		<string>Nieobsługiwane</string>
+		<key>NSBar</key>
+		<string>NSBar</string>
 		<key>OK</key>
 		<string>OK</string>
 		<key>Off</key>
 		<string>Wył.</string>
 		<key>On</key>
 		<string>Wł.</string>
+		<key>On Disk</key>
+		<string>Na dysku</string>
+		<key>Open as Text / Hex / Info</key>
+		<string>Otwórz jako tekst / hex / informacje</string>
 		<key>Open QuickLoader</key>
 		<string>Otwórz QuickLoader</string>
+		<key>Original Backup</key>
+		<string>Kopia zapasowa oryginału</string>
+		<key>Originals</key>
+		<string>Oryginały</string>
+		<key>OTA Updates</key>
+		<string>Aktualizacje OTA</string>
+		<key>Other page icons</key>
+		<string>Ikony pozostałych stron</string>
+		<key>Overwrite</key>
+		<string>Zastąp</string>
 		<key>Packages</key>
 		<string>Pakiety</string>
+		<key>Page icon counts</key>
+		<string>Liczba ikon na stronach</string>
+		<key>Passcode Style</key>
+		<string>Styl kodu dostępu</string>
+		<key>Performance HUD</key>
+		<string>Nakładka wydajności</string>
+		<key>Permissions</key>
+		<string>Uprawnienia</string>
+		<key>Permissions…</key>
+		<string>Uprawnienia…</string>
+		<key>Position</key>
+		<string>Pozycja</string>
+		<key>Powercuff</key>
+		<string>Powercuff</string>
+		<key>Preparing respring…</key>
+		<string>Przygotowywanie ponownego uruchomienia SpringBoard…</string>
+		<key>Preparing…</key>
+		<string>Przygotowywanie…</string>
 		<key>Process Viewer</key>
 		<string>Przeglądarka procesów</string>
+		<key>Queue</key>
+		<string>Kolejka</string>
 		<key>Quick Actions</key>
 		<string>Szybkie akcje</string>
+		<key>QuickLoader</key>
+		<string>QuickLoader</string>
+		<key>Quit</key>
+		<string>Zakończ</string>
+		<key>Read Current Status</key>
+		<string>Odczytaj bieżący stan</string>
+		<key>Read Current Value</key>
+		<string>Odczytaj bieżącą wartość</string>
+		<key>Reboot</key>
+		<string>Uruchom ponownie urządzenie</string>
+		<key>Reboot?</key>
+		<string>Uruchomić ponownie urządzenie?</string>
+		<key>Rebooting…</key>
+		<string>Ponowne uruchamianie…</string>
+		<key>Recent</key>
+		<string>Ostatnie</string>
+		<key>Reclaimable</key>
+		<string>Miejsce do odzyskania</string>
 		<key>Refresh</key>
 		<string>Odśwież</string>
+		<key>Refresh rate</key>
+		<string>Częstotliwość odświeżania</string>
 		<key>Refreshing sources…</key>
 		<string>Odświeżanie źródeł…</string>
+		<key>Remind Me Later</key>
+		<string>Przypomnij później</string>
+		<key>Removal pending</key>
+		<string>Usunięcie oczekuje</string>
 		<key>Remove</key>
 		<string>Usuń</string>
+		<key>Remove (restore stock)</key>
+		<string>Usuń (przywróć oryginał)</string>
+		<key>Remove from Favorites</key>
+		<string>Usuń z ulubionych</string>
+		<key>Remove Override</key>
+		<string>Usuń ustawienia niestandardowe</string>
+		<key>Rename</key>
+		<string>Zmień nazwę</string>
+		<key>Rename Key</key>
+		<string>Zmień nazwę klucza</string>
+		<key>Repo sources</key>
+		<string>Źródła repozytoriów</string>
 		<key>Report a Bug</key>
 		<string>Zgłoś błąd</string>
+		<key>RepoTweaks</key>
+		<string>RepoTweaks</string>
+		<key>Reset</key>
+		<string>Wyzeruj</string>
+		<key>Reset All Packages</key>
+		<string>Wyzeruj wszystkie pakiety</string>
+		<key>Reset All Packages?</key>
+		<string>Wyzerować wszystkie pakiety?</string>
+		<key>Reset to Defaults</key>
+		<string>Przywróć ustawienia domyślne</string>
+		<key>Resistance</key>
+		<string>Opór</string>
+		<key>Respring</key>
+		<string>Uruchom ponownie SpringBoard</string>
+		<key>Respring and reboot links</key>
+		<string>Łącza do restartu SpringBoard lub urządzenia</string>
+		<key>Respring?</key>
+		<string>Uruchomić ponownie SpringBoard?</string>
 		<key>Restart Cyanide to apply the new language.</key>
 		<string>Uruchom ponownie Cyanide, aby zastosować nowy język.</string>
+		<key>Restore</key>
+		<string>Przywróć</string>
+		<key>Restore Icon Layout</key>
+		<string>Przywróć układ ikon</string>
+		<key>Restore Original</key>
+		<string>Przywróć oryginał</string>
+		<key>Restore Original Digits</key>
+		<string>Przywróć oryginalne cyfry</string>
+		<key>Restore Original?</key>
+		<string>Przywrócić oryginał?</string>
+		<key>Restore Original…</key>
+		<string>Przywróć oryginał…</string>
+		<key>Restore Real Location</key>
+		<string>Przywróć rzeczywistą lokalizację</string>
+		<key>Restore Stock Switcher</key>
+		<string>Przywróć domyślny przełącznik aplikacji</string>
 		<key>Retry</key>
 		<string>Ponów</string>
+		<key>Retry interval</key>
+		<string>Odstęp między próbami</string>
+		<key>Revert</key>
+		<string>Cofnij</string>
+		<key>Review Folders</key>
+		<string>Sprawdź foldery</string>
+		<key>Run Again</key>
+		<string>Uruchom ponownie</string>
 		<key>Run Exploit</key>
 		<string>Uruchom exploit</string>
 		<key>Run a local .js tweak file</key>
 		<string>Uruchom lokalny plik tweaka .js</string>
 		<key>Save</key>
 		<string>Zachowaj</string>
+		<key>Save Changes?</key>
+		<string>Zapisać zmiany?</string>
+		<key>Save Not Verified</key>
+		<string>Nie potwierdzono zapisu</string>
+		<key>Saved originals</key>
+		<string>Zapisane oryginały</string>
+		<key>SBCustomizer</key>
+		<string>SBCustomizer</string>
+		<key>Scanning processes…</key>
+		<string>Skanowanie procesów…</string>
+		<key>Screen Shape</key>
+		<string>Kształt ekranu</string>
 		<key>Search</key>
 		<string>Szukaj</string>
+		<key>Search all tweaks</key>
+		<string>Szukaj we wszystkich modyfikacjach</string>
+		<key>See All Changes</key>
+		<string>Zobacz wszystkie zmiany</string>
 		<key>See and quit running processes</key>
 		<string>Wyświetl i zakończ działające procesy</string>
+		<key>See This Version's Changes</key>
+		<string>Zobacz zmiany w tej wersji</string>
+		<key>Select All Apps</key>
+		<string>Zaznacz wszystkie aplikacje</string>
+		<key>Select Automatically</key>
+		<string>Zaznacz automatycznie</string>
+		<key>Select by Hand</key>
+		<string>Zaznacz ręcznie</string>
+		<key>Select Items to Clean</key>
+		<string>Wybierz elementy do wyczyszczenia</string>
+		<key>Select Large Caches (50 MB+)</key>
+		<string>Zaznacz duże pamięci podręczne (od 50 MB)</string>
+		<key>Select Theme</key>
+		<string>Wybierz motyw</string>
+		<key>Select Video</key>
+		<string>Wybierz wideo</string>
+		<key>Selected Dock app</key>
+		<string>Wybrana aplikacja do Docka</string>
+		<key>Selected Style</key>
+		<string>Wybrany styl</string>
+		<key>Selected Theme</key>
+		<string>Wybrany motyw</string>
+		<key>Selected Video</key>
+		<string>Wybrane wideo</string>
+		<key>Session note</key>
+		<string>Uwaga dotycząca sesji</string>
+		<key>Set</key>
+		<string>Ustaw</string>
+		<key>Set Exact Coordinates…</key>
+		<string>Ustaw dokładne współrzędne…</string>
 		<key>Settings</key>
 		<string>Ustawienia</string>
+		<key>Setup floor</key>
+		<string>Minimum konfiguracji</string>
+		<key>Setup Protocol Floor</key>
+		<string>Minimalna wersja protokołu konfiguracji</string>
 		<key>Share</key>
 		<string>Udostępnij</string>
+		<key>Share Log</key>
+		<string>Udostępnij dziennik</string>
+		<key>Share…</key>
+		<string>Udostępnij…</string>
+		<key>Short date</key>
+		<string>Krótka data</string>
+		<key>Show</key>
+		<string>Pokaż</string>
+		<key>Show Advanced</key>
+		<string>Pokaż opcje zaawansowane</string>
+		<key>Show Backups</key>
+		<string>Pokaż kopie zapasowe</string>
+		<key>Show CPU %</key>
+		<string>Pokaż użycie CPU (%)</string>
+		<key>Show CPU / RAM labels</key>
+		<string>Pokaż etykiety CPU/RAM</string>
+		<key>Show CPU/RAM labels</key>
+		<string>Pokaż etykiety CPU/RAM</string>
+		<key>Show dock labels</key>
+		<string>Pokaż etykiety w Docku</string>
+		<key>Show in File Browser</key>
+		<string>Pokaż w przeglądarce plików</string>
+		<key>Show in Folder</key>
+		<string>Pokaż w folderze</string>
+		<key>Show net speed</key>
+		<string>Pokaż prędkość sieci</string>
+		<key>Show network speed</key>
+		<string>Pokaż prędkość sieci</string>
+		<key>Simulate Current Target</key>
+		<string>Symuluj wybraną lokalizację</string>
+		<key>Simulate Rockaway Test Point</key>
+		<string>Symuluj punkt testowy w Rockaway</string>
+		<key>Size of This Folder</key>
+		<string>Rozmiar tego folderu</string>
+		<key>Skip This Version</key>
+		<string>Pomiń tę wersję</string>
+		<key>SnowBoard Lite</key>
+		<string>SnowBoard Lite</string>
 		<key>Some sources could not be refreshed</key>
 		<string>Nie udało się odświeżyć niektórych źródeł</string>
+		<key>Sort By</key>
+		<string>Sortuj według</string>
+		<key>Source Failed</key>
+		<string>Błąd źródła</string>
 		<key>Source refresh failed</key>
 		<string>Odświeżanie źródeł nie powiodło się</string>
 		<key>Sources</key>
 		<string>Źródła</string>
 		<key>Sources up to date</key>
 		<string>Źródła są aktualne</string>
+		<key>Spin resist.</key>
+		<string>Opór obrotu</string>
+		<key>Spin resistance</key>
+		<string>Opór obrotu</string>
+		<key>Spoof Device Model</key>
+		<string>Podszyj się pod inny model urządzenia</string>
+		<key>SpringBoard could not be reached.</key>
+		<string>Nie udało się nawiązać połączenia z SpringBoard.</string>
+		<key>SpringBoard Tools</key>
+		<string>Narzędzia SpringBoard</string>
 		<key>SpringBoard tweaks for stock iOS</key>
 		<string>Tweaki SpringBoard dla oryginalnego iOS</string>
+		<key>Starting…</key>
+		<string>Uruchamianie…</string>
+		<key>StatBar</key>
+		<string>StatBar</string>
+		<key>Strength</key>
+		<string>Siła</string>
+		<key>Style</key>
+		<string>Styl</string>
+		<key>Supervision</key>
+		<string>Nadzór</string>
+		<key>Switch to Fastest</key>
+		<string>Przełącz na najwyższą szybkość</string>
+		<key>Switch to pe_v3</key>
+		<string>Przełącz na pe_v3</string>
+		<key>Switcher style</key>
+		<string>Styl przełącznika aplikacji</string>
 		<key>System</key>
 		<string>System</string>
 		<key>System Info</key>
 		<string>Informacje o systemie</string>
+		<key>Target</key>
+		<string>Cel</string>
+		<key>Tendies Wallpapers</key>
+		<string>Tendies Wallpapers</string>
+		<key>The file could not be written.</key>
+		<string>Nie udało się zapisać pliku.</string>
+		<key>The file was changed or replaced since you opened it. Overwrite it with your version?</key>
+		<string>Plik został zmieniony lub zastąpiony od chwili otwarcia. Zastąpić go Twoją wersją?</string>
+		<key>The list of disabled daemons could not be read. Check the log.</key>
+		<string>Nie udało się odczytać listy wyłączonych demonów. Sprawdź dziennik.</string>
+		<key>Theme</key>
+		<string>Motyw</string>
+		<key>Theme Format Guide</key>
+		<string>Przewodnik po formacie motywów</string>
+		<key>This package cannot be queued yet.</key>
+		<string>Tego pakietu nie można jeszcze dodać do kolejki.</string>
+		<key>This queue row was already applied or cleared.</key>
+		<string>Ten element kolejki został już zastosowany lub usunięty.</string>
+		<key>Time + seconds</key>
+		<string>Godzina z sekundami</string>
 		<key>Tools</key>
 		<string>Narzędzia</string>
+		<key>Top side inset</key>
+		<string>Górny margines boczny</string>
+		<key>Top Y offset</key>
+		<string>Górne przesunięcie Y</string>
+		<key>Traffic History</key>
+		<string>Historia ruchu sieciowego</string>
+		<key>Try the pe_v3 exploit path?</key>
+		<string>Wypróbować metodę exploita pe_v3?</string>
 		<key>Turn system services off and on</key>
 		<string>Włączaj i wyłączaj usługi systemowe</string>
+		<key>Turning Off Location Services</key>
+		<string>Wyłączanie usług lokalizacji</string>
+		<key>Turning On Location Services</key>
+		<string>Włączanie usług lokalizacji</string>
+		<key>Tweak apply speed</key>
+		<string>Szybkość stosowania modyfikacji</string>
+		<key>Tweak SDK</key>
+		<string>SDK modyfikacji</string>
 		<key>Tweaks</key>
-		<string>Tweaki</string>
+		<string>Modyfikacje</string>
+		<key>Twitter</key>
+		<string>Twitter</string>
+		<key>Unfinished Saves</key>
+		<string>Niedokończone zapisy</string>
+		<key>Unknown Source</key>
+		<string>Nieznane źródło</string>
+		<key>Unsupported</key>
+		<string>Brak obsługi</string>
+		<key>UNSUPPORTED</key>
+		<string>BRAK OBSŁUGI</string>
+		<key>Up to Date</key>
+		<string>Najnowsza wersja</string>
+		<key>Update</key>
+		<string>Uaktualnij</string>
+		<key>UPDATE</key>
+		<string>AKTUALIZUJ</string>
+		<key>Update Available</key>
+		<string>Dostępna aktualizacja</string>
+		<key>Upside Down</key>
+		<string>Do góry nogami</string>
+		<key>Use Original</key>
+		<string>Użyj oryginału</string>
+		<key>Use watchOS Range 99/23/10/6</key>
+		<string>Użyj zakresu watchOS 99/23/10/6</string>
+		<key>Verbose logging</key>
+		<string>Szczegółowe logowanie</string>
+		<key>Video</key>
+		<string>Wideo</string>
+		<key>View Log</key>
+		<string>Wyświetl dziennik</string>
+		<key>View Release</key>
+		<string>Zobacz wydanie</string>
+		<key>Wallet Card Art</key>
+		<string>Grafika kart w Portfelu</string>
+		<key>Watch Pairing</key>
+		<string>Parowanie Apple Watch</string>
+		<key>watchOS limit</key>
+		<string>Limit watchOS</string>
+		<key>watchOS Pairing Limit</key>
+		<string>Limit parowania watchOS</string>
+		<key>Weekday + time</key>
+		<string>Dzień tygodnia i godzina</string>
 		<key>What's New</key>
 		<string>Nowości</string>
 		<key>Working</key>

@@ -472,8 +472,8 @@ static UIColor *category_color(NSString *cat)
     config.imageToTextPadding = 12.0;
     config.text = cat;
     config.textProperties.font = [UIFont systemFontOfSize:16.0 weight:UIFontWeightSemibold];
-    config.secondaryText = [NSString stringWithFormat:@"%lu package%@",
-                            (unsigned long)count, count == 1 ? @"" : @"s"];
+    config.secondaryText = CyanideLocalized([NSString stringWithFormat:@"%lu package%@",
+                                             (unsigned long)count, count == 1 ? @"" : @"s"]);
     config.secondaryTextProperties.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightRegular];
     config.secondaryTextProperties.color = [UIColor.labelColor colorWithAlphaComponent:0.55];
     config.textToSecondaryTextVerticalPadding = 2.0;
@@ -632,9 +632,9 @@ static UIColor *category_color(NSString *cat)
     config.imageProperties.reservedLayoutSize = CGSizeMake(32.0, 32.0);
     config.imageProperties.maximumSize = CGSizeMake(32.0, 32.0);
     config.imageToTextPadding = 12.0;
-    config.text = @"Open QuickLoader";
+    config.text = CyanideLocalized(@"Open QuickLoader");
     config.textProperties.font = [UIFont systemFontOfSize:16.0 weight:UIFontWeightSemibold];
-    config.secondaryText = @"Run a local .js tweak file";
+    config.secondaryText = CyanideLocalized(@"Run a local .js tweak file");
     config.secondaryTextProperties.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightRegular];
     config.secondaryTextProperties.color = [UIColor.labelColor colorWithAlphaComponent:0.55];
     config.textToSecondaryTextVerticalPadding = 2.0;
@@ -674,8 +674,10 @@ static UIColor *category_color(NSString *cat)
     NSUInteger updates = sources_update_count_for_url(url);
     NSMutableString *detail = [NSMutableString string];
     if (author.length) [detail appendFormat:@"%@ · ", author];
-    [detail appendFormat:@"%lu package%@", (unsigned long)tweaks.count, tweaks.count == 1 ? @"" : @"s"];
-    if (updates > 0) [detail appendFormat:@" · %lu update%@", (unsigned long)updates, updates == 1 ? @"" : @"s"];
+    [detail appendString:CyanideLocalized([NSString stringWithFormat:@"%lu package%@",
+                                           (unsigned long)tweaks.count, tweaks.count == 1 ? @"" : @"s"])];
+    if (updates > 0) [detail appendFormat:@" · %@", CyanideLocalized([NSString stringWithFormat:@"%lu update%@",
+                                                                       (unsigned long)updates, updates == 1 ? @"" : @"s"])];
     config.secondaryText = detail;
     config.secondaryTextProperties.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightRegular];
     config.secondaryTextProperties.color = updates > 0 ? UIColor.systemBlueColor : [UIColor.labelColor colorWithAlphaComponent:0.55];

@@ -14,19 +14,55 @@
 			<key>pattern</key>
 			<string>^([0-9]+) pending changes?$</string>
 			<key>template</key>
-			<string>$1 การเปลี่ยนแปลงที่รอดำเนินการ</string>
+			<string>การเปลี่ยนแปลงที่รอดำเนินการ: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) changes?$</string>
+			<key>template</key>
+			<string>การเปลี่ยนแปลง: $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) apps?$</string>
 			<key>template</key>
-			<string>$1 แอป</string>
+			<string>แอป: $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) packages?$</string>
 			<key>template</key>
-			<string>$1 แพ็กเกจ</string>
+			<string>แพ็กเกจ: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) updates?$</string>
+			<key>template</key>
+			<string>อัปเดต: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) items?$</string>
+			<key>template</key>
+			<string>รายการ: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) files?$</string>
+			<key>template</key>
+			<string>ไฟล์: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) folders?$</string>
+			<key>template</key>
+			<string>โฟลเดอร์: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) selected$</string>
+			<key>template</key>
+			<string>เลือกแล้ว $1 รายการ</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
@@ -34,19 +70,155 @@
 			<key>template</key>
 			<string>ติดตั้งแล้ว $1 รายการ</string>
 		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) active$</string>
+			<key>template</key>
+			<string>กำลังทำงาน: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending$</string>
+			<key>template</key>
+			<string>รอดำเนินการ: $1</string>
+		</dict>
 	</array>
 	<key>strings</key>
 	<dict>
+		<key>Invalid request.</key>
+		<string>คำขอไม่ถูกต้อง</string>
+		<key>Another Location Services request came first.</key>
+		<string>มีคำขอบริการหาตำแหน่งที่ตั้งอื่นมาถึงก่อน</string>
+		<key>A newer Location Services request replaced this one.</key>
+		<string>คำขอบริการหาตำแหน่งที่ตั้งที่ใหม่กว่าได้แทนที่คำขอนี้</string>
+		<key>The Location Services request was superseded before it finished.</key>
+		<string>คำขอบริการหาตำแหน่งที่ตั้งถูกแทนที่ก่อนเสร็จสิ้น</string>
+		<key>The Location Services retry was superseded before it finished.</key>
+		<string>การลองบริการหาตำแหน่งที่ตั้งอีกครั้งถูกแทนที่ก่อนเสร็จสิ้น</string>
+		<key>Location Services request cancelled: kernel access was not acquired.</key>
+		<string>ยกเลิกคำขอบริการหาตำแหน่งที่ตั้งแล้ว: ไม่ได้รับการเข้าถึงเคอร์เนล</string>
+		<key>Cyanide has no saved kernel access (for example after a restart). Open Cyanide and run it once, then try again.</key>
+		<string>Cyanide ไม่มีการเข้าถึงเคอร์เนลที่บันทึกไว้ (เช่น หลังรีสตาร์ท) เปิด Cyanide และรันหนึ่งครั้ง แล้วลองอีกครั้ง</string>
+		<key>(no information)</key>
+		<string>(ไม่มีข้อมูล)</string>
+		<key>12h time</key>
+		<string>เวลาแบบ 12 ชั่วโมง</string>
+		<key>24h time</key>
+		<string>เวลาแบบ 24 ชั่วโมง</string>
+		<key>3-App Limit</key>
+		<string>จำกัด 3 แอป</string>
+		<key>@_kolbicz</key>
+		<string>@_kolbicz</string>
+		<key>A18 bounded search</key>
+		<string>การค้นหาแบบจำกัดขอบเขตของ A18</string>
+		<key>A18 exploit path</key>
+		<string>วิธีใช้ Exploit สำหรับ A18</string>
+		<key>A18 interleaved search</key>
+		<string>การค้นหาแบบสลับของ A18</string>
+		<key>A18 memory shaping</key>
+		<string>การปรับการจัดวางหน่วยความจำของ A18</string>
 		<key>About</key>
 		<string>เกี่ยวกับ</string>
+		<key>Access</key>
+		<string>การเข้าถึง</string>
+		<key>Accuracy</key>
+		<string>ความแม่นยำ</string>
+		<key>Activate</key>
+		<string>เปิดใช้งาน</string>
+		<key>Activate Supervision</key>
+		<string>เปิดการควบคุมดูแล</string>
+		<key>Activation pending</key>
+		<string>รอเปิดใช้งาน</string>
+		<key>Activity</key>
+		<string>กิจกรรม</string>
+		<key>Add</key>
+		<string>เพิ่ม</string>
 		<key>Add a Source</key>
 		<string>เพิ่มแหล่งซอฟต์แวร์</string>
+		<key>Add Source</key>
+		<string>เพิ่มแหล่งที่มา</string>
+		<key>Add to Cache Cleaner?</key>
+		<string>เพิ่มไปยังตัวล้างแคชหรือไม่</string>
+		<key>Add to Favorites</key>
+		<string>เพิ่มในรายการโปรด</string>
+		<key>All Keys</key>
+		<string>คีย์ทั้งหมด</string>
+		<key>Altitude</key>
+		<string>ระดับความสูง</string>
+		<key>Always On</key>
+		<string>เปิดหน้าจอตลอด</string>
+		<key>Always Select</key>
+		<string>เลือกเสมอ</string>
+		<key>An install is still running.</key>
+		<string>ยังมีการติดตั้งที่กำลังดำเนินอยู่</string>
+		<key>Another action is already running. Try again when it has finished.</key>
+		<string>มีงานอื่นกำลังดำเนินอยู่ โปรดลองอีกครั้งเมื่อเสร็จสิ้น</string>
+		<key>Another action is running. Try again in a moment.</key>
+		<string>กำลังดำเนินงานอื่นอยู่ โปรดลองอีกครั้งในอีกสักครู่</string>
+		<key>Another Cyanide action is running. Try again in a moment.</key>
+		<string>Cyanide กำลังทำงานอื่นอยู่ โปรดลองอีกครั้งในอีกสักครู่</string>
+		<key>Another Cyanide action is still running. Try again in a moment.</key>
+		<string>Cyanide ยังทำงานอื่นอยู่ โปรดลองอีกครั้งในอีกสักครู่</string>
+		<key>App Decrypt</key>
+		<string>ถอดรหัสแอป</string>
+		<key>App Icon</key>
+		<string>ไอคอนแอป</string>
+		<key>App Switcher Grid</key>
+		<string>ตารางในตัวสลับแอป</string>
 		<key>Apply</key>
 		<string>นำไปใช้</string>
+		<key>Apply Changes</key>
+		<string>ใช้การเปลี่ยนแปลง</string>
+		<key>Apply Changes?</key>
+		<string>ใช้การเปลี่ยนแปลงหรือไม่</string>
+		<key>Apply Installer changes right away</key>
+		<string>ใช้การเปลี่ยนแปลงของตัวติดตั้งทันที</string>
+		<key>Apply Lock Screen Duration</key>
+		<string>ใช้ระยะเวลาของหน้าจอล็อก</string>
+		<key>Apply Now</key>
+		<string>ใช้ตอนนี้</string>
+		<key>Apply Pairing Override</key>
+		<string>ใช้การตั้งค่าการจับคู่แบบกำหนดเอง</string>
+		<key>Apply Style Now</key>
+		<string>ใช้สไตล์ตอนนี้</string>
+		<key>Apps in use are left alone.</key>
+		<string>ข้ามแอปที่ใช้งานอยู่</string>
+		<key>Arrange icons by page</key>
+		<string>จัดเรียงไอคอนตามหน้า</string>
+		<key>Arrange pages</key>
+		<string>จัดเรียงหน้า</string>
+		<key>Auto Refresh</key>
+		<string>รีเฟรชอัตโนมัติ</string>
+		<key>Auto-add Dock app</key>
+		<string>เพิ่มแอปไปยัง Dock โดยอัตโนมัติ</string>
+		<key>Auto-add selected app to Dock</key>
+		<string>เพิ่มแอปที่เลือกไปยัง Dock โดยอัตโนมัติ</string>
+		<key>Auto-retry attempt cap</key>
+		<string>จำนวนครั้งสูงสุดสำหรับการลองใหม่อัตโนมัติ</string>
+		<key>Auto-retry failed chain runs</key>
+		<string>ลองใหม่อัตโนมัติเมื่อชุดการทำงานล้มเหลว</string>
+		<key>Axon Lite</key>
+		<string>Axon Lite</string>
 		<key>Back</key>
 		<string>กลับ</string>
 		<key>Battery, uptime, kernel access, storage</key>
 		<string>แบตเตอรี่ เวลาทำงาน การเข้าถึงเคอร์เนล พื้นที่เก็บข้อมูล</string>
+		<key>Before You Clean</key>
+		<string>ก่อนเริ่มล้าง</string>
+		<key>Block if flashlight is on — In progress</key>
+		<string>บล็อกเมื่อเปิดไฟฉาย — อยู่ระหว่างพัฒนา</string>
+		<key>Block if media is active — In progress</key>
+		<string>บล็อกขณะเล่นสื่อ — อยู่ระหว่างพัฒนา</string>
+		<key>Block in Low Power Mode — In progress</key>
+		<string>บล็อกในโหมดพลังงานต่ำ — อยู่ระหว่างพัฒนา</string>
+		<key>Blockers</key>
+		<string>เงื่อนไขการบล็อก</string>
+		<key>Bottom side inset</key>
+		<string>ระยะขอบด้านข้างส่วนล่าง</string>
+		<key>Bottom Y offset</key>
+		<string>ออฟเซ็ต Y ด้านล่าง</string>
+		<key>Bounce</key>
+		<string>การเด้ง</string>
 		<key>Browse and install JS tweaks from repos</key>
 		<string>เรียกดูและติดตั้ง JS tweaks จากรีโป</string>
 		<key>Browse files and edit plists</key>
@@ -55,130 +227,780 @@
 		<string>ตัวล้างแคช</string>
 		<key>Cancel</key>
 		<string>ยกเลิก</string>
+		<key>Cannot Queue Install</key>
+		<string>เพิ่มการติดตั้งลงในคิวไม่ได้</string>
+		<key>CarPlay is unlocked.</key>
+		<string>ปลดล็อก CarPlay แล้ว</string>
+		<key>CarPlay without Siri</key>
+		<string>CarPlay โดยไม่ใช้ Siri</string>
+		<key>Celsius</key>
+		<string>เซลเซียส</string>
+		<key>Center X offset</key>
+		<string>ออฟเซ็ต X ตรงกลาง</string>
+		<key>Change Type</key>
+		<string>เปลี่ยนประเภท</string>
+		<key>Changes are locked.</key>
+		<string>การแก้ไขถูกล็อก</string>
+		<key>Changes are locked. Unlock them in the File Browser first.</key>
+		<string>การแก้ไขถูกล็อก โปรดปลดล็อกในเบราว์เซอร์ไฟล์ก่อน</string>
+		<key>Check Failed</key>
+		<string>ตรวจหาอัปเดตไม่สำเร็จ</string>
+		<key>Check for Updates</key>
+		<string>ตรวจหารายการอัปเดต</string>
+		<key>Checking Crash Logs</key>
+		<string>กำลังตรวจสอบบันทึกการขัดข้อง…</string>
+		<key>Checking for Updates…</key>
+		<string>กำลังตรวจหารายการอัปเดต…</string>
+		<key>Checking Running Apps</key>
+		<string>กำลังตรวจสอบแอปที่ทำงานอยู่…</string>
+		<key>Choose Position…</key>
+		<string>เลือกตำแหน่ง…</string>
 		<key>Choose the app language.</key>
 		<string>เลือกภาษาของแอป</string>
+		<key>Choose Video…</key>
+		<string>เลือกวิดีโอ…</string>
+		<key>Classic</key>
+		<string>คลาสสิก</string>
+		<key>Clean</key>
+		<string>ล้าง</string>
+		<key>Clean Caches?</key>
+		<string>ล้างแคชหรือไม่</string>
+		<key>Clean Up</key>
+		<string>ล้าง</string>
+		<key>Clean Up?</key>
+		<string>เริ่มล้างหรือไม่</string>
+		<key>Cleaning…</key>
+		<string>กำลังล้าง…</string>
+		<key>Clear</key>
+		<string>ล้าง</string>
+		<key>Clear Queue</key>
+		<string>ล้างคิว</string>
+		<key>Clear Queue?</key>
+		<string>ล้างคิวหรือไม่</string>
+		<key>Clear Selected Style</key>
+		<string>ล้างสไตล์ที่เลือก</string>
+		<key>Clear Selected Theme</key>
+		<string>ล้างธีมที่เลือก</string>
+		<key>Clear Selected Video</key>
+		<string>ล้างวิดีโอที่เลือก</string>
 		<key>Close</key>
 		<string>ปิด</string>
+		<key>Coefficient</key>
+		<string>สัมประสิทธิ์</string>
 		<key>Community</key>
 		<string>ชุมชน</string>
 		<key>Confirm</key>
 		<string>ยืนยัน</string>
+		<key>Contents</key>
+		<string>เนื้อหา</string>
 		<key>Continue</key>
 		<string>ดำเนินการต่อ</string>
+		<key>Copied</key>
+		<string>คัดลอกแล้ว</string>
 		<key>Copy</key>
 		<string>คัดลอก</string>
+		<key>Copy Identifier</key>
+		<string>คัดลอกตัวระบุ</string>
+		<key>Copy Key</key>
+		<string>คัดลอกคีย์</string>
+		<key>Copy Path</key>
+		<string>คัดลอกเส้นทาง</string>
+		<key>Copy Value</key>
+		<string>คัดลอกค่า</string>
+		<key>Counting…</key>
+		<string>กำลังนับ…</string>
+		<key>Create</key>
+		<string>สร้าง</string>
+		<key>Current (with unsaved changes)</key>
+		<string>ปัจจุบัน (มีการเปลี่ยนแปลงที่ยังไม่บันทึก)</string>
+		<key>Cut</key>
+		<string>ตัด</string>
 		<key>Daemon Manager</key>
 		<string>ตัวจัดการ Daemon</string>
+		<key>Data</key>
+		<string>ข้อมูล</string>
+		<key>Date</key>
+		<string>วันที่</string>
+		<key>Date + weekday</key>
+		<string>วันที่และวันในสัปดาห์</string>
+		<key>Deactivate</key>
+		<string>ปิดใช้งาน</string>
+		<key>Deactivate Supervision</key>
+		<string>ปิดการควบคุมดูแล</string>
+		<key>Deactivation pending</key>
+		<string>รอปิดใช้งาน</string>
+		<key>Debug Overlay</key>
+		<string>โอเวอร์เลย์ดีบัก</string>
 		<key>Delete</key>
 		<string>ลบ</string>
+		<key>Delete Backups</key>
+		<string>ลบข้อมูลสำรอง</string>
+		<key>Delete?</key>
+		<string>ลบหรือไม่</string>
+		<key>Deselect All</key>
+		<string>ยกเลิกการเลือกทั้งหมด</string>
+		<key>Device Artwork</key>
+		<string>กราฟิกของอุปกรณ์</string>
+		<key>Digits in style</key>
+		<string>ตัวเลขในสไตล์</string>
 		<key>Disable</key>
 		<string>ปิด</string>
+		<key>Disable OTA Updates</key>
+		<string>ปิดการอัปเดต OTA</string>
 		<key>Disabled</key>
 		<string>ปิดใช้งาน</string>
+		<key>DISABLED</key>
+		<string>ปิดใช้งาน</string>
+		<key>Discard</key>
+		<string>ละทิ้ง</string>
+		<key>Discard all pending activation / deactivation changes.</key>
+		<string>ละทิ้งการเปิดและปิดใช้งานที่รอดำเนินการทั้งหมด</string>
+		<key>Discard Changes</key>
+		<string>ละทิ้งการเปลี่ยนแปลง</string>
+		<key>Discard Changes?</key>
+		<string>ละทิ้งการเปลี่ยนแปลงหรือไม่</string>
+		<key>Dock</key>
+		<string>Dock</string>
+		<key>Dock app bundle ID</key>
+		<string>Bundle ID ของแอปใน Dock</string>
+		<key>Dock extra L/R</key>
+		<string>ขอบซ้าย/ขวาเพิ่มเติมของ Dock</string>
+		<key>Dock extra left</key>
+		<string>ขอบซ้ายเพิ่มเติมของ Dock</string>
+		<key>Dock extra right</key>
+		<string>ขอบขวาเพิ่มเติมของ Dock</string>
+		<key>Dock icon scale</key>
+		<string>สเกลไอคอน Dock</string>
+		<key>Dock icons</key>
+		<string>ไอคอน Dock</string>
+		<key>Dock scale %</key>
+		<string>สเกล Dock (%)</string>
 		<key>Done</key>
 		<string>เสร็จสิ้น</string>
+		<key>Drag Coefficient</key>
+		<string>สัมประสิทธิ์แรงต้าน</string>
+		<key>Duplicate</key>
+		<string>ทำสำเนา</string>
+		<key>Duration</key>
+		<string>ระยะเวลา</string>
+		<key>Edit</key>
+		<string>แก้ไข</string>
+		<key>Empty folder.</key>
+		<string>โฟลเดอร์ว่าง</string>
 		<key>Enable</key>
 		<string>เปิด</string>
+		<key>Enable Always On</key>
+		<string>เปิดใช้หน้าจอเปิดตลอด</string>
+		<key>Enable Changes?</key>
+		<string>อนุญาตให้แก้ไขหรือไม่</string>
+		<key>Enable OTA Updates</key>
+		<string>เปิดการอัปเดต OTA</string>
 		<key>Enabled</key>
 		<string>เปิดใช้งาน</string>
+		<key>Explosion Pulse</key>
+		<string>แรงระเบิดแบบพัลส์</string>
+		<key>Export</key>
+		<string>ส่งออก</string>
+		<key>Export Originals…</key>
+		<string>ส่งออกต้นฉบับ…</string>
+		<key>Faster tweak apply</key>
+		<string>ใช้ทวีคเร็วขึ้น</string>
+		<key>FastLockX Lite</key>
+		<string>FastLockX Lite</string>
+		<key>Favorites</key>
+		<string>รายการโปรด</string>
 		<key>File Browser</key>
 		<string>เบราว์เซอร์ไฟล์</string>
+		<key>File Changed</key>
+		<string>ไฟล์มีการเปลี่ยนแปลง</string>
+		<key>Filesystem access is not available.</key>
+		<string>ไม่สามารถเข้าถึงระบบไฟล์ได้</string>
+		<key>Filter apps</key>
+		<string>กรองแอป</string>
+		<key>Filter by name or PID</key>
+		<string>กรองตามชื่อหรือ PID</string>
+		<key>Filter keys and values</key>
+		<string>กรองคีย์และค่า</string>
+		<key>Filter this folder</key>
+		<string>กรองโฟลเดอร์นี้</string>
+		<key>Finding Apps</key>
+		<string>กำลังค้นหาแอป…</string>
+		<key>First page icons</key>
+		<string>ไอคอนหน้าแรก</string>
+		<key>Folder Size</key>
+		<string>ขนาดโฟลเดอร์</string>
+		<key>Folders to Clean</key>
+		<string>โฟลเดอร์ที่จะล้าง</string>
 		<key>Follow System</key>
-		<string>ตามระบบ</string>
+		<string>ใช้ภาษาของระบบ</string>
+		<key>Font Overwrite</key>
+		<string>เขียนทับแบบอักษร</string>
+		<key>Force Quit</key>
+		<string>บังคับปิด</string>
 		<key>Free space from app caches</key>
 		<string>เพิ่มพื้นที่ว่างจากแคชของแอป</string>
+		<key>Friction</key>
+		<string>แรงเสียดทาน</string>
 		<key>Get Started</key>
 		<string>เริ่มต้น</string>
+		<key>Getting File Access</key>
+		<string>กำลังขอสิทธิ์เข้าถึงไฟล์…</string>
 		<key>GitHub</key>
 		<string>GitHub</string>
+		<key>Go</key>
+		<string>ไป</string>
+		<key>Go to Container Top</key>
+		<string>ไปยังโฟลเดอร์รากของคอนเทนเนอร์</string>
+		<key>Go to Folder</key>
+		<string>ไปยังโฟลเดอร์</string>
+		<key>Go to Folder…</key>
+		<string>ไปยังโฟลเดอร์…</string>
+		<key>Got It</key>
+		<string>เข้าใจแล้ว</string>
+		<key>Gravity Lite</key>
+		<string>Gravity Lite</string>
+		<key>Gravity strength</key>
+		<string>ความแรงของแรงโน้มถ่วง</string>
+		<key>Hidden Settings</key>
+		<string>การตั้งค่าที่ซ่อนอยู่</string>
+		<key>Hide</key>
+		<string>ซ่อน</string>
+		<key>Hide icon labels</key>
+		<string>ซ่อนชื่อไอคอน</string>
 		<key>Home</key>
 		<string>หน้าหลัก</string>
+		<key>Home columns</key>
+		<string>คอลัมน์หน้าจอโฮม</string>
+		<key>Home extra bottom</key>
+		<string>ขอบล่างเพิ่มเติมของหน้าจอโฮม</string>
+		<key>Home extra L/R</key>
+		<string>ขอบซ้าย/ขวาเพิ่มเติมของหน้าจอโฮม</string>
+		<key>Home extra left</key>
+		<string>ขอบซ้ายเพิ่มเติมของหน้าจอโฮม</string>
+		<key>Home extra right</key>
+		<string>ขอบขวาเพิ่มเติมของหน้าจอโฮม</string>
+		<key>Home extra T/B</key>
+		<string>ขอบบน/ล่างเพิ่มเติมของหน้าจอโฮม</string>
+		<key>Home extra top</key>
+		<string>ขอบบนเพิ่มเติมของหน้าจอโฮม</string>
+		<key>Home icon scale</key>
+		<string>สเกลไอคอนหน้าจอโฮม</string>
+		<key>Home Layout Extras</key>
+		<string>ตัวเลือกเค้าโครงหน้าจอโฮมเพิ่มเติม</string>
+		<key>Home rows</key>
+		<string>แถวหน้าจอโฮม</string>
+		<key>Home scale %</key>
+		<string>สเกลหน้าจอโฮม (%)</string>
+		<key>How to write Cyanide tweaks</key>
+		<string>วิธีเขียนทวีคสำหรับ Cyanide</string>
+		<key>I Understand</key>
+		<string>ฉันเข้าใจ</string>
+		<key>Import Custom Theme…</key>
+		<string>นำเข้าธีมที่กำหนดเอง…</string>
 		<key>Import Failed</key>
 		<string>นำเข้าไม่สำเร็จ</string>
+		<key>Import failed.</key>
+		<string>นำเข้าไม่สำเร็จ</string>
+		<key>Import from Files…</key>
+		<string>นำเข้าจากแอปไฟล์…</string>
+		<key>Import Originals…</key>
+		<string>นำเข้าต้นฉบับ…</string>
+		<key>Import Style (.passthm/ZIP)…</key>
+		<string>นำเข้าสไตล์ (.passthm/ZIP)…</string>
+		<key>Import Theme Archive (ZIP/DEB)…</key>
+		<string>นำเข้าไฟล์เก็บถาวรของธีม (ZIP/DEB)…</string>
+		<key>Import Theme Folder…</key>
+		<string>นำเข้าโฟลเดอร์ธีม…</string>
 		<key>In Development</key>
 		<string>กำลังพัฒนา</string>
+		<key>Include Dock</key>
+		<string>รวม Dock</string>
 		<key>Install</key>
 		<string>ติดตั้ง</string>
+		<key>Install pending</key>
+		<string>รอติดตั้ง</string>
+		<key>Install Running</key>
+		<string>กำลังติดตั้ง</string>
 		<key>Installed</key>
 		<string>ติดตั้งแล้ว</string>
+		<key>INSTALLED</key>
+		<string>ติดตั้งแล้ว</string>
+		<key>Invalid Value</key>
+		<string>ค่าไม่ถูกต้อง</string>
+		<key>iPad Dock</key>
+		<string>Dock ของ iPad</string>
+		<key>JIT Enabler</key>
+		<string>ตัวเปิดใช้ JIT</string>
+		<key>Keep app alive in background</key>
+		<string>ให้แอปทำงานอยู่เบื้องหลัง</string>
+		<key>Keep Current</key>
+		<string>เก็บค่าปัจจุบัน</string>
+		<key>Kernel access could not be acquired. Run the chain, then try again.</key>
+		<string>ไม่สามารถเข้าถึงเคอร์เนลได้ ให้เรียกใช้ชุดการทำงานแล้วลองอีกครั้ง</string>
+		<key>Kernel access isn't active. Run the chain first, then try again.</key>
+		<string>ยังไม่ได้เปิดใช้การเข้าถึงเคอร์เนล ให้เรียกใช้ชุดการทำงานก่อนแล้วลองอีกครั้ง</string>
 		<key>Kernel Access Ready</key>
 		<string>การเข้าถึงเคอร์เนลพร้อม</string>
 		<key>Kernel access for the tools</key>
 		<string>การเข้าถึงเคอร์เนลสำหรับเครื่องมือ</string>
 		<key>Kernel access is not active. Run the chain first.</key>
 		<string>การเข้าถึงเคอร์เนลไม่ได้เปิดใช้งาน กรุณารันเชนก่อน</string>
+		<key>Key</key>
+		<string>คีย์</string>
+		<key>Key Exists</key>
+		<string>มีคีย์นี้อยู่แล้ว</string>
 		<key>Language</key>
 		<string>ภาษา</string>
 		<key>Language changed</key>
 		<string>เปลี่ยนภาษาแล้ว</string>
+		<key>Lara</key>
+		<string>Lara</string>
 		<key>Later</key>
 		<string>ภายหลัง</string>
+		<key>Launch Options</key>
+		<string>ตัวเลือกการเริ่มต้น</string>
+		<key>Layout</key>
+		<string>เค้าโครง</string>
+		<key>Legacy Chip Floor</key>
+		<string>ค่าขั้นต่ำของชิปรุ่นเก่า</string>
+		<key>Legacy chip floor</key>
+		<string>ค่าขั้นต่ำของชิปรุ่นเก่า</string>
+		<key>Level</key>
+		<string>ระดับ</string>
+		<key>LiveWP</key>
+		<string>LiveWP</string>
+		<key>Load Saved Override</key>
+		<string>โหลดการตั้งค่าแทนที่ที่บันทึกไว้</string>
 		<key>Loading…</key>
 		<string>กำลังโหลด…</string>
+		<key>Location Services</key>
+		<string>บริการหาตำแหน่งที่ตั้ง</string>
+		<key>Location Services Link</key>
+		<string>ลิงก์บริการหาตำแหน่งที่ตั้ง</string>
+		<key>Location Services links</key>
+		<string>ลิงก์บริการหาตำแหน่งที่ตั้ง</string>
+		<key>Location Services Off</key>
+		<string>ปิดบริการหาตำแหน่งที่ตั้งแล้ว</string>
+		<key>Location Services On</key>
+		<string>เปิดบริการหาตำแหน่งที่ตั้งแล้ว</string>
+		<key>Location Simulator</key>
+		<string>ตัวจำลองตำแหน่งที่ตั้ง</string>
+		<key>Lock Screen Duration</key>
+		<string>ระยะเวลาของหน้าจอล็อก</string>
 		<key>Log</key>
 		<string>บันทึก</string>
+		<key>Major Cities…</key>
+		<string>เมืองใหญ่…</string>
+		<key>Measuring Caches</key>
+		<string>กำลังคำนวณขนาดแคช…</string>
+		<key>MobileGestalt</key>
+		<string>MobileGestalt</string>
+		<key>Mode</key>
+		<string>โหมด</string>
+		<key>Model Name</key>
+		<string>ชื่อรุ่น</string>
+		<key>Model name</key>
+		<string>ชื่อรุ่น</string>
+		<key>Modern</key>
+		<string>สมัยใหม่</string>
+		<key>Multi-watch switch</key>
+		<string>สลับระหว่าง Apple Watch หลายเรือน</string>
+		<key>Multi-Watch Switching</key>
+		<string>สลับระหว่าง Apple Watch หลายเรือน</string>
+		<key>Name</key>
+		<string>ชื่อ</string>
+		<key>Network speed only</key>
+		<string>เฉพาะความเร็วเครือข่าย</string>
+		<key>New File</key>
+		<string>ไฟล์ใหม่</string>
+		<key>New Folder</key>
+		<string>โฟลเดอร์ใหม่</string>
+		<key>NiceBar Lite</key>
+		<string>NiceBar Lite</string>
+		<key>No longer pending</key>
+		<string>ไม่ได้รอดำเนินการแล้ว</string>
+		<key>No matches.</key>
+		<string>ไม่พบรายการที่ตรงกัน</string>
+		<key>No matching container was found for this app.</key>
+		<string>ไม่พบคอนเทนเนอร์ที่ตรงกับแอปนี้</string>
+		<key>Not a regular file.</key>
+		<string>ไม่ใช่ไฟล์ปกติ</string>
+		<key>Not Now</key>
+		<string>ไม่ใช่ตอนนี้</string>
+		<key>Not Saved</key>
+		<string>ไม่ได้บันทึก</string>
 		<key>Not Supported</key>
 		<string>ไม่รองรับ</string>
+		<key>NSBar</key>
+		<string>NSBar</string>
 		<key>OK</key>
 		<string>ตกลง</string>
 		<key>Off</key>
 		<string>ปิด</string>
 		<key>On</key>
 		<string>เปิด</string>
+		<key>On Disk</key>
+		<string>บนดิสก์</string>
+		<key>Open as Text / Hex / Info</key>
+		<string>เปิดเป็นข้อความ / ฐานสิบหก / ข้อมูล</string>
 		<key>Open QuickLoader</key>
 		<string>เปิด QuickLoader</string>
+		<key>Original Backup</key>
+		<string>ข้อมูลสำรองต้นฉบับ</string>
+		<key>Originals</key>
+		<string>ต้นฉบับ</string>
+		<key>OTA Updates</key>
+		<string>การอัปเดต OTA</string>
+		<key>Other page icons</key>
+		<string>ไอคอนหน้าอื่น</string>
+		<key>Overwrite</key>
+		<string>เขียนทับ</string>
 		<key>Packages</key>
 		<string>แพ็กเกจ</string>
+		<key>Page icon counts</key>
+		<string>จำนวนไอคอนต่อหน้า</string>
+		<key>Passcode Style</key>
+		<string>สไตล์รหัส</string>
+		<key>Performance HUD</key>
+		<string>ตัวแสดงประสิทธิภาพ</string>
+		<key>Permissions</key>
+		<string>สิทธิ์การเข้าถึง</string>
+		<key>Permissions…</key>
+		<string>สิทธิ์การเข้าถึง…</string>
+		<key>Position</key>
+		<string>ตำแหน่ง</string>
+		<key>Powercuff</key>
+		<string>Powercuff</string>
+		<key>Preparing respring…</key>
+		<string>กำลังเตรียมเริ่มการทำงานของ SpringBoard ใหม่…</string>
+		<key>Preparing…</key>
+		<string>กำลังเตรียม…</string>
 		<key>Process Viewer</key>
 		<string>ดูโปรเซส</string>
+		<key>Queue</key>
+		<string>คิว</string>
 		<key>Quick Actions</key>
 		<string>การทำงานด่วน</string>
+		<key>QuickLoader</key>
+		<string>QuickLoader</string>
+		<key>Quit</key>
+		<string>ปิด</string>
+		<key>Read Current Status</key>
+		<string>อ่านสถานะปัจจุบัน</string>
+		<key>Read Current Value</key>
+		<string>อ่านค่าปัจจุบัน</string>
+		<key>Reboot</key>
+		<string>เริ่มการทำงานของอุปกรณ์ใหม่</string>
+		<key>Reboot?</key>
+		<string>เริ่มการทำงานของอุปกรณ์ใหม่หรือไม่</string>
+		<key>Rebooting…</key>
+		<string>กำลังเริ่มการทำงานใหม่…</string>
+		<key>Recent</key>
+		<string>ล่าสุด</string>
+		<key>Reclaimable</key>
+		<string>พื้นที่ที่คืนได้</string>
 		<key>Refresh</key>
 		<string>รีเฟรช</string>
+		<key>Refresh rate</key>
+		<string>อัตราการรีเฟรช</string>
 		<key>Refreshing sources…</key>
 		<string>กำลังรีเฟรชแหล่งซอฟต์แวร์…</string>
+		<key>Remind Me Later</key>
+		<string>เตือนฉันภายหลัง</string>
+		<key>Removal pending</key>
+		<string>รอนำออก</string>
 		<key>Remove</key>
 		<string>ลบ</string>
+		<key>Remove (restore stock)</key>
+		<string>นำออก (คืนค่าเดิม)</string>
+		<key>Remove from Favorites</key>
+		<string>นำออกจากรายการโปรด</string>
+		<key>Remove Override</key>
+		<string>ลบการตั้งค่าแทนที่</string>
+		<key>Rename</key>
+		<string>เปลี่ยนชื่อ</string>
+		<key>Rename Key</key>
+		<string>เปลี่ยนชื่อคีย์</string>
+		<key>Repo sources</key>
+		<string>แหล่งที่เก็บซอฟต์แวร์</string>
 		<key>Report a Bug</key>
 		<string>รายงานบั๊ก</string>
+		<key>RepoTweaks</key>
+		<string>RepoTweaks</string>
+		<key>Reset</key>
+		<string>รีเซ็ต</string>
+		<key>Reset All Packages</key>
+		<string>รีเซ็ตแพ็กเกจทั้งหมด</string>
+		<key>Reset All Packages?</key>
+		<string>รีเซ็ตแพ็กเกจทั้งหมดหรือไม่</string>
+		<key>Reset to Defaults</key>
+		<string>คืนค่าเริ่มต้น</string>
+		<key>Resistance</key>
+		<string>แรงต้าน</string>
+		<key>Respring</key>
+		<string>เริ่มการทำงานของ SpringBoard ใหม่</string>
+		<key>Respring and reboot links</key>
+		<string>ลิงก์เริ่มการทำงานของ SpringBoard และอุปกรณ์ใหม่</string>
+		<key>Respring?</key>
+		<string>เริ่มการทำงานของ SpringBoard ใหม่หรือไม่</string>
 		<key>Restart Cyanide to apply the new language.</key>
 		<string>รีสตาร์ท Cyanide เพื่อใช้ภาษาใหม่</string>
+		<key>Restore</key>
+		<string>กู้คืน</string>
+		<key>Restore Icon Layout</key>
+		<string>กู้คืนการจัดวางไอคอน</string>
+		<key>Restore Original</key>
+		<string>กู้คืนต้นฉบับ</string>
+		<key>Restore Original Digits</key>
+		<string>กู้คืนตัวเลขเดิม</string>
+		<key>Restore Original?</key>
+		<string>กู้คืนต้นฉบับหรือไม่</string>
+		<key>Restore Original…</key>
+		<string>กู้คืนต้นฉบับ…</string>
+		<key>Restore Real Location</key>
+		<string>คืนค่าตำแหน่งจริง</string>
+		<key>Restore Stock Switcher</key>
+		<string>กู้คืนตัวสลับแอปเดิม</string>
 		<key>Retry</key>
 		<string>ลองใหม่</string>
+		<key>Retry interval</key>
+		<string>ช่วงเวลาระหว่างการลองใหม่</string>
+		<key>Revert</key>
+		<string>ย้อนกลับ</string>
+		<key>Review Folders</key>
+		<string>ตรวจสอบโฟลเดอร์</string>
+		<key>Run Again</key>
+		<string>เรียกใช้อีกครั้ง</string>
 		<key>Run Exploit</key>
 		<string>รัน Exploit</string>
 		<key>Run a local .js tweak file</key>
 		<string>รันไฟล์ tweak .js ในเครื่อง</string>
 		<key>Save</key>
 		<string>บันทึก</string>
+		<key>Save Changes?</key>
+		<string>บันทึกการเปลี่ยนแปลงหรือไม่</string>
+		<key>Save Not Verified</key>
+		<string>ยังไม่ได้ยืนยันการบันทึก</string>
+		<key>Saved originals</key>
+		<string>ต้นฉบับที่บันทึกไว้</string>
+		<key>SBCustomizer</key>
+		<string>SBCustomizer</string>
+		<key>Scanning processes…</key>
+		<string>กำลังสแกนโปรเซส…</string>
+		<key>Screen Shape</key>
+		<string>รูปร่างหน้าจอ</string>
 		<key>Search</key>
 		<string>ค้นหา</string>
+		<key>Search all tweaks</key>
+		<string>ค้นหาทวีคทั้งหมด</string>
+		<key>See All Changes</key>
+		<string>ดูการเปลี่ยนแปลงทั้งหมด</string>
 		<key>See and quit running processes</key>
 		<string>ดูและปิดโปรเซสที่กำลังทำงาน</string>
+		<key>See This Version's Changes</key>
+		<string>ดูการเปลี่ยนแปลงในเวอร์ชันนี้</string>
+		<key>Select All Apps</key>
+		<string>เลือกแอปทั้งหมด</string>
+		<key>Select Automatically</key>
+		<string>เลือกอัตโนมัติ</string>
+		<key>Select by Hand</key>
+		<string>เลือกด้วยตนเอง</string>
+		<key>Select Items to Clean</key>
+		<string>เลือกรายการที่จะล้าง</string>
+		<key>Select Large Caches (50 MB+)</key>
+		<string>เลือกแคชขนาดใหญ่ (50 MB ขึ้นไป)</string>
+		<key>Select Theme</key>
+		<string>เลือกธีม</string>
+		<key>Select Video</key>
+		<string>เลือกวิดีโอ</string>
+		<key>Selected Dock app</key>
+		<string>แอปที่เลือกสำหรับ Dock</string>
+		<key>Selected Style</key>
+		<string>สไตล์ที่เลือก</string>
+		<key>Selected Theme</key>
+		<string>ธีมที่เลือก</string>
+		<key>Selected Video</key>
+		<string>วิดีโอที่เลือก</string>
+		<key>Session note</key>
+		<string>หมายเหตุเซสชัน</string>
+		<key>Set</key>
+		<string>ตั้งค่า</string>
+		<key>Set Exact Coordinates…</key>
+		<string>ตั้งค่าพิกัดที่แน่นอน…</string>
 		<key>Settings</key>
 		<string>การตั้งค่า</string>
+		<key>Setup floor</key>
+		<string>ค่าขั้นต่ำของการตั้งค่า</string>
+		<key>Setup Protocol Floor</key>
+		<string>เวอร์ชันขั้นต่ำของโปรโตคอลการตั้งค่า</string>
 		<key>Share</key>
 		<string>แชร์</string>
+		<key>Share Log</key>
+		<string>แชร์บันทึก</string>
+		<key>Share…</key>
+		<string>แชร์…</string>
+		<key>Short date</key>
+		<string>วันที่แบบสั้น</string>
+		<key>Show</key>
+		<string>แสดง</string>
+		<key>Show Advanced</key>
+		<string>แสดงตัวเลือกขั้นสูง</string>
+		<key>Show Backups</key>
+		<string>แสดงข้อมูลสำรอง</string>
+		<key>Show CPU %</key>
+		<string>แสดงการใช้งาน CPU (%)</string>
+		<key>Show CPU / RAM labels</key>
+		<string>แสดงป้ายกำกับ CPU/RAM</string>
+		<key>Show CPU/RAM labels</key>
+		<string>แสดงป้ายกำกับ CPU/RAM</string>
+		<key>Show dock labels</key>
+		<string>แสดงชื่อไอคอนใน Dock</string>
+		<key>Show in File Browser</key>
+		<string>แสดงในเบราว์เซอร์ไฟล์</string>
+		<key>Show in Folder</key>
+		<string>แสดงในโฟลเดอร์</string>
+		<key>Show net speed</key>
+		<string>แสดงความเร็วเครือข่าย</string>
+		<key>Show network speed</key>
+		<string>แสดงความเร็วเครือข่าย</string>
+		<key>Simulate Current Target</key>
+		<string>จำลองตำแหน่งเป้าหมายปัจจุบัน</string>
+		<key>Simulate Rockaway Test Point</key>
+		<string>จำลองจุดทดสอบที่ Rockaway</string>
+		<key>Size of This Folder</key>
+		<string>ขนาดของโฟลเดอร์นี้</string>
+		<key>Skip This Version</key>
+		<string>ข้ามเวอร์ชันนี้</string>
+		<key>SnowBoard Lite</key>
+		<string>SnowBoard Lite</string>
 		<key>Some sources could not be refreshed</key>
 		<string>ไม่สามารถรีเฟรชบางแหล่งได้</string>
+		<key>Sort By</key>
+		<string>จัดเรียงตาม</string>
+		<key>Source Failed</key>
+		<string>แหล่งที่มามีข้อผิดพลาด</string>
 		<key>Source refresh failed</key>
 		<string>รีเฟรชแหล่งซอฟต์แวร์ไม่สำเร็จ</string>
 		<key>Sources</key>
 		<string>แหล่งซอฟต์แวร์</string>
 		<key>Sources up to date</key>
 		<string>แหล่งซอฟต์แวร์เป็นปัจจุบัน</string>
+		<key>Spin resist.</key>
+		<string>แรงต้านการหมุน</string>
+		<key>Spin resistance</key>
+		<string>แรงต้านการหมุน</string>
+		<key>Spoof Device Model</key>
+		<string>ปลอมรุ่นอุปกรณ์</string>
+		<key>SpringBoard could not be reached.</key>
+		<string>ไม่สามารถเชื่อมต่อกับ SpringBoard ได้</string>
+		<key>SpringBoard Tools</key>
+		<string>เครื่องมือ SpringBoard</string>
 		<key>SpringBoard tweaks for stock iOS</key>
 		<string>Tweaks SpringBoard สำหรับ iOS ดั้งเดิม</string>
+		<key>Starting…</key>
+		<string>กำลังเริ่ม…</string>
+		<key>StatBar</key>
+		<string>StatBar</string>
+		<key>Strength</key>
+		<string>ความแรง</string>
+		<key>Style</key>
+		<string>สไตล์</string>
+		<key>Supervision</key>
+		<string>การควบคุมดูแล</string>
+		<key>Switch to Fastest</key>
+		<string>เปลี่ยนเป็นเร็วที่สุด</string>
+		<key>Switch to pe_v3</key>
+		<string>เปลี่ยนเป็น pe_v3</string>
+		<key>Switcher style</key>
+		<string>สไตล์ตัวสลับแอป</string>
 		<key>System</key>
 		<string>ระบบ</string>
 		<key>System Info</key>
 		<string>ข้อมูลระบบ</string>
+		<key>Target</key>
+		<string>เป้าหมาย</string>
+		<key>Tendies Wallpapers</key>
+		<string>Tendies Wallpapers</string>
+		<key>The file could not be written.</key>
+		<string>เขียนไฟล์ไม่ได้</string>
+		<key>The file was changed or replaced since you opened it. Overwrite it with your version?</key>
+		<string>ไฟล์ถูกแก้ไขหรือแทนที่หลังจากที่คุณเปิด เขียนทับด้วยเวอร์ชันของคุณหรือไม่</string>
+		<key>The list of disabled daemons could not be read. Check the log.</key>
+		<string>อ่านรายการดีมอนที่ปิดใช้งานไม่ได้ โปรดตรวจสอบบันทึก</string>
+		<key>Theme</key>
+		<string>ธีม</string>
+		<key>Theme Format Guide</key>
+		<string>คู่มือรูปแบบธีม</string>
+		<key>This package cannot be queued yet.</key>
+		<string>ยังเพิ่มแพ็กเกจนี้ลงในคิวไม่ได้</string>
+		<key>This queue row was already applied or cleared.</key>
+		<string>รายการในคิวนี้ถูกใช้หรือล้างไปแล้ว</string>
+		<key>Time + seconds</key>
+		<string>เวลาและวินาที</string>
 		<key>Tools</key>
 		<string>เครื่องมือ</string>
+		<key>Top side inset</key>
+		<string>ระยะขอบด้านข้างส่วนบน</string>
+		<key>Top Y offset</key>
+		<string>ออฟเซ็ต Y ด้านบน</string>
+		<key>Traffic History</key>
+		<string>ประวัติการรับส่งข้อมูล</string>
+		<key>Try the pe_v3 exploit path?</key>
+		<string>ลองใช้วิธี Exploit pe_v3 หรือไม่</string>
 		<key>Turn system services off and on</key>
 		<string>เปิด/ปิดบริการระบบ</string>
+		<key>Turning Off Location Services</key>
+		<string>กำลังปิดบริการหาตำแหน่งที่ตั้ง</string>
+		<key>Turning On Location Services</key>
+		<string>กำลังเปิดบริการหาตำแหน่งที่ตั้ง</string>
+		<key>Tweak apply speed</key>
+		<string>ความเร็วในการใช้ทวีค</string>
+		<key>Tweak SDK</key>
+		<string>SDK สำหรับทวีค</string>
 		<key>Tweaks</key>
-		<string>Tweaks</string>
+		<string>ทวีค</string>
+		<key>Twitter</key>
+		<string>Twitter</string>
+		<key>Unfinished Saves</key>
+		<string>การบันทึกที่ยังไม่เสร็จ</string>
+		<key>Unknown Source</key>
+		<string>ไม่ทราบแหล่งที่มา</string>
+		<key>Unsupported</key>
+		<string>ไม่รองรับ</string>
+		<key>UNSUPPORTED</key>
+		<string>ไม่รองรับ</string>
+		<key>Up to Date</key>
+		<string>เป็นเวอร์ชันล่าสุดแล้ว</string>
+		<key>Update</key>
+		<string>อัปเดต</string>
+		<key>UPDATE</key>
+		<string>อัปเดต</string>
+		<key>Update Available</key>
+		<string>มีรายการอัปเดต</string>
+		<key>Upside Down</key>
+		<string>กลับหัว</string>
+		<key>Use Original</key>
+		<string>ใช้ต้นฉบับ</string>
+		<key>Use watchOS Range 99/23/10/6</key>
+		<string>ใช้ช่วง watchOS 99/23/10/6</string>
+		<key>Verbose logging</key>
+		<string>บันทึกแบบละเอียด</string>
+		<key>Video</key>
+		<string>วิดีโอ</string>
+		<key>View Log</key>
+		<string>ดูบันทึก</string>
+		<key>View Release</key>
+		<string>ดูรุ่นที่เผยแพร่</string>
+		<key>Wallet Card Art</key>
+		<string>ภาพบัตรในแอปกระเป๋าสตางค์</string>
+		<key>Watch Pairing</key>
+		<string>การจับคู่ Apple Watch</string>
+		<key>watchOS limit</key>
+		<string>ขีดจำกัดของ watchOS</string>
+		<key>watchOS Pairing Limit</key>
+		<string>ขีดจำกัดในการจับคู่ watchOS</string>
+		<key>Weekday + time</key>
+		<string>วันในสัปดาห์และเวลา</string>
 		<key>What's New</key>
 		<string>มีอะไรใหม่</string>
 		<key>Working</key>

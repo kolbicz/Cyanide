@@ -14,19 +14,55 @@
 			<key>pattern</key>
 			<string>^([0-9]+) pending changes?$</string>
 			<key>template</key>
-			<string>$1 thay đổi đang chờ</string>
+			<string>Thay đổi đang chờ: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) changes?$</string>
+			<key>template</key>
+			<string>Thay đổi: $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) apps?$</string>
 			<key>template</key>
-			<string>$1 ứng dụng</string>
+			<string>Ứng dụng: $1</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
 			<string>^([0-9]+) packages?$</string>
 			<key>template</key>
-			<string>$1 gói</string>
+			<string>Gói: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) updates?$</string>
+			<key>template</key>
+			<string>Cập nhật: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) items?$</string>
+			<key>template</key>
+			<string>Mục: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) files?$</string>
+			<key>template</key>
+			<string>Tệp: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) folders?$</string>
+			<key>template</key>
+			<string>Thư mục: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) selected$</string>
+			<key>template</key>
+			<string>Đã chọn $1 mục</string>
 		</dict>
 		<dict>
 			<key>pattern</key>
@@ -34,19 +70,155 @@
 			<key>template</key>
 			<string>Đã cài đặt $1</string>
 		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) active$</string>
+			<key>template</key>
+			<string>Đang hoạt động: $1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending$</string>
+			<key>template</key>
+			<string>Đang chờ: $1</string>
+		</dict>
 	</array>
 	<key>strings</key>
 	<dict>
+		<key>Invalid request.</key>
+		<string>Yêu cầu không hợp lệ.</string>
+		<key>Another Location Services request came first.</key>
+		<string>Một yêu cầu Dịch vụ định vị khác đã đến trước.</string>
+		<key>A newer Location Services request replaced this one.</key>
+		<string>Một yêu cầu Dịch vụ định vị mới hơn đã thay thế yêu cầu này.</string>
+		<key>The Location Services request was superseded before it finished.</key>
+		<string>Yêu cầu Dịch vụ định vị đã bị thay thế trước khi hoàn tất.</string>
+		<key>The Location Services retry was superseded before it finished.</key>
+		<string>Lần thử lại Dịch vụ định vị đã bị thay thế trước khi hoàn tất.</string>
+		<key>Location Services request cancelled: kernel access was not acquired.</key>
+		<string>Đã hủy yêu cầu Dịch vụ định vị: không có được quyền truy cập kernel.</string>
+		<key>Cyanide has no saved kernel access (for example after a restart). Open Cyanide and run it once, then try again.</key>
+		<string>Cyanide không có quyền truy cập kernel đã lưu (ví dụ sau khi khởi động lại). Hãy mở Cyanide và chạy một lần, rồi thử lại.</string>
+		<key>(no information)</key>
+		<string>(không có thông tin)</string>
+		<key>12h time</key>
+		<string>Dạng 12 giờ</string>
+		<key>24h time</key>
+		<string>Dạng 24 giờ</string>
+		<key>3-App Limit</key>
+		<string>Giới hạn 3 ứng dụng</string>
+		<key>@_kolbicz</key>
+		<string>@_kolbicz</string>
+		<key>A18 bounded search</key>
+		<string>Tìm kiếm giới hạn trên A18</string>
+		<key>A18 exploit path</key>
+		<string>Phương thức khai thác A18</string>
+		<key>A18 interleaved search</key>
+		<string>Tìm kiếm xen kẽ trên A18</string>
+		<key>A18 memory shaping</key>
+		<string>Điều chỉnh bố trí bộ nhớ A18</string>
 		<key>About</key>
 		<string>Giới thiệu</string>
+		<key>Access</key>
+		<string>Quyền truy cập</string>
+		<key>Accuracy</key>
+		<string>Độ chính xác</string>
+		<key>Activate</key>
+		<string>Kích hoạt</string>
+		<key>Activate Supervision</key>
+		<string>Bật chế độ giám sát</string>
+		<key>Activation pending</key>
+		<string>Đang chờ kích hoạt</string>
+		<key>Activity</key>
+		<string>Hoạt động</string>
+		<key>Add</key>
+		<string>Thêm</string>
 		<key>Add a Source</key>
 		<string>Thêm nguồn</string>
+		<key>Add Source</key>
+		<string>Thêm nguồn</string>
+		<key>Add to Cache Cleaner?</key>
+		<string>Thêm vào Dọn dẹp Bộ nhớ đệm?</string>
+		<key>Add to Favorites</key>
+		<string>Thêm vào mục yêu thích</string>
+		<key>All Keys</key>
+		<string>Tất cả khóa</string>
+		<key>Altitude</key>
+		<string>Độ cao</string>
+		<key>Always On</key>
+		<string>Màn hình luôn bật</string>
+		<key>Always Select</key>
+		<string>Luôn chọn</string>
+		<key>An install is still running.</key>
+		<string>Quá trình cài đặt vẫn đang chạy.</string>
+		<key>Another action is already running. Try again when it has finished.</key>
+		<string>Đã có thao tác khác đang chạy. Hãy thử lại khi thao tác đó hoàn tất.</string>
+		<key>Another action is running. Try again in a moment.</key>
+		<string>Đang thực hiện thao tác khác. Hãy thử lại sau giây lát.</string>
+		<key>Another Cyanide action is running. Try again in a moment.</key>
+		<string>Cyanide đang thực hiện thao tác khác. Hãy thử lại sau giây lát.</string>
+		<key>Another Cyanide action is still running. Try again in a moment.</key>
+		<string>Cyanide vẫn đang thực hiện thao tác khác. Hãy thử lại sau giây lát.</string>
+		<key>App Decrypt</key>
+		<string>Giải mã ứng dụng</string>
+		<key>App Icon</key>
+		<string>Biểu tượng ứng dụng</string>
+		<key>App Switcher Grid</key>
+		<string>Lưới trình chuyển đổi ứng dụng</string>
 		<key>Apply</key>
 		<string>Áp dụng</string>
+		<key>Apply Changes</key>
+		<string>Áp dụng thay đổi</string>
+		<key>Apply Changes?</key>
+		<string>Áp dụng thay đổi?</string>
+		<key>Apply Installer changes right away</key>
+		<string>Áp dụng ngay thay đổi của trình cài đặt</string>
+		<key>Apply Lock Screen Duration</key>
+		<string>Áp dụng thời lượng màn hình khóa</string>
+		<key>Apply Now</key>
+		<string>Áp dụng ngay</string>
+		<key>Apply Pairing Override</key>
+		<string>Áp dụng tùy chỉnh ghép đôi</string>
+		<key>Apply Style Now</key>
+		<string>Áp dụng kiểu ngay</string>
+		<key>Apps in use are left alone.</key>
+		<string>Bỏ qua ứng dụng đang được sử dụng.</string>
+		<key>Arrange icons by page</key>
+		<string>Sắp xếp biểu tượng theo trang</string>
+		<key>Arrange pages</key>
+		<string>Sắp xếp các trang</string>
+		<key>Auto Refresh</key>
+		<string>Tự động làm mới</string>
+		<key>Auto-add Dock app</key>
+		<string>Tự động thêm ứng dụng vào Dock</string>
+		<key>Auto-add selected app to Dock</key>
+		<string>Tự động thêm ứng dụng đã chọn vào Dock</string>
+		<key>Auto-retry attempt cap</key>
+		<string>Giới hạn số lần tự thử lại</string>
+		<key>Auto-retry failed chain runs</key>
+		<string>Tự thử lại khi chuỗi thực thi thất bại</string>
+		<key>Axon Lite</key>
+		<string>Axon Lite</string>
 		<key>Back</key>
 		<string>Quay lại</string>
 		<key>Battery, uptime, kernel access, storage</key>
 		<string>Pin, thời gian hoạt động, quyền truy cập kernel, lưu trữ</string>
+		<key>Before You Clean</key>
+		<string>Trước khi dọn dẹp</string>
+		<key>Block if flashlight is on — In progress</key>
+		<string>Chặn khi đèn pin bật — Đang phát triển</string>
+		<key>Block if media is active — In progress</key>
+		<string>Chặn khi đang phát phương tiện — Đang phát triển</string>
+		<key>Block in Low Power Mode — In progress</key>
+		<string>Chặn trong Chế độ nguồn điện thấp — Đang phát triển</string>
+		<key>Blockers</key>
+		<string>Điều kiện chặn</string>
+		<key>Bottom side inset</key>
+		<string>Lề bên phía dưới</string>
+		<key>Bottom Y offset</key>
+		<string>Độ lệch Y phía dưới</string>
+		<key>Bounce</key>
+		<string>Độ nảy</string>
 		<key>Browse and install JS tweaks from repos</key>
 		<string>Duyệt và cài đặt JS tweak từ kho</string>
 		<key>Browse files and edit plists</key>
@@ -55,130 +227,780 @@
 		<string>Dọn dẹp Bộ đệm</string>
 		<key>Cancel</key>
 		<string>Hủy</string>
+		<key>Cannot Queue Install</key>
+		<string>Không thể thêm lượt cài đặt vào hàng đợi</string>
+		<key>CarPlay is unlocked.</key>
+		<string>Đã mở khóa CarPlay.</string>
+		<key>CarPlay without Siri</key>
+		<string>CarPlay không cần Siri</string>
+		<key>Celsius</key>
+		<string>Độ C</string>
+		<key>Center X offset</key>
+		<string>Độ lệch X ở giữa</string>
+		<key>Change Type</key>
+		<string>Đổi kiểu dữ liệu</string>
+		<key>Changes are locked.</key>
+		<string>Tính năng thay đổi đang bị khóa.</string>
+		<key>Changes are locked. Unlock them in the File Browser first.</key>
+		<string>Tính năng thay đổi đang bị khóa. Hãy mở khóa trong trình duyệt tệp trước.</string>
+		<key>Check Failed</key>
+		<string>Không thể kiểm tra bản cập nhật</string>
+		<key>Check for Updates</key>
+		<string>Kiểm tra bản cập nhật</string>
+		<key>Checking Crash Logs</key>
+		<string>Đang kiểm tra nhật ký sự cố…</string>
+		<key>Checking for Updates…</key>
+		<string>Đang kiểm tra bản cập nhật…</string>
+		<key>Checking Running Apps</key>
+		<string>Đang kiểm tra ứng dụng đang chạy…</string>
+		<key>Choose Position…</key>
+		<string>Chọn vị trí…</string>
 		<key>Choose the app language.</key>
 		<string>Chọn ngôn ngữ ứng dụng.</string>
+		<key>Choose Video…</key>
+		<string>Chọn video…</string>
+		<key>Classic</key>
+		<string>Cổ điển</string>
+		<key>Clean</key>
+		<string>Dọn dẹp</string>
+		<key>Clean Caches?</key>
+		<string>Dọn bộ nhớ đệm?</string>
+		<key>Clean Up</key>
+		<string>Dọn dẹp</string>
+		<key>Clean Up?</key>
+		<string>Bắt đầu dọn dẹp?</string>
+		<key>Cleaning…</key>
+		<string>Đang dọn dẹp…</string>
+		<key>Clear</key>
+		<string>Xóa</string>
+		<key>Clear Queue</key>
+		<string>Xóa hàng đợi</string>
+		<key>Clear Queue?</key>
+		<string>Xóa hàng đợi?</string>
+		<key>Clear Selected Style</key>
+		<string>Bỏ kiểu đã chọn</string>
+		<key>Clear Selected Theme</key>
+		<string>Bỏ chủ đề đã chọn</string>
+		<key>Clear Selected Video</key>
+		<string>Bỏ video đã chọn</string>
 		<key>Close</key>
 		<string>Đóng</string>
+		<key>Coefficient</key>
+		<string>Hệ số</string>
 		<key>Community</key>
 		<string>Cộng đồng</string>
 		<key>Confirm</key>
 		<string>Xác nhận</string>
+		<key>Contents</key>
+		<string>Nội dung</string>
 		<key>Continue</key>
 		<string>Tiếp tục</string>
+		<key>Copied</key>
+		<string>Đã sao chép</string>
 		<key>Copy</key>
 		<string>Sao chép</string>
+		<key>Copy Identifier</key>
+		<string>Sao chép mã định danh</string>
+		<key>Copy Key</key>
+		<string>Sao chép khóa</string>
+		<key>Copy Path</key>
+		<string>Sao chép đường dẫn</string>
+		<key>Copy Value</key>
+		<string>Sao chép giá trị</string>
+		<key>Counting…</key>
+		<string>Đang đếm…</string>
+		<key>Create</key>
+		<string>Tạo</string>
+		<key>Current (with unsaved changes)</key>
+		<string>Hiện tại (có thay đổi chưa lưu)</string>
+		<key>Cut</key>
+		<string>Cắt</string>
 		<key>Daemon Manager</key>
 		<string>Quản lý daemon</string>
+		<key>Data</key>
+		<string>Dữ liệu</string>
+		<key>Date</key>
+		<string>Ngày</string>
+		<key>Date + weekday</key>
+		<string>Ngày và thứ</string>
+		<key>Deactivate</key>
+		<string>Hủy kích hoạt</string>
+		<key>Deactivate Supervision</key>
+		<string>Tắt chế độ giám sát</string>
+		<key>Deactivation pending</key>
+		<string>Đang chờ hủy kích hoạt</string>
+		<key>Debug Overlay</key>
+		<string>Lớp phủ gỡ lỗi</string>
 		<key>Delete</key>
 		<string>Xóa</string>
+		<key>Delete Backups</key>
+		<string>Xóa bản sao lưu</string>
+		<key>Delete?</key>
+		<string>Xóa?</string>
+		<key>Deselect All</key>
+		<string>Bỏ chọn tất cả</string>
+		<key>Device Artwork</key>
+		<string>Đồ họa thiết bị</string>
+		<key>Digits in style</key>
+		<string>Chữ số trong kiểu</string>
 		<key>Disable</key>
 		<string>Tắt</string>
+		<key>Disable OTA Updates</key>
+		<string>Tắt cập nhật OTA</string>
 		<key>Disabled</key>
 		<string>Đã tắt</string>
+		<key>DISABLED</key>
+		<string>ĐÃ TẮT</string>
+		<key>Discard</key>
+		<string>Hủy bỏ</string>
+		<key>Discard all pending activation / deactivation changes.</key>
+		<string>Hủy mọi thay đổi kích hoạt và hủy kích hoạt đang chờ.</string>
+		<key>Discard Changes</key>
+		<string>Hủy thay đổi</string>
+		<key>Discard Changes?</key>
+		<string>Hủy thay đổi?</string>
+		<key>Dock</key>
+		<string>Dock</string>
+		<key>Dock app bundle ID</key>
+		<string>ID gói của ứng dụng trong Dock</string>
+		<key>Dock extra L/R</key>
+		<string>Lề trái/phải bổ sung của Dock</string>
+		<key>Dock extra left</key>
+		<string>Lề trái bổ sung của Dock</string>
+		<key>Dock extra right</key>
+		<string>Lề phải bổ sung của Dock</string>
+		<key>Dock icon scale</key>
+		<string>Tỷ lệ biểu tượng Dock</string>
+		<key>Dock icons</key>
+		<string>Biểu tượng Dock</string>
+		<key>Dock scale %</key>
+		<string>Tỷ lệ Dock (%)</string>
 		<key>Done</key>
 		<string>Xong</string>
+		<key>Drag Coefficient</key>
+		<string>Hệ số lực cản</string>
+		<key>Duplicate</key>
+		<string>Nhân bản</string>
+		<key>Duration</key>
+		<string>Thời lượng</string>
+		<key>Edit</key>
+		<string>Sửa</string>
+		<key>Empty folder.</key>
+		<string>Thư mục trống.</string>
 		<key>Enable</key>
 		<string>Bật</string>
+		<key>Enable Always On</key>
+		<string>Bật Màn hình luôn bật</string>
+		<key>Enable Changes?</key>
+		<string>Cho phép thay đổi?</string>
+		<key>Enable OTA Updates</key>
+		<string>Bật cập nhật OTA</string>
 		<key>Enabled</key>
 		<string>Đã bật</string>
+		<key>Explosion Pulse</key>
+		<string>Xung nổ</string>
+		<key>Export</key>
+		<string>Xuất</string>
+		<key>Export Originals…</key>
+		<string>Xuất bản gốc…</string>
+		<key>Faster tweak apply</key>
+		<string>Áp dụng tinh chỉnh nhanh hơn</string>
+		<key>FastLockX Lite</key>
+		<string>FastLockX Lite</string>
+		<key>Favorites</key>
+		<string>Mục yêu thích</string>
 		<key>File Browser</key>
 		<string>Trình duyệt tệp</string>
+		<key>File Changed</key>
+		<string>Tệp đã thay đổi</string>
+		<key>Filesystem access is not available.</key>
+		<string>Không thể truy cập hệ thống tệp.</string>
+		<key>Filter apps</key>
+		<string>Lọc ứng dụng</string>
+		<key>Filter by name or PID</key>
+		<string>Lọc theo tên hoặc PID</string>
+		<key>Filter keys and values</key>
+		<string>Lọc khóa và giá trị</string>
+		<key>Filter this folder</key>
+		<string>Lọc thư mục này</string>
+		<key>Finding Apps</key>
+		<string>Đang tìm ứng dụng…</string>
+		<key>First page icons</key>
+		<string>Biểu tượng trang đầu tiên</string>
+		<key>Folder Size</key>
+		<string>Kích thước thư mục</string>
+		<key>Folders to Clean</key>
+		<string>Thư mục cần dọn dẹp</string>
 		<key>Follow System</key>
-		<string>Theo hệ thống</string>
+		<string>Dùng ngôn ngữ hệ thống</string>
+		<key>Font Overwrite</key>
+		<string>Ghi đè phông chữ</string>
+		<key>Force Quit</key>
+		<string>Buộc thoát</string>
 		<key>Free space from app caches</key>
 		<string>Giải phóng dung lượng từ bộ nhớ đệm ứng dụng</string>
+		<key>Friction</key>
+		<string>Ma sát</string>
 		<key>Get Started</key>
 		<string>Bắt đầu</string>
+		<key>Getting File Access</key>
+		<string>Đang lấy quyền truy cập tệp…</string>
 		<key>GitHub</key>
 		<string>GitHub</string>
+		<key>Go</key>
+		<string>Đi</string>
+		<key>Go to Container Top</key>
+		<string>Đi tới thư mục gốc của vùng chứa</string>
+		<key>Go to Folder</key>
+		<string>Đi đến thư mục</string>
+		<key>Go to Folder…</key>
+		<string>Đi đến thư mục…</string>
+		<key>Got It</key>
+		<string>Đã hiểu</string>
+		<key>Gravity Lite</key>
+		<string>Gravity Lite</string>
+		<key>Gravity strength</key>
+		<string>Cường độ trọng lực</string>
+		<key>Hidden Settings</key>
+		<string>Cài đặt ẩn</string>
+		<key>Hide</key>
+		<string>Ẩn</string>
+		<key>Hide icon labels</key>
+		<string>Ẩn nhãn biểu tượng</string>
 		<key>Home</key>
 		<string>Trang chủ</string>
+		<key>Home columns</key>
+		<string>Số cột Màn hình chính</string>
+		<key>Home extra bottom</key>
+		<string>Lề dưới bổ sung của Màn hình chính</string>
+		<key>Home extra L/R</key>
+		<string>Lề trái/phải bổ sung của Màn hình chính</string>
+		<key>Home extra left</key>
+		<string>Lề trái bổ sung của Màn hình chính</string>
+		<key>Home extra right</key>
+		<string>Lề phải bổ sung của Màn hình chính</string>
+		<key>Home extra T/B</key>
+		<string>Lề trên/dưới bổ sung của Màn hình chính</string>
+		<key>Home extra top</key>
+		<string>Lề trên bổ sung của Màn hình chính</string>
+		<key>Home icon scale</key>
+		<string>Tỷ lệ biểu tượng Màn hình chính</string>
+		<key>Home Layout Extras</key>
+		<string>Tùy chọn bố cục Màn hình chính bổ sung</string>
+		<key>Home rows</key>
+		<string>Số hàng Màn hình chính</string>
+		<key>Home scale %</key>
+		<string>Tỷ lệ Màn hình chính (%)</string>
+		<key>How to write Cyanide tweaks</key>
+		<string>Cách viết tinh chỉnh cho Cyanide</string>
+		<key>I Understand</key>
+		<string>Tôi hiểu</string>
+		<key>Import Custom Theme…</key>
+		<string>Nhập chủ đề tùy chỉnh…</string>
 		<key>Import Failed</key>
 		<string>Nhập thất bại</string>
+		<key>Import failed.</key>
+		<string>Không thể nhập.</string>
+		<key>Import from Files…</key>
+		<string>Nhập từ Tệp…</string>
+		<key>Import Originals…</key>
+		<string>Nhập bản gốc…</string>
+		<key>Import Style (.passthm/ZIP)…</key>
+		<string>Nhập kiểu (.passthm/ZIP)…</string>
+		<key>Import Theme Archive (ZIP/DEB)…</key>
+		<string>Nhập gói chủ đề (ZIP/DEB)…</string>
+		<key>Import Theme Folder…</key>
+		<string>Nhập thư mục chủ đề…</string>
 		<key>In Development</key>
 		<string>Đang phát triển</string>
+		<key>Include Dock</key>
+		<string>Bao gồm Dock</string>
 		<key>Install</key>
 		<string>Cài đặt</string>
+		<key>Install pending</key>
+		<string>Đang chờ cài đặt</string>
+		<key>Install Running</key>
+		<string>Đang cài đặt</string>
 		<key>Installed</key>
 		<string>Đã cài đặt</string>
+		<key>INSTALLED</key>
+		<string>ĐÃ CÀI ĐẶT</string>
+		<key>Invalid Value</key>
+		<string>Giá trị không hợp lệ</string>
+		<key>iPad Dock</key>
+		<string>Dock của iPad</string>
+		<key>JIT Enabler</key>
+		<string>Bật JIT</string>
+		<key>Keep app alive in background</key>
+		<string>Duy trì ứng dụng chạy nền</string>
+		<key>Keep Current</key>
+		<string>Giữ cài đặt hiện tại</string>
+		<key>Kernel access could not be acquired. Run the chain, then try again.</key>
+		<string>Không thể lấy quyền truy cập kernel. Hãy chạy chuỗi thực thi rồi thử lại.</string>
+		<key>Kernel access isn't active. Run the chain first, then try again.</key>
+		<string>Quyền truy cập kernel chưa được kích hoạt. Hãy chạy chuỗi thực thi trước rồi thử lại.</string>
 		<key>Kernel Access Ready</key>
 		<string>Quyền truy cập kernel sẵn sàng</string>
 		<key>Kernel access for the tools</key>
 		<string>Quyền truy cập kernel cho công cụ</string>
 		<key>Kernel access is not active. Run the chain first.</key>
 		<string>Quyền truy cập kernel chưa hoạt động. Hãy chạy chuỗi trước.</string>
+		<key>Key</key>
+		<string>Khóa</string>
+		<key>Key Exists</key>
+		<string>Khóa đã tồn tại</string>
 		<key>Language</key>
 		<string>Ngôn ngữ</string>
 		<key>Language changed</key>
 		<string>Đã đổi ngôn ngữ</string>
+		<key>Lara</key>
+		<string>Lara</string>
 		<key>Later</key>
 		<string>Để sau</string>
+		<key>Launch Options</key>
+		<string>Tùy chọn khởi chạy</string>
+		<key>Layout</key>
+		<string>Bố cục</string>
+		<key>Legacy Chip Floor</key>
+		<string>Ngưỡng dưới của chip cũ</string>
+		<key>Legacy chip floor</key>
+		<string>Ngưỡng dưới của chip cũ</string>
+		<key>Level</key>
+		<string>Mức</string>
+		<key>LiveWP</key>
+		<string>LiveWP</string>
+		<key>Load Saved Override</key>
+		<string>Nạp tùy chỉnh đã lưu</string>
 		<key>Loading…</key>
 		<string>Đang tải…</string>
+		<key>Location Services</key>
+		<string>Dịch vụ định vị</string>
+		<key>Location Services Link</key>
+		<string>Liên kết Dịch vụ định vị</string>
+		<key>Location Services links</key>
+		<string>Liên kết Dịch vụ định vị</string>
+		<key>Location Services Off</key>
+		<string>Dịch vụ định vị đã tắt</string>
+		<key>Location Services On</key>
+		<string>Dịch vụ định vị đã bật</string>
+		<key>Location Simulator</key>
+		<string>Trình mô phỏng vị trí</string>
+		<key>Lock Screen Duration</key>
+		<string>Thời lượng màn hình khóa</string>
 		<key>Log</key>
 		<string>Nhật ký</string>
+		<key>Major Cities…</key>
+		<string>Các thành phố lớn…</string>
+		<key>Measuring Caches</key>
+		<string>Đang tính dung lượng bộ nhớ đệm…</string>
+		<key>MobileGestalt</key>
+		<string>MobileGestalt</string>
+		<key>Mode</key>
+		<string>Chế độ</string>
+		<key>Model Name</key>
+		<string>Tên kiểu máy</string>
+		<key>Model name</key>
+		<string>Tên kiểu máy</string>
+		<key>Modern</key>
+		<string>Hiện đại</string>
+		<key>Multi-watch switch</key>
+		<string>Chuyển giữa nhiều Apple Watch</string>
+		<key>Multi-Watch Switching</key>
+		<string>Chuyển giữa nhiều Apple Watch</string>
+		<key>Name</key>
+		<string>Tên</string>
+		<key>Network speed only</key>
+		<string>Chỉ tốc độ mạng</string>
+		<key>New File</key>
+		<string>Tệp mới</string>
+		<key>New Folder</key>
+		<string>Thư mục mới</string>
+		<key>NiceBar Lite</key>
+		<string>NiceBar Lite</string>
+		<key>No longer pending</key>
+		<string>Không còn chờ xử lý</string>
+		<key>No matches.</key>
+		<string>Không có kết quả phù hợp.</string>
+		<key>No matching container was found for this app.</key>
+		<string>Không tìm thấy vùng chứa tương ứng với ứng dụng này.</string>
+		<key>Not a regular file.</key>
+		<string>Đây không phải tệp thông thường.</string>
+		<key>Not Now</key>
+		<string>Để sau</string>
+		<key>Not Saved</key>
+		<string>Chưa lưu</string>
 		<key>Not Supported</key>
 		<string>Không hỗ trợ</string>
+		<key>NSBar</key>
+		<string>NSBar</string>
 		<key>OK</key>
 		<string>OK</string>
 		<key>Off</key>
 		<string>Tắt</string>
 		<key>On</key>
 		<string>Bật</string>
+		<key>On Disk</key>
+		<string>Trên ổ đĩa</string>
+		<key>Open as Text / Hex / Info</key>
+		<string>Mở dưới dạng văn bản / hex / thông tin</string>
 		<key>Open QuickLoader</key>
 		<string>Mở QuickLoader</string>
+		<key>Original Backup</key>
+		<string>Bản sao lưu gốc</string>
+		<key>Originals</key>
+		<string>Bản gốc</string>
+		<key>OTA Updates</key>
+		<string>Cập nhật OTA</string>
+		<key>Other page icons</key>
+		<string>Biểu tượng các trang khác</string>
+		<key>Overwrite</key>
+		<string>Ghi đè</string>
 		<key>Packages</key>
 		<string>Gói</string>
+		<key>Page icon counts</key>
+		<string>Số biểu tượng mỗi trang</string>
+		<key>Passcode Style</key>
+		<string>Kiểu mật mã</string>
+		<key>Performance HUD</key>
+		<string>Lớp hiển thị hiệu năng</string>
+		<key>Permissions</key>
+		<string>Quyền</string>
+		<key>Permissions…</key>
+		<string>Quyền…</string>
+		<key>Position</key>
+		<string>Vị trí</string>
+		<key>Powercuff</key>
+		<string>Powercuff</string>
+		<key>Preparing respring…</key>
+		<string>Đang chuẩn bị khởi động lại SpringBoard…</string>
+		<key>Preparing…</key>
+		<string>Đang chuẩn bị…</string>
 		<key>Process Viewer</key>
 		<string>Trình xem tiến trình</string>
+		<key>Queue</key>
+		<string>Hàng đợi</string>
 		<key>Quick Actions</key>
 		<string>Thao tác nhanh</string>
+		<key>QuickLoader</key>
+		<string>QuickLoader</string>
+		<key>Quit</key>
+		<string>Thoát</string>
+		<key>Read Current Status</key>
+		<string>Đọc trạng thái hiện tại</string>
+		<key>Read Current Value</key>
+		<string>Đọc giá trị hiện tại</string>
+		<key>Reboot</key>
+		<string>Khởi động lại thiết bị</string>
+		<key>Reboot?</key>
+		<string>Khởi động lại thiết bị?</string>
+		<key>Rebooting…</key>
+		<string>Đang khởi động lại…</string>
+		<key>Recent</key>
+		<string>Gần đây</string>
+		<key>Reclaimable</key>
+		<string>Dung lượng có thể giải phóng</string>
 		<key>Refresh</key>
 		<string>Làm mới</string>
+		<key>Refresh rate</key>
+		<string>Tần suất làm mới</string>
 		<key>Refreshing sources…</key>
 		<string>Đang làm mới nguồn…</string>
+		<key>Remind Me Later</key>
+		<string>Nhắc tôi sau</string>
+		<key>Removal pending</key>
+		<string>Đang chờ gỡ bỏ</string>
 		<key>Remove</key>
 		<string>Xóa</string>
+		<key>Remove (restore stock)</key>
+		<string>Gỡ bỏ (khôi phục mặc định)</string>
+		<key>Remove from Favorites</key>
+		<string>Xóa khỏi mục yêu thích</string>
+		<key>Remove Override</key>
+		<string>Xóa tùy chỉnh</string>
+		<key>Rename</key>
+		<string>Đổi tên</string>
+		<key>Rename Key</key>
+		<string>Đổi tên khóa</string>
+		<key>Repo sources</key>
+		<string>Nguồn kho lưu trữ</string>
 		<key>Report a Bug</key>
 		<string>Báo lỗi</string>
+		<key>RepoTweaks</key>
+		<string>RepoTweaks</string>
+		<key>Reset</key>
+		<string>Đặt lại</string>
+		<key>Reset All Packages</key>
+		<string>Đặt lại tất cả gói</string>
+		<key>Reset All Packages?</key>
+		<string>Đặt lại tất cả gói?</string>
+		<key>Reset to Defaults</key>
+		<string>Khôi phục mặc định</string>
+		<key>Resistance</key>
+		<string>Lực cản</string>
+		<key>Respring</key>
+		<string>Khởi động lại SpringBoard</string>
+		<key>Respring and reboot links</key>
+		<string>Liên kết khởi động lại SpringBoard và thiết bị</string>
+		<key>Respring?</key>
+		<string>Khởi động lại SpringBoard?</string>
 		<key>Restart Cyanide to apply the new language.</key>
 		<string>Khởi động lại Cyanide để áp dụng ngôn ngữ mới.</string>
+		<key>Restore</key>
+		<string>Khôi phục</string>
+		<key>Restore Icon Layout</key>
+		<string>Khôi phục bố cục biểu tượng</string>
+		<key>Restore Original</key>
+		<string>Khôi phục bản gốc</string>
+		<key>Restore Original Digits</key>
+		<string>Khôi phục chữ số gốc</string>
+		<key>Restore Original?</key>
+		<string>Khôi phục bản gốc?</string>
+		<key>Restore Original…</key>
+		<string>Khôi phục bản gốc…</string>
+		<key>Restore Real Location</key>
+		<string>Khôi phục vị trí thực</string>
+		<key>Restore Stock Switcher</key>
+		<string>Khôi phục trình chuyển đổi mặc định</string>
 		<key>Retry</key>
 		<string>Thử lại</string>
+		<key>Retry interval</key>
+		<string>Khoảng thời gian thử lại</string>
+		<key>Revert</key>
+		<string>Hoàn tác</string>
+		<key>Review Folders</key>
+		<string>Kiểm tra thư mục</string>
+		<key>Run Again</key>
+		<string>Chạy lại</string>
 		<key>Run Exploit</key>
 		<string>Chạy exploit</string>
 		<key>Run a local .js tweak file</key>
 		<string>Chạy tệp tweak .js cục bộ</string>
 		<key>Save</key>
 		<string>Lưu</string>
+		<key>Save Changes?</key>
+		<string>Lưu thay đổi?</string>
+		<key>Save Not Verified</key>
+		<string>Chưa xác minh việc lưu</string>
+		<key>Saved originals</key>
+		<string>Bản gốc đã lưu</string>
+		<key>SBCustomizer</key>
+		<string>SBCustomizer</string>
+		<key>Scanning processes…</key>
+		<string>Đang quét tiến trình…</string>
+		<key>Screen Shape</key>
+		<string>Hình dạng màn hình</string>
 		<key>Search</key>
 		<string>Tìm kiếm</string>
+		<key>Search all tweaks</key>
+		<string>Tìm trong mọi tinh chỉnh</string>
+		<key>See All Changes</key>
+		<string>Xem mọi thay đổi</string>
 		<key>See and quit running processes</key>
 		<string>Xem và kết thúc tiến trình đang chạy</string>
+		<key>See This Version's Changes</key>
+		<string>Xem thay đổi của phiên bản này</string>
+		<key>Select All Apps</key>
+		<string>Chọn tất cả ứng dụng</string>
+		<key>Select Automatically</key>
+		<string>Chọn tự động</string>
+		<key>Select by Hand</key>
+		<string>Chọn thủ công</string>
+		<key>Select Items to Clean</key>
+		<string>Chọn các mục cần dọn dẹp</string>
+		<key>Select Large Caches (50 MB+)</key>
+		<string>Chọn bộ nhớ đệm lớn (từ 50 MB)</string>
+		<key>Select Theme</key>
+		<string>Chọn chủ đề</string>
+		<key>Select Video</key>
+		<string>Chọn video</string>
+		<key>Selected Dock app</key>
+		<string>Ứng dụng Dock đã chọn</string>
+		<key>Selected Style</key>
+		<string>Kiểu đã chọn</string>
+		<key>Selected Theme</key>
+		<string>Chủ đề đã chọn</string>
+		<key>Selected Video</key>
+		<string>Video đã chọn</string>
+		<key>Session note</key>
+		<string>Ghi chú phiên</string>
+		<key>Set</key>
+		<string>Đặt</string>
+		<key>Set Exact Coordinates…</key>
+		<string>Đặt tọa độ chính xác…</string>
 		<key>Settings</key>
 		<string>Cài đặt</string>
+		<key>Setup floor</key>
+		<string>Ngưỡng dưới của thiết lập</string>
+		<key>Setup Protocol Floor</key>
+		<string>Phiên bản tối thiểu của giao thức thiết lập</string>
 		<key>Share</key>
 		<string>Chia sẻ</string>
+		<key>Share Log</key>
+		<string>Chia sẻ nhật ký</string>
+		<key>Share…</key>
+		<string>Chia sẻ…</string>
+		<key>Short date</key>
+		<string>Ngày dạng ngắn</string>
+		<key>Show</key>
+		<string>Hiển thị</string>
+		<key>Show Advanced</key>
+		<string>Hiện tùy chọn nâng cao</string>
+		<key>Show Backups</key>
+		<string>Hiện bản sao lưu</string>
+		<key>Show CPU %</key>
+		<string>Hiện mức sử dụng CPU (%)</string>
+		<key>Show CPU / RAM labels</key>
+		<string>Hiện nhãn CPU/RAM</string>
+		<key>Show CPU/RAM labels</key>
+		<string>Hiện nhãn CPU/RAM</string>
+		<key>Show dock labels</key>
+		<string>Hiện nhãn trong Dock</string>
+		<key>Show in File Browser</key>
+		<string>Hiển thị trong trình duyệt tệp</string>
+		<key>Show in Folder</key>
+		<string>Hiển thị trong thư mục</string>
+		<key>Show net speed</key>
+		<string>Hiện tốc độ mạng</string>
+		<key>Show network speed</key>
+		<string>Hiện tốc độ mạng</string>
+		<key>Simulate Current Target</key>
+		<string>Mô phỏng vị trí đích hiện tại</string>
+		<key>Simulate Rockaway Test Point</key>
+		<string>Mô phỏng điểm kiểm thử Rockaway</string>
+		<key>Size of This Folder</key>
+		<string>Kích thước thư mục này</string>
+		<key>Skip This Version</key>
+		<string>Bỏ qua phiên bản này</string>
+		<key>SnowBoard Lite</key>
+		<string>SnowBoard Lite</string>
 		<key>Some sources could not be refreshed</key>
 		<string>Không thể làm mới một số nguồn</string>
+		<key>Sort By</key>
+		<string>Sắp xếp theo</string>
+		<key>Source Failed</key>
+		<string>Lỗi nguồn</string>
 		<key>Source refresh failed</key>
 		<string>Làm mới nguồn thất bại</string>
 		<key>Sources</key>
 		<string>Nguồn</string>
 		<key>Sources up to date</key>
 		<string>Nguồn đã cập nhật</string>
+		<key>Spin resist.</key>
+		<string>Lực cản xoay</string>
+		<key>Spin resistance</key>
+		<string>Lực cản xoay</string>
+		<key>Spoof Device Model</key>
+		<string>Giả lập kiểu máy khác</string>
+		<key>SpringBoard could not be reached.</key>
+		<string>Không thể kết nối với SpringBoard.</string>
+		<key>SpringBoard Tools</key>
+		<string>Công cụ SpringBoard</string>
 		<key>SpringBoard tweaks for stock iOS</key>
 		<string>Tweaks SpringBoard cho iOS gốc</string>
+		<key>Starting…</key>
+		<string>Đang khởi động…</string>
+		<key>StatBar</key>
+		<string>StatBar</string>
+		<key>Strength</key>
+		<string>Cường độ</string>
+		<key>Style</key>
+		<string>Kiểu</string>
+		<key>Supervision</key>
+		<string>Chế độ giám sát</string>
+		<key>Switch to Fastest</key>
+		<string>Chuyển sang Nhanh nhất</string>
+		<key>Switch to pe_v3</key>
+		<string>Chuyển sang pe_v3</string>
+		<key>Switcher style</key>
+		<string>Kiểu trình chuyển đổi ứng dụng</string>
 		<key>System</key>
 		<string>Hệ thống</string>
 		<key>System Info</key>
 		<string>Thông tin hệ thống</string>
+		<key>Target</key>
+		<string>Mục tiêu</string>
+		<key>Tendies Wallpapers</key>
+		<string>Tendies Wallpapers</string>
+		<key>The file could not be written.</key>
+		<string>Không thể ghi tệp.</string>
+		<key>The file was changed or replaced since you opened it. Overwrite it with your version?</key>
+		<string>Tệp đã bị sửa hoặc thay thế kể từ lúc bạn mở. Ghi đè bằng phiên bản của bạn?</string>
+		<key>The list of disabled daemons could not be read. Check the log.</key>
+		<string>Không thể đọc danh sách daemon đã tắt. Hãy xem nhật ký.</string>
+		<key>Theme</key>
+		<string>Chủ đề</string>
+		<key>Theme Format Guide</key>
+		<string>Hướng dẫn định dạng chủ đề</string>
+		<key>This package cannot be queued yet.</key>
+		<string>Chưa thể thêm gói này vào hàng đợi.</string>
+		<key>This queue row was already applied or cleared.</key>
+		<string>Mục này trong hàng đợi đã được áp dụng hoặc xóa.</string>
+		<key>Time + seconds</key>
+		<string>Giờ và giây</string>
 		<key>Tools</key>
 		<string>Công cụ</string>
+		<key>Top side inset</key>
+		<string>Lề bên phía trên</string>
+		<key>Top Y offset</key>
+		<string>Độ lệch Y phía trên</string>
+		<key>Traffic History</key>
+		<string>Lịch sử lưu lượng mạng</string>
+		<key>Try the pe_v3 exploit path?</key>
+		<string>Thử phương thức khai thác pe_v3?</string>
 		<key>Turn system services off and on</key>
 		<string>Bật/tắt dịch vụ hệ thống</string>
+		<key>Turning Off Location Services</key>
+		<string>Đang tắt Dịch vụ định vị</string>
+		<key>Turning On Location Services</key>
+		<string>Đang bật Dịch vụ định vị</string>
+		<key>Tweak apply speed</key>
+		<string>Tốc độ áp dụng tinh chỉnh</string>
+		<key>Tweak SDK</key>
+		<string>SDK tinh chỉnh</string>
 		<key>Tweaks</key>
-		<string>Tweaks</string>
+		<string>Tinh chỉnh</string>
+		<key>Twitter</key>
+		<string>Twitter</string>
+		<key>Unfinished Saves</key>
+		<string>Lượt lưu chưa hoàn tất</string>
+		<key>Unknown Source</key>
+		<string>Nguồn không xác định</string>
+		<key>Unsupported</key>
+		<string>Không được hỗ trợ</string>
+		<key>UNSUPPORTED</key>
+		<string>KHÔNG ĐƯỢC HỖ TRỢ</string>
+		<key>Up to Date</key>
+		<string>Đã cập nhật</string>
+		<key>Update</key>
+		<string>Cập nhật</string>
+		<key>UPDATE</key>
+		<string>CẬP NHẬT</string>
+		<key>Update Available</key>
+		<string>Có bản cập nhật</string>
+		<key>Upside Down</key>
+		<string>Lật ngược</string>
+		<key>Use Original</key>
+		<string>Dùng bản gốc</string>
+		<key>Use watchOS Range 99/23/10/6</key>
+		<string>Dùng phạm vi watchOS 99/23/10/6</string>
+		<key>Verbose logging</key>
+		<string>Ghi nhật ký chi tiết</string>
+		<key>Video</key>
+		<string>Video</string>
+		<key>View Log</key>
+		<string>Xem nhật ký</string>
+		<key>View Release</key>
+		<string>Xem bản phát hành</string>
+		<key>Wallet Card Art</key>
+		<string>Hình ảnh thẻ trong Ví</string>
+		<key>Watch Pairing</key>
+		<string>Ghép đôi Apple Watch</string>
+		<key>watchOS limit</key>
+		<string>Giới hạn watchOS</string>
+		<key>watchOS Pairing Limit</key>
+		<string>Giới hạn ghép đôi watchOS</string>
+		<key>Weekday + time</key>
+		<string>Thứ và giờ</string>
 		<key>What's New</key>
 		<string>Có gì mới</string>
 		<key>Working</key>

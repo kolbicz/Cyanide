@@ -18,6 +18,12 @@
 		</dict>
 		<dict>
 			<key>pattern</key>
+			<string>^([0-9]+) changes?$</string>
+			<key>template</key>
+			<string>$1 değişiklik</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
 			<string>^([0-9]+) apps?$</string>
 			<key>template</key>
 			<string>$1 uygulama</string>
@@ -30,23 +36,189 @@
 		</dict>
 		<dict>
 			<key>pattern</key>
+			<string>^([0-9]+) updates?$</string>
+			<key>template</key>
+			<string>$1 güncelleme</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) items?$</string>
+			<key>template</key>
+			<string>$1 öğe</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) files?$</string>
+			<key>template</key>
+			<string>$1 dosya</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) folders?$</string>
+			<key>template</key>
+			<string>$1 klasör</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) selected$</string>
+			<key>template</key>
+			<string>$1 seçili</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
 			<string>^([0-9]+) installed$</string>
 			<key>template</key>
 			<string>$1 yüklü</string>
 		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) active$</string>
+			<key>template</key>
+			<string>$1 etkin</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending$</string>
+			<key>template</key>
+			<string>$1 bekliyor</string>
+		</dict>
 	</array>
 	<key>strings</key>
 	<dict>
+		<key>Invalid request.</key>
+		<string>Geçersiz istek.</string>
+		<key>Another Location Services request came first.</key>
+		<string>Başka bir Konum Servisleri isteği önce geldi.</string>
+		<key>A newer Location Services request replaced this one.</key>
+		<string>Daha yeni bir Konum Servisleri isteği bunun yerini aldı.</string>
+		<key>The Location Services request was superseded before it finished.</key>
+		<string>Konum Servisleri isteği bitmeden önce başka bir istekle değiştirildi.</string>
+		<key>The Location Services retry was superseded before it finished.</key>
+		<string>Konum Servisleri yeniden denemesi bitmeden önce başka bir istekle değiştirildi.</string>
+		<key>Location Services request cancelled: kernel access was not acquired.</key>
+		<string>Konum Servisleri isteği iptal edildi: çekirdek erişimi alınamadı.</string>
+		<key>Cyanide has no saved kernel access (for example after a restart). Open Cyanide and run it once, then try again.</key>
+		<string>Cyanide’ın kayıtlı çekirdek erişimi yok (örneğin yeniden başlatmadan sonra). Cyanide’ı açıp bir kez çalıştırın, sonra tekrar deneyin.</string>
+		<key>(no information)</key>
+		<string>(bilgi yok)</string>
+		<key>12h time</key>
+		<string>12 saat biçimi</string>
+		<key>24h time</key>
+		<string>24 saat biçimi</string>
+		<key>3-App Limit</key>
+		<string>3 uygulama sınırı</string>
+		<key>@_kolbicz</key>
+		<string>@_kolbicz</string>
+		<key>A18 bounded search</key>
+		<string>A18 sınırlı araması</string>
+		<key>A18 exploit path</key>
+		<string>A18 exploit yöntemi</string>
+		<key>A18 interleaved search</key>
+		<string>A18 dönüşümlü araması</string>
+		<key>A18 memory shaping</key>
+		<string>A18 bellek düzenleme</string>
 		<key>About</key>
 		<string>Hakkında</string>
+		<key>Access</key>
+		<string>Erişim</string>
+		<key>Accuracy</key>
+		<string>Doğruluk</string>
+		<key>Activate</key>
+		<string>Etkinleştir</string>
+		<key>Activate Supervision</key>
+		<string>Denetimi etkinleştir</string>
+		<key>Activation pending</key>
+		<string>Etkinleştirme bekliyor</string>
+		<key>Activity</key>
+		<string>Etkinlik</string>
+		<key>Add</key>
+		<string>Ekle</string>
 		<key>Add a Source</key>
 		<string>Kaynak ekle</string>
+		<key>Add Source</key>
+		<string>Kaynak ekle</string>
+		<key>Add to Cache Cleaner?</key>
+		<string>Önbellek Temizleyici’ye eklensin mi?</string>
+		<key>Add to Favorites</key>
+		<string>Favorilere ekle</string>
+		<key>All Keys</key>
+		<string>Tüm anahtarlar</string>
+		<key>Altitude</key>
+		<string>Rakım</string>
+		<key>Always On</key>
+		<string>Hep Açık Ekran</string>
+		<key>Always Select</key>
+		<string>Her zaman seç</string>
+		<key>An install is still running.</key>
+		<string>Yükleme hâlâ sürüyor.</string>
+		<key>Another action is already running. Try again when it has finished.</key>
+		<string>Başka bir işlem zaten sürüyor. Tamamlanınca yeniden deneyin.</string>
+		<key>Another action is running. Try again in a moment.</key>
+		<string>Başka bir işlem sürüyor. Biraz sonra yeniden deneyin.</string>
+		<key>Another Cyanide action is running. Try again in a moment.</key>
+		<string>Cyanide başka bir işlem yürütüyor. Biraz sonra yeniden deneyin.</string>
+		<key>Another Cyanide action is still running. Try again in a moment.</key>
+		<string>Cyanide başka bir işlemi hâlâ yürütüyor. Biraz sonra yeniden deneyin.</string>
+		<key>App Decrypt</key>
+		<string>Uygulama şifresini çöz</string>
+		<key>App Icon</key>
+		<string>Uygulama simgesi</string>
+		<key>App Switcher Grid</key>
+		<string>Uygulama değiştirici ızgarası</string>
 		<key>Apply</key>
 		<string>Uygula</string>
+		<key>Apply Changes</key>
+		<string>Değişiklikleri uygula</string>
+		<key>Apply Changes?</key>
+		<string>Değişiklikler uygulansın mı?</string>
+		<key>Apply Installer changes right away</key>
+		<string>Yükleyici değişikliklerini hemen uygula</string>
+		<key>Apply Lock Screen Duration</key>
+		<string>Kilit ekranı süresini uygula</string>
+		<key>Apply Now</key>
+		<string>Şimdi uygula</string>
+		<key>Apply Pairing Override</key>
+		<string>Özel eşleme ayarlarını uygula</string>
+		<key>Apply Style Now</key>
+		<string>Stili şimdi uygula</string>
+		<key>Apps in use are left alone.</key>
+		<string>Kullanılan uygulamalar atlanır.</string>
+		<key>Arrange icons by page</key>
+		<string>Simgeleri sayfaya göre düzenle</string>
+		<key>Arrange pages</key>
+		<string>Sayfaları düzenle</string>
+		<key>Auto Refresh</key>
+		<string>Otomatik yenileme</string>
+		<key>Auto-add Dock app</key>
+		<string>Uygulamayı Dock’a otomatik ekle</string>
+		<key>Auto-add selected app to Dock</key>
+		<string>Seçili uygulamayı Dock’a otomatik ekle</string>
+		<key>Auto-retry attempt cap</key>
+		<string>Otomatik yeniden deneme sınırı</string>
+		<key>Auto-retry failed chain runs</key>
+		<string>Zincir başarısız olursa otomatik yeniden dene</string>
+		<key>Axon Lite</key>
+		<string>Axon Lite</string>
 		<key>Back</key>
 		<string>Geri</string>
 		<key>Battery, uptime, kernel access, storage</key>
 		<string>Pil, çalışma süresi, çekirdek erişimi, depolama</string>
+		<key>Before You Clean</key>
+		<string>Temizliğe başlamadan önce</string>
+		<key>Block if flashlight is on — In progress</key>
+		<string>El feneri açıksa engelle — Geliştiriliyor</string>
+		<key>Block if media is active — In progress</key>
+		<string>Ortam oynatılıyorsa engelle — Geliştiriliyor</string>
+		<key>Block in Low Power Mode — In progress</key>
+		<string>Düşük Güç Modu’nda engelle — Geliştiriliyor</string>
+		<key>Blockers</key>
+		<string>Engelleme koşulları</string>
+		<key>Bottom side inset</key>
+		<string>Alt yan boşluk</string>
+		<key>Bottom Y offset</key>
+		<string>Alt Y ofseti</string>
+		<key>Bounce</key>
+		<string>Sekme</string>
 		<key>Browse and install JS tweaks from repos</key>
 		<string>Depolardan JS tweak'lerine göz at ve yükle</string>
 		<key>Browse files and edit plists</key>
@@ -55,130 +227,780 @@
 		<string>Önbellek Temizleyici</string>
 		<key>Cancel</key>
 		<string>İptal</string>
+		<key>Cannot Queue Install</key>
+		<string>Yükleme kuyruğa alınamıyor</string>
+		<key>CarPlay is unlocked.</key>
+		<string>CarPlay’in kilidi açıldı.</string>
+		<key>CarPlay without Siri</key>
+		<string>Siri olmadan CarPlay</string>
+		<key>Celsius</key>
+		<string>Santigrat</string>
+		<key>Center X offset</key>
+		<string>Merkez X ofseti</string>
+		<key>Change Type</key>
+		<string>Türü değiştir</string>
+		<key>Changes are locked.</key>
+		<string>Değişiklikler kilitli.</string>
+		<key>Changes are locked. Unlock them in the File Browser first.</key>
+		<string>Değişiklikler kilitli. Önce dosya tarayıcısından kilidi açın.</string>
+		<key>Check Failed</key>
+		<string>Denetim başarısız</string>
+		<key>Check for Updates</key>
+		<string>Güncellemeleri denetle</string>
+		<key>Checking Crash Logs</key>
+		<string>Çökme günlükleri denetleniyor…</string>
+		<key>Checking for Updates…</key>
+		<string>Güncellemeler denetleniyor…</string>
+		<key>Checking Running Apps</key>
+		<string>Çalışan uygulamalar denetleniyor…</string>
+		<key>Choose Position…</key>
+		<string>Konum seç…</string>
 		<key>Choose the app language.</key>
 		<string>Uygulama dilini seçin.</string>
+		<key>Choose Video…</key>
+		<string>Video seç…</string>
+		<key>Classic</key>
+		<string>Klasik</string>
+		<key>Clean</key>
+		<string>Temizle</string>
+		<key>Clean Caches?</key>
+		<string>Önbellekler temizlensin mi?</string>
+		<key>Clean Up</key>
+		<string>Temizle</string>
+		<key>Clean Up?</key>
+		<string>Temizlik başlatılsın mı?</string>
+		<key>Cleaning…</key>
+		<string>Temizleniyor…</string>
+		<key>Clear</key>
+		<string>Temizle</string>
+		<key>Clear Queue</key>
+		<string>Kuyruğu temizle</string>
+		<key>Clear Queue?</key>
+		<string>Kuyruk temizlensin mi?</string>
+		<key>Clear Selected Style</key>
+		<string>Seçili stili kaldır</string>
+		<key>Clear Selected Theme</key>
+		<string>Seçili temayı kaldır</string>
+		<key>Clear Selected Video</key>
+		<string>Seçili videoyu kaldır</string>
 		<key>Close</key>
 		<string>Kapat</string>
+		<key>Coefficient</key>
+		<string>Katsayı</string>
 		<key>Community</key>
 		<string>Topluluk</string>
 		<key>Confirm</key>
 		<string>Onayla</string>
+		<key>Contents</key>
+		<string>İçerik</string>
 		<key>Continue</key>
 		<string>Devam</string>
+		<key>Copied</key>
+		<string>Kopyalandı</string>
 		<key>Copy</key>
 		<string>Kopyala</string>
+		<key>Copy Identifier</key>
+		<string>Tanıtıcıyı kopyala</string>
+		<key>Copy Key</key>
+		<string>Anahtarı kopyala</string>
+		<key>Copy Path</key>
+		<string>Yolu kopyala</string>
+		<key>Copy Value</key>
+		<string>Değeri kopyala</string>
+		<key>Counting…</key>
+		<string>Sayılıyor…</string>
+		<key>Create</key>
+		<string>Oluştur</string>
+		<key>Current (with unsaved changes)</key>
+		<string>Geçerli (kaydedilmemiş değişikliklerle)</string>
+		<key>Cut</key>
+		<string>Kes</string>
 		<key>Daemon Manager</key>
 		<string>Daemon yöneticisi</string>
+		<key>Data</key>
+		<string>Veri</string>
+		<key>Date</key>
+		<string>Tarih</string>
+		<key>Date + weekday</key>
+		<string>Tarih ve haftanın günü</string>
+		<key>Deactivate</key>
+		<string>Devre dışı bırak</string>
+		<key>Deactivate Supervision</key>
+		<string>Denetimi kapat</string>
+		<key>Deactivation pending</key>
+		<string>Devre dışı bırakma bekliyor</string>
+		<key>Debug Overlay</key>
+		<string>Hata ayıklama katmanı</string>
 		<key>Delete</key>
 		<string>Sil</string>
+		<key>Delete Backups</key>
+		<string>Yedekleri sil</string>
+		<key>Delete?</key>
+		<string>Silinsin mi?</string>
+		<key>Deselect All</key>
+		<string>Tüm seçimleri kaldır</string>
+		<key>Device Artwork</key>
+		<string>Aygıt grafikleri</string>
+		<key>Digits in style</key>
+		<string>Stildeki rakamlar</string>
 		<key>Disable</key>
 		<string>Devre dışı bırak</string>
+		<key>Disable OTA Updates</key>
+		<string>OTA güncellemelerini kapat</string>
 		<key>Disabled</key>
 		<string>Devre dışı</string>
+		<key>DISABLED</key>
+		<string>DEVRE DIŞI</string>
+		<key>Discard</key>
+		<string>Vazgeç</string>
+		<key>Discard all pending activation / deactivation changes.</key>
+		<string>Bekleyen tüm etkinleştirme ve devre dışı bırakma değişikliklerinden vazgeç.</string>
+		<key>Discard Changes</key>
+		<string>Değişikliklerden vazgeç</string>
+		<key>Discard Changes?</key>
+		<string>Değişiklikler atılsın mı?</string>
+		<key>Dock</key>
+		<string>Dock</string>
+		<key>Dock app bundle ID</key>
+		<string>Dock uygulamasının paket kimliği</string>
+		<key>Dock extra L/R</key>
+		<string>Dock ek sol/sağ boşluğu</string>
+		<key>Dock extra left</key>
+		<string>Dock ek sol boşluğu</string>
+		<key>Dock extra right</key>
+		<string>Dock ek sağ boşluğu</string>
+		<key>Dock icon scale</key>
+		<string>Dock simge ölçeği</string>
+		<key>Dock icons</key>
+		<string>Dock simgeleri</string>
+		<key>Dock scale %</key>
+		<string>Dock ölçeği (%)</string>
 		<key>Done</key>
 		<string>Bitti</string>
+		<key>Drag Coefficient</key>
+		<string>Sürükleme katsayısı</string>
+		<key>Duplicate</key>
+		<string>Çoğalt</string>
+		<key>Duration</key>
+		<string>Süre</string>
+		<key>Edit</key>
+		<string>Düzenle</string>
+		<key>Empty folder.</key>
+		<string>Klasör boş.</string>
 		<key>Enable</key>
 		<string>Etkinleştir</string>
+		<key>Enable Always On</key>
+		<string>Hep Açık Ekran’ı etkinleştir</string>
+		<key>Enable Changes?</key>
+		<string>Değişikliklere izin verilsin mi?</string>
+		<key>Enable OTA Updates</key>
+		<string>OTA güncellemelerini aç</string>
 		<key>Enabled</key>
 		<string>Etkin</string>
+		<key>Explosion Pulse</key>
+		<string>Patlama darbesi</string>
+		<key>Export</key>
+		<string>Dışa aktar</string>
+		<key>Export Originals…</key>
+		<string>Özgünleri dışa aktar…</string>
+		<key>Faster tweak apply</key>
+		<string>İnce ayarları daha hızlı uygula</string>
+		<key>FastLockX Lite</key>
+		<string>FastLockX Lite</string>
+		<key>Favorites</key>
+		<string>Favoriler</string>
 		<key>File Browser</key>
-		<string>Dosya tarayıcı</string>
+		<string>Dosya Tarayıcı</string>
+		<key>File Changed</key>
+		<string>Dosya değiştirildi</string>
+		<key>Filesystem access is not available.</key>
+		<string>Dosya sistemine erişilemiyor.</string>
+		<key>Filter apps</key>
+		<string>Uygulamaları filtrele</string>
+		<key>Filter by name or PID</key>
+		<string>Ada veya PID’ye göre filtrele</string>
+		<key>Filter keys and values</key>
+		<string>Anahtarları ve değerleri filtrele</string>
+		<key>Filter this folder</key>
+		<string>Bu klasörü filtrele</string>
+		<key>Finding Apps</key>
+		<string>Uygulamalar aranıyor…</string>
+		<key>First page icons</key>
+		<string>İlk sayfa simgeleri</string>
+		<key>Folder Size</key>
+		<string>Klasör boyutu</string>
+		<key>Folders to Clean</key>
+		<string>Temizlenecek klasörler</string>
 		<key>Follow System</key>
-		<string>Sistemi takip et</string>
+		<string>Sistem dilini kullan</string>
+		<key>Font Overwrite</key>
+		<string>Yazı tipini değiştirme</string>
+		<key>Force Quit</key>
+		<string>Çıkmaya zorla</string>
 		<key>Free space from app caches</key>
 		<string>Uygulama önbelleklerinden yer aç</string>
+		<key>Friction</key>
+		<string>Sürtünme</string>
 		<key>Get Started</key>
 		<string>Başla</string>
+		<key>Getting File Access</key>
+		<string>Dosya erişimi alınıyor…</string>
 		<key>GitHub</key>
 		<string>GitHub</string>
+		<key>Go</key>
+		<string>Git</string>
+		<key>Go to Container Top</key>
+		<string>Kapsayıcının köküne git</string>
+		<key>Go to Folder</key>
+		<string>Klasöre git</string>
+		<key>Go to Folder…</key>
+		<string>Klasöre git…</string>
+		<key>Got It</key>
+		<string>Anladım</string>
+		<key>Gravity Lite</key>
+		<string>Gravity Lite</string>
+		<key>Gravity strength</key>
+		<string>Yer çekimi gücü</string>
+		<key>Hidden Settings</key>
+		<string>Gizli ayarlar</string>
+		<key>Hide</key>
+		<string>Gizle</string>
+		<key>Hide icon labels</key>
+		<string>Simge etiketlerini gizle</string>
 		<key>Home</key>
 		<string>Ana Sayfa</string>
+		<key>Home columns</key>
+		<string>Ana ekran sütunları</string>
+		<key>Home extra bottom</key>
+		<string>Ana ekran ek alt boşluğu</string>
+		<key>Home extra L/R</key>
+		<string>Ana ekran ek sol/sağ boşluğu</string>
+		<key>Home extra left</key>
+		<string>Ana ekran ek sol boşluğu</string>
+		<key>Home extra right</key>
+		<string>Ana ekran ek sağ boşluğu</string>
+		<key>Home extra T/B</key>
+		<string>Ana ekran ek üst/alt boşluğu</string>
+		<key>Home extra top</key>
+		<string>Ana ekran ek üst boşluğu</string>
+		<key>Home icon scale</key>
+		<string>Ana ekran simge ölçeği</string>
+		<key>Home Layout Extras</key>
+		<string>Ek ana ekran yerleşimi ayarları</string>
+		<key>Home rows</key>
+		<string>Ana ekran satırları</string>
+		<key>Home scale %</key>
+		<string>Ana ekran ölçeği (%)</string>
+		<key>How to write Cyanide tweaks</key>
+		<string>Cyanide ince ayarları nasıl yazılır?</string>
+		<key>I Understand</key>
+		<string>Anlıyorum</string>
+		<key>Import Custom Theme…</key>
+		<string>Özel temayı içe aktar…</string>
 		<key>Import Failed</key>
 		<string>İçe aktarma başarısız</string>
+		<key>Import failed.</key>
+		<string>İçe aktarılamadı.</string>
+		<key>Import from Files…</key>
+		<string>Dosyalar’dan içe aktar…</string>
+		<key>Import Originals…</key>
+		<string>Özgünleri içe aktar…</string>
+		<key>Import Style (.passthm/ZIP)…</key>
+		<string>Stili içe aktar (.passthm/ZIP)…</string>
+		<key>Import Theme Archive (ZIP/DEB)…</key>
+		<string>Tema arşivini içe aktar (ZIP/DEB)…</string>
+		<key>Import Theme Folder…</key>
+		<string>Tema klasörünü içe aktar…</string>
 		<key>In Development</key>
 		<string>Geliştiriliyor</string>
+		<key>Include Dock</key>
+		<string>Dock’u dahil et</string>
 		<key>Install</key>
 		<string>Yükle</string>
+		<key>Install pending</key>
+		<string>Yükleme bekliyor</string>
+		<key>Install Running</key>
+		<string>Yükleme sürüyor</string>
 		<key>Installed</key>
-		<string>Yüklü</string>
+		<string>Yüklendi</string>
+		<key>INSTALLED</key>
+		<string>YÜKLENDİ</string>
+		<key>Invalid Value</key>
+		<string>Geçersiz değer</string>
+		<key>iPad Dock</key>
+		<string>iPad Dock’u</string>
+		<key>JIT Enabler</key>
+		<string>JIT etkinleştirici</string>
+		<key>Keep app alive in background</key>
+		<string>Uygulamayı arka planda çalışır tut</string>
+		<key>Keep Current</key>
+		<string>Geçerli ayarı koru</string>
+		<key>Kernel access could not be acquired. Run the chain, then try again.</key>
+		<string>Çekirdek erişimi alınamadı. Zinciri çalıştırıp yeniden deneyin.</string>
+		<key>Kernel access isn't active. Run the chain first, then try again.</key>
+		<string>Çekirdek erişimi etkin değil. Önce zinciri çalıştırıp yeniden deneyin.</string>
 		<key>Kernel Access Ready</key>
 		<string>Çekirdek erişimi hazır</string>
 		<key>Kernel access for the tools</key>
 		<string>Araçlar için çekirdek erişimi</string>
 		<key>Kernel access is not active. Run the chain first.</key>
 		<string>Çekirdek erişimi etkin değil. Önce zinciri çalıştırın.</string>
+		<key>Key</key>
+		<string>Anahtar</string>
+		<key>Key Exists</key>
+		<string>Anahtar zaten var</string>
 		<key>Language</key>
 		<string>Dil</string>
 		<key>Language changed</key>
 		<string>Dil değiştirildi</string>
+		<key>Lara</key>
+		<string>Lara</string>
 		<key>Later</key>
 		<string>Sonra</string>
+		<key>Launch Options</key>
+		<string>Başlatma seçenekleri</string>
+		<key>Layout</key>
+		<string>Yerleşim</string>
+		<key>Legacy Chip Floor</key>
+		<string>Eski çip alt sınırı</string>
+		<key>Legacy chip floor</key>
+		<string>Eski çip alt sınırı</string>
+		<key>Level</key>
+		<string>Düzey</string>
+		<key>LiveWP</key>
+		<string>LiveWP</string>
+		<key>Load Saved Override</key>
+		<string>Kayıtlı özel ayarı yükle</string>
 		<key>Loading…</key>
 		<string>Yükleniyor…</string>
+		<key>Location Services</key>
+		<string>Konum Servisleri</string>
+		<key>Location Services Link</key>
+		<string>Konum Servisleri bağlantısı</string>
+		<key>Location Services links</key>
+		<string>Konum Servisleri bağlantıları</string>
+		<key>Location Services Off</key>
+		<string>Konum Servisleri kapalı</string>
+		<key>Location Services On</key>
+		<string>Konum Servisleri açık</string>
+		<key>Location Simulator</key>
+		<string>Konum simülatörü</string>
+		<key>Lock Screen Duration</key>
+		<string>Kilit ekranı süresi</string>
 		<key>Log</key>
 		<string>Günlük</string>
+		<key>Major Cities…</key>
+		<string>Büyük şehirler…</string>
+		<key>Measuring Caches</key>
+		<string>Önbellek boyutları hesaplanıyor…</string>
+		<key>MobileGestalt</key>
+		<string>MobileGestalt</string>
+		<key>Mode</key>
+		<string>Mod</string>
+		<key>Model Name</key>
+		<string>Model adı</string>
+		<key>Model name</key>
+		<string>Model adı</string>
+		<key>Modern</key>
+		<string>Modern</string>
+		<key>Multi-watch switch</key>
+		<string>Birden çok Apple Watch arasında geçiş</string>
+		<key>Multi-Watch Switching</key>
+		<string>Birden çok Apple Watch arasında geçiş</string>
+		<key>Name</key>
+		<string>Ad</string>
+		<key>Network speed only</key>
+		<string>Yalnızca ağ hızı</string>
+		<key>New File</key>
+		<string>Yeni dosya</string>
+		<key>New Folder</key>
+		<string>Yeni klasör</string>
+		<key>NiceBar Lite</key>
+		<string>NiceBar Lite</string>
+		<key>No longer pending</key>
+		<string>Artık beklemiyor</string>
+		<key>No matches.</key>
+		<string>Eşleşme yok.</string>
+		<key>No matching container was found for this app.</key>
+		<string>Bu uygulamaya ait kapsayıcı bulunamadı.</string>
+		<key>Not a regular file.</key>
+		<string>Normal bir dosya değil.</string>
+		<key>Not Now</key>
+		<string>Şimdi değil</string>
+		<key>Not Saved</key>
+		<string>Kaydedilmedi</string>
 		<key>Not Supported</key>
 		<string>Desteklenmiyor</string>
+		<key>NSBar</key>
+		<string>NSBar</string>
 		<key>OK</key>
 		<string>Tamam</string>
 		<key>Off</key>
 		<string>Kapalı</string>
 		<key>On</key>
 		<string>Açık</string>
+		<key>On Disk</key>
+		<string>Diskte</string>
+		<key>Open as Text / Hex / Info</key>
+		<string>Metin / onaltılık / bilgi olarak aç</string>
 		<key>Open QuickLoader</key>
 		<string>QuickLoader'ı aç</string>
+		<key>Original Backup</key>
+		<string>Özgün yedek</string>
+		<key>Originals</key>
+		<string>Özgünler</string>
+		<key>OTA Updates</key>
+		<string>OTA güncellemeleri</string>
+		<key>Other page icons</key>
+		<string>Diğer sayfaların simgeleri</string>
+		<key>Overwrite</key>
+		<string>Üzerine yaz</string>
 		<key>Packages</key>
 		<string>Paketler</string>
+		<key>Page icon counts</key>
+		<string>Sayfa başına simge sayısı</string>
+		<key>Passcode Style</key>
+		<string>Parola stili</string>
+		<key>Performance HUD</key>
+		<string>Performans göstergesi</string>
+		<key>Permissions</key>
+		<string>İzinler</string>
+		<key>Permissions…</key>
+		<string>İzinler…</string>
+		<key>Position</key>
+		<string>Konum</string>
+		<key>Powercuff</key>
+		<string>Powercuff</string>
+		<key>Preparing respring…</key>
+		<string>SpringBoard yeniden başlatılmaya hazırlanıyor…</string>
+		<key>Preparing…</key>
+		<string>Hazırlanıyor…</string>
 		<key>Process Viewer</key>
 		<string>Süreç görüntüleyici</string>
+		<key>Queue</key>
+		<string>Kuyruk</string>
 		<key>Quick Actions</key>
 		<string>Hızlı işlemler</string>
+		<key>QuickLoader</key>
+		<string>QuickLoader</string>
+		<key>Quit</key>
+		<string>Çık</string>
+		<key>Read Current Status</key>
+		<string>Geçerli durumu oku</string>
+		<key>Read Current Value</key>
+		<string>Geçerli değeri oku</string>
+		<key>Reboot</key>
+		<string>Aygıtı yeniden başlat</string>
+		<key>Reboot?</key>
+		<string>Aygıt yeniden başlatılsın mı?</string>
+		<key>Rebooting…</key>
+		<string>Yeniden başlatılıyor…</string>
+		<key>Recent</key>
+		<string>Son kullanılanlar</string>
+		<key>Reclaimable</key>
+		<string>Boşaltılabilir alan</string>
 		<key>Refresh</key>
 		<string>Yenile</string>
+		<key>Refresh rate</key>
+		<string>Yenileme sıklığı</string>
 		<key>Refreshing sources…</key>
 		<string>Kaynaklar yenileniyor…</string>
+		<key>Remind Me Later</key>
+		<string>Daha sonra hatırlat</string>
+		<key>Removal pending</key>
+		<string>Kaldırma bekliyor</string>
 		<key>Remove</key>
 		<string>Kaldır</string>
+		<key>Remove (restore stock)</key>
+		<string>Kaldır (orijinali geri yükle)</string>
+		<key>Remove from Favorites</key>
+		<string>Favorilerden kaldır</string>
+		<key>Remove Override</key>
+		<string>Özel ayarı kaldır</string>
+		<key>Rename</key>
+		<string>Yeniden adlandır</string>
+		<key>Rename Key</key>
+		<string>Anahtarı yeniden adlandır</string>
+		<key>Repo sources</key>
+		<string>Depo kaynakları</string>
 		<key>Report a Bug</key>
 		<string>Hata bildir</string>
+		<key>RepoTweaks</key>
+		<string>RepoTweaks</string>
+		<key>Reset</key>
+		<string>Sıfırla</string>
+		<key>Reset All Packages</key>
+		<string>Tüm paketleri sıfırla</string>
+		<key>Reset All Packages?</key>
+		<string>Tüm paketler sıfırlansın mı?</string>
+		<key>Reset to Defaults</key>
+		<string>Saptanmış ayarlara dön</string>
+		<key>Resistance</key>
+		<string>Direnç</string>
+		<key>Respring</key>
+		<string>SpringBoard’u yeniden başlat</string>
+		<key>Respring and reboot links</key>
+		<string>SpringBoard ve aygıtı yeniden başlatma bağlantıları</string>
+		<key>Respring?</key>
+		<string>SpringBoard yeniden başlatılsın mı?</string>
 		<key>Restart Cyanide to apply the new language.</key>
 		<string>Yeni dili uygulamak için Cyanide'i yeniden başlatın.</string>
+		<key>Restore</key>
+		<string>Geri yükle</string>
+		<key>Restore Icon Layout</key>
+		<string>Simge yerleşimini geri yükle</string>
+		<key>Restore Original</key>
+		<string>Özgünü geri yükle</string>
+		<key>Restore Original Digits</key>
+		<string>Özgün rakamları geri yükle</string>
+		<key>Restore Original?</key>
+		<string>Özgün geri yüklensin mi?</string>
+		<key>Restore Original…</key>
+		<string>Özgünü geri yükle…</string>
+		<key>Restore Real Location</key>
+		<string>Gerçek konumu geri yükle</string>
+		<key>Restore Stock Switcher</key>
+		<string>Varsayılan uygulama değiştiriciyi geri yükle</string>
 		<key>Retry</key>
 		<string>Yeniden dene</string>
+		<key>Retry interval</key>
+		<string>Yeniden deneme aralığı</string>
+		<key>Revert</key>
+		<string>Geri al</string>
+		<key>Review Folders</key>
+		<string>Klasörleri incele</string>
+		<key>Run Again</key>
+		<string>Yeniden çalıştır</string>
 		<key>Run Exploit</key>
 		<string>Exploit'i çalıştır</string>
 		<key>Run a local .js tweak file</key>
 		<string>Yerel bir .js tweak dosyası çalıştır</string>
 		<key>Save</key>
 		<string>Kaydet</string>
+		<key>Save Changes?</key>
+		<string>Değişiklikler kaydedilsin mi?</string>
+		<key>Save Not Verified</key>
+		<string>Kaydetme doğrulanmadı</string>
+		<key>Saved originals</key>
+		<string>Kayıtlı özgünler</string>
+		<key>SBCustomizer</key>
+		<string>SBCustomizer</string>
+		<key>Scanning processes…</key>
+		<string>İşlemler taranıyor…</string>
+		<key>Screen Shape</key>
+		<string>Ekran şekli</string>
 		<key>Search</key>
 		<string>Ara</string>
+		<key>Search all tweaks</key>
+		<string>Tüm ince ayarlarda ara</string>
+		<key>See All Changes</key>
+		<string>Tüm değişiklikleri gör</string>
 		<key>See and quit running processes</key>
 		<string>Çalışan süreçleri görüntüle ve sonlandır</string>
+		<key>See This Version's Changes</key>
+		<string>Bu sürümdeki değişiklikleri gör</string>
+		<key>Select All Apps</key>
+		<string>Tüm uygulamaları seç</string>
+		<key>Select Automatically</key>
+		<string>Otomatik seç</string>
+		<key>Select by Hand</key>
+		<string>Elle seç</string>
+		<key>Select Items to Clean</key>
+		<string>Temizlenecek öğeleri seç</string>
+		<key>Select Large Caches (50 MB+)</key>
+		<string>Büyük önbellekleri seç (50 MB ve üstü)</string>
+		<key>Select Theme</key>
+		<string>Tema seç</string>
+		<key>Select Video</key>
+		<string>Video seç</string>
+		<key>Selected Dock app</key>
+		<string>Seçili Dock uygulaması</string>
+		<key>Selected Style</key>
+		<string>Seçili stil</string>
+		<key>Selected Theme</key>
+		<string>Seçili tema</string>
+		<key>Selected Video</key>
+		<string>Seçili video</string>
+		<key>Session note</key>
+		<string>Oturum notu</string>
+		<key>Set</key>
+		<string>Ayarla</string>
+		<key>Set Exact Coordinates…</key>
+		<string>Tam koordinatları ayarla…</string>
 		<key>Settings</key>
 		<string>Ayarlar</string>
+		<key>Setup floor</key>
+		<string>Kurulum alt sınırı</string>
+		<key>Setup Protocol Floor</key>
+		<string>Kurulum protokolü alt sınırı</string>
 		<key>Share</key>
 		<string>Paylaş</string>
+		<key>Share Log</key>
+		<string>Günlüğü paylaş</string>
+		<key>Share…</key>
+		<string>Paylaş…</string>
+		<key>Short date</key>
+		<string>Kısa tarih</string>
+		<key>Show</key>
+		<string>Göster</string>
+		<key>Show Advanced</key>
+		<string>İleri düzey seçenekleri göster</string>
+		<key>Show Backups</key>
+		<string>Yedekleri göster</string>
+		<key>Show CPU %</key>
+		<string>CPU kullanımını göster (%)</string>
+		<key>Show CPU / RAM labels</key>
+		<string>CPU/RAM etiketlerini göster</string>
+		<key>Show CPU/RAM labels</key>
+		<string>CPU/RAM etiketlerini göster</string>
+		<key>Show dock labels</key>
+		<string>Dock etiketlerini göster</string>
+		<key>Show in File Browser</key>
+		<string>Dosya Tarayıcı’da göster</string>
+		<key>Show in Folder</key>
+		<string>Klasörde göster</string>
+		<key>Show net speed</key>
+		<string>Ağ hızını göster</string>
+		<key>Show network speed</key>
+		<string>Ağ hızını göster</string>
+		<key>Simulate Current Target</key>
+		<string>Geçerli hedef konumu simüle et</string>
+		<key>Simulate Rockaway Test Point</key>
+		<string>Rockaway test noktasını simüle et</string>
+		<key>Size of This Folder</key>
+		<string>Bu klasörün boyutu</string>
+		<key>Skip This Version</key>
+		<string>Bu sürümü atla</string>
+		<key>SnowBoard Lite</key>
+		<string>SnowBoard Lite</string>
 		<key>Some sources could not be refreshed</key>
 		<string>Bazı kaynaklar yenilenemedi</string>
+		<key>Sort By</key>
+		<string>Sıralama ölçütü</string>
+		<key>Source Failed</key>
+		<string>Kaynak hatası</string>
 		<key>Source refresh failed</key>
 		<string>Kaynak yenileme başarısız</string>
 		<key>Sources</key>
 		<string>Kaynaklar</string>
 		<key>Sources up to date</key>
 		<string>Kaynaklar güncel</string>
+		<key>Spin resist.</key>
+		<string>Dönme direnci</string>
+		<key>Spin resistance</key>
+		<string>Dönme direnci</string>
+		<key>Spoof Device Model</key>
+		<string>Aygıt modelini taklit et</string>
+		<key>SpringBoard could not be reached.</key>
+		<string>SpringBoard’a ulaşılamadı.</string>
+		<key>SpringBoard Tools</key>
+		<string>SpringBoard araçları</string>
 		<key>SpringBoard tweaks for stock iOS</key>
 		<string>Orijinal iOS için SpringBoard Tweaks</string>
+		<key>Starting…</key>
+		<string>Başlatılıyor…</string>
+		<key>StatBar</key>
+		<string>StatBar</string>
+		<key>Strength</key>
+		<string>Güç</string>
+		<key>Style</key>
+		<string>Stil</string>
+		<key>Supervision</key>
+		<string>Denetim</string>
+		<key>Switch to Fastest</key>
+		<string>En Hızlı’ya geç</string>
+		<key>Switch to pe_v3</key>
+		<string>pe_v3’e geç</string>
+		<key>Switcher style</key>
+		<string>Uygulama değiştirici stili</string>
 		<key>System</key>
 		<string>Sistem</string>
 		<key>System Info</key>
 		<string>Sistem bilgisi</string>
+		<key>Target</key>
+		<string>Hedef</string>
+		<key>Tendies Wallpapers</key>
+		<string>Tendies Wallpapers</string>
+		<key>The file could not be written.</key>
+		<string>Dosya yazılamadı.</string>
+		<key>The file was changed or replaced since you opened it. Overwrite it with your version?</key>
+		<string>Dosyayı açtığınızdan beri içeriği değişti veya dosyanın yerine başka bir dosya kondu. Kendi sürümünüzle üzerine yazılsın mı?</string>
+		<key>The list of disabled daemons could not be read. Check the log.</key>
+		<string>Devre dışı servislerin listesi okunamadı. Günlüğü denetleyin.</string>
+		<key>Theme</key>
+		<string>Tema</string>
+		<key>Theme Format Guide</key>
+		<string>Tema biçimi kılavuzu</string>
+		<key>This package cannot be queued yet.</key>
+		<string>Bu paket henüz kuyruğa alınamıyor.</string>
+		<key>This queue row was already applied or cleared.</key>
+		<string>Bu kuyruk öğesi zaten uygulandı veya temizlendi.</string>
+		<key>Time + seconds</key>
+		<string>Saat ve saniye</string>
 		<key>Tools</key>
 		<string>Araçlar</string>
+		<key>Top side inset</key>
+		<string>Üst yan boşluk</string>
+		<key>Top Y offset</key>
+		<string>Üst Y ofseti</string>
+		<key>Traffic History</key>
+		<string>Ağ trafiği geçmişi</string>
+		<key>Try the pe_v3 exploit path?</key>
+		<string>pe_v3 exploit yöntemi denensin mi?</string>
 		<key>Turn system services off and on</key>
 		<string>Sistem servislerini aç/kapat</string>
+		<key>Turning Off Location Services</key>
+		<string>Konum Servisleri kapatılıyor</string>
+		<key>Turning On Location Services</key>
+		<string>Konum Servisleri açılıyor</string>
+		<key>Tweak apply speed</key>
+		<string>İnce ayar uygulama hızı</string>
+		<key>Tweak SDK</key>
+		<string>İnce ayar SDK’sı</string>
 		<key>Tweaks</key>
-		<string>Tweaks</string>
+		<string>İnce ayarlar</string>
+		<key>Twitter</key>
+		<string>Twitter</string>
+		<key>Unfinished Saves</key>
+		<string>Tamamlanmamış kayıtlar</string>
+		<key>Unknown Source</key>
+		<string>Bilinmeyen kaynak</string>
+		<key>Unsupported</key>
+		<string>Desteklenmiyor</string>
+		<key>UNSUPPORTED</key>
+		<string>DESTEKLENMİYOR</string>
+		<key>Up to Date</key>
+		<string>Güncel</string>
+		<key>Update</key>
+		<string>Güncelle</string>
+		<key>UPDATE</key>
+		<string>GÜNCELLE</string>
+		<key>Update Available</key>
+		<string>Güncelleme var</string>
+		<key>Upside Down</key>
+		<string>Baş aşağı</string>
+		<key>Use Original</key>
+		<string>Özgünü kullan</string>
+		<key>Use watchOS Range 99/23/10/6</key>
+		<string>watchOS 99/23/10/6 aralığını kullan</string>
+		<key>Verbose logging</key>
+		<string>Ayrıntılı günlük kaydı</string>
+		<key>Video</key>
+		<string>Video</string>
+		<key>View Log</key>
+		<string>Günlüğü görüntüle</string>
+		<key>View Release</key>
+		<string>Sürümü görüntüle</string>
+		<key>Wallet Card Art</key>
+		<string>Cüzdan kart görseli</string>
+		<key>Watch Pairing</key>
+		<string>Apple Watch eşleme</string>
+		<key>watchOS limit</key>
+		<string>watchOS sınırı</string>
+		<key>watchOS Pairing Limit</key>
+		<string>watchOS eşleme sınırı</string>
+		<key>Weekday + time</key>
+		<string>Haftanın günü ve saat</string>
 		<key>What's New</key>
 		<string>Yenilikler</string>
 		<key>Working</key>

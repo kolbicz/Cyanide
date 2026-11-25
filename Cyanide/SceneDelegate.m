@@ -14,6 +14,7 @@
 #import "installer/InstallProgressViewController.h"
 #import "UpdateChecker.h"
 #import "FileBrowserViewController.h"
+#import "Localization/CyanideLanguage.h"
 #import "TaskRop/Exception.h"   // round 30: excport lifecycle gate (early close)
 
 // Did this request launch Cyanide? "A scene already exists" is not the test:
@@ -340,7 +341,8 @@ static BOOL scene_is_power_url(NSURL *url) {
     CYLocationRequestCompletion once = ^(BOOL ok, NSString *message) {
         if (called || !completion) return;
         called = YES;
-        completion(ok, message ?: @"");
+        // Shortcuts shows this text when the action fails: in the app language.
+        completion(ok, CyanideLocalized(message) ?: @"");
     };
     if (![url isKindOfClass:NSURL.class]) { once(NO, @"Invalid request."); return; }
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
@@ -491,9 +493,8 @@ static void scene_announce(NSString *text)
 - (void)applyQuietTarget:(int)target done:(BOOL)done {
     self.quietTarget = target;
     if (target < 0) { self.quietTitle.text = @"Location Services"; return; }
-    NSString *state = target ? @"On" : @"Off";
-    self.quietTitle.text = done ? [NSString stringWithFormat:@"Location Services %@", state]
-                                : [NSString stringWithFormat:@"Turning %@ Location Services", state];
+    self.quietTitle.text = done ? (target ? @"Location Services On" : @"Location Services Off")
+                                : (target ? @"Turning On Location Services" : @"Turning Off Location Services");
     if (done) {
         if (@available(iOS 17.0, *)) [self.quietIcon removeAllSymbolEffects];
         self.quietIcon.image = [UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:scene_quiet_symbol_config()];

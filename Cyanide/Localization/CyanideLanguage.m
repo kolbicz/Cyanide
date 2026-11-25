@@ -49,6 +49,9 @@ static NSString *CyanideLanguageSystemName(void) {
 
 NSString *CyanideLanguageSystemCode(void) {
     for (NSString *preferred in [NSLocale preferredLanguages]) {
+        if ([preferred isEqualToString:@"en"] || [preferred hasPrefix:@"en-"]) {
+            return CyanideLanguageEnglish;
+        }
         if ([preferred hasPrefix:@"zh"]) return CyanideLanguageSimplifiedChinese;
         if ([preferred hasPrefix:@"de"]) return @"de";
         if ([preferred hasPrefix:@"fr"]) return @"fr";

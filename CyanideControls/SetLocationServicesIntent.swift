@@ -21,7 +21,12 @@ import Foundation
 // the real outcome.
 struct CyanideLocationRequestFailure: Error, CustomLocalizedStringResourceConvertible {
     let message: String
-    var localizedStringResource: LocalizedStringResource { "\(message)" }
+    // Looked up by the English text in Localizable.xcstrings (the timeout and
+    // cancel messages here). Messages from the app arrive already translated
+    // and fall through unchanged.
+    var localizedStringResource: LocalizedStringResource {
+        LocalizedStringResource(String.LocalizationValue(message))
+    }
 }
 
 enum CyanideLocationRequest {
