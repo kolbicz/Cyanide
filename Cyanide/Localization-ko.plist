@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>patterns</key>
+	<array>
+		<dict>
+			<key>pattern</key>
+			<string>^No jailbreak required · v(.+)$</string>
+			<key>template</key>
+			<string>탈옥 필요 없음 · v$1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending changes?$</string>
+			<key>template</key>
+			<string>$1개의 보류 중인 변경 사항</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) apps?$</string>
+			<key>template</key>
+			<string>$1개의 앱</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) packages?$</string>
+			<key>template</key>
+			<string>$1개의 패키지</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) installed$</string>
+			<key>template</key>
+			<string>$1개 설치됨</string>
+		</dict>
+	</array>
+	<key>strings</key>
+	<dict>
+		<key>About</key>
+		<string>정보</string>
+		<key>Add a Source</key>
+		<string>소스 추가</string>
+		<key>Apply</key>
+		<string>적용</string>
+		<key>Back</key>
+		<string>뒤로</string>
+		<key>Battery, uptime, kernel access, storage</key>
+		<string>배터리, 가동 시간, 커널 액세스, 저장 공간</string>
+		<key>Browse and install JS tweaks from repos</key>
+		<string>저장소에서 JS 트윅 탐색 및 설치</string>
+		<key>Browse files and edit plists</key>
+		<string>파일 탐색 및 plist 편집</string>
+		<key>Cache Cleaner</key>
+		<string>캐시 정리기</string>
+		<key>Cancel</key>
+		<string>취소</string>
+		<key>Choose the app language.</key>
+		<string>앱 언어를 선택하세요.</string>
+		<key>Close</key>
+		<string>닫기</string>
+		<key>Community</key>
+		<string>커뮤니티</string>
+		<key>Confirm</key>
+		<string>확인</string>
+		<key>Continue</key>
+		<string>계속</string>
+		<key>Copy</key>
+		<string>복사</string>
+		<key>Daemon Manager</key>
+		<string>데몬 관리자</string>
+		<key>Delete</key>
+		<string>삭제</string>
+		<key>Disable</key>
+		<string>비활성화</string>
+		<key>Disabled</key>
+		<string>비활성화됨</string>
+		<key>Done</key>
+		<string>완료</string>
+		<key>Enable</key>
+		<string>활성화</string>
+		<key>Enabled</key>
+		<string>활성화됨</string>
+		<key>File Browser</key>
+		<string>파일 브라우저</string>
+		<key>Follow System</key>
+		<string>시스템 따르기</string>
+		<key>Free space from app caches</key>
+		<string>앱 캐시에서 공간 확보</string>
+		<key>Get Started</key>
+		<string>시작하기</string>
+		<key>GitHub</key>
+		<string>GitHub</string>
+		<key>Home</key>
+		<string>홈</string>
+		<key>Import Failed</key>
+		<string>가져오기 실패</string>
+		<key>In Development</key>
+		<string>개발 중</string>
+		<key>Install</key>
+		<string>설치</string>
+		<key>Installed</key>
+		<string>설치됨</string>
+		<key>Kernel Access Ready</key>
+		<string>커널 액세스 준비됨</string>
+		<key>Kernel access for the tools</key>
+		<string>도구의 커널 액세스</string>
+		<key>Kernel access is not active. Run the chain first.</key>
+		<string>커널 액세스가 활성화되지 않았습니다. 먼저 체인을 실행하세요.</string>
+		<key>Language</key>
+		<string>언어</string>
+		<key>Language changed</key>
+		<string>언어가 변경됨</string>
+		<key>Later</key>
+		<string>나중에</string>
+		<key>Loading…</key>
+		<string>로드 중…</string>
+		<key>Log</key>
+		<string>로그</string>
+		<key>Not Supported</key>
+		<string>지원되지 않음</string>
+		<key>OK</key>
+		<string>확인</string>
+		<key>Off</key>
+		<string>꺼짐</string>
+		<key>On</key>
+		<string>켜짐</string>
+		<key>Open QuickLoader</key>
+		<string>QuickLoader 열기</string>
+		<key>Packages</key>
+		<string>패키지</string>
+		<key>Process Viewer</key>
+		<string>프로세스 뷰어</string>
+		<key>Quick Actions</key>
+		<string>빠른 작업</string>
+		<key>Refresh</key>
+		<string>새로 고침</string>
+		<key>Refreshing sources…</key>
+		<string>소스 새로 고치는 중…</string>
+		<key>Remove</key>
+		<string>제거</string>
+		<key>Report a Bug</key>
+		<string>버그 신고</string>
+		<key>Restart Cyanide to apply the new language.</key>
+		<string>새 언어를 적용하려면 Cyanide를 재시작하세요.</string>
+		<key>Retry</key>
+		<string>재시도</string>
+		<key>Run Exploit</key>
+		<string>익스플로잇 실행</string>
+		<key>Run a local .js tweak file</key>
+		<string>로컬 .js 트윅 실행</string>
+		<key>Save</key>
+		<string>저장</string>
+		<key>Search</key>
+		<string>검색</string>
+		<key>See and quit running processes</key>
+		<string>실행 중인 프로세스 보기 및 종료</string>
+		<key>Settings</key>
+		<string>설정</string>
+		<key>Share</key>
+		<string>공유</string>
+		<key>Some sources could not be refreshed</key>
+		<string>일부 소스를 새로 고칠 수 없습니다</string>
+		<key>Source refresh failed</key>
+		<string>소스 새로 고침 실패</string>
+		<key>Sources</key>
+		<string>소스</string>
+		<key>Sources up to date</key>
+		<string>소스가 최신 상태입니다</string>
+		<key>SpringBoard tweaks for stock iOS</key>
+		<string>순정 iOS용 SpringBoard Tweaks</string>
+		<key>System</key>
+		<string>시스템</string>
+		<key>System Info</key>
+		<string>시스템 정보</string>
+		<key>Tools</key>
+		<string>도구</string>
+		<key>Turn system services off and on</key>
+		<string>시스템 서비스 켜기/끄기</string>
+		<key>Tweaks</key>
+		<string>Tweaks</string>
+		<key>What's New</key>
+		<string>새로운 기능</string>
+		<key>Working</key>
+		<string>작업 중</string>
+	</dict>
+</dict>
+</plist>

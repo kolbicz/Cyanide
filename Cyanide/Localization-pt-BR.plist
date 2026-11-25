@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>patterns</key>
+	<array>
+		<dict>
+			<key>pattern</key>
+			<string>^No jailbreak required · v(.+)$</string>
+			<key>template</key>
+			<string>Sem necessidade de jailbreak · v$1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending changes?$</string>
+			<key>template</key>
+			<string>$1 alterações pendentes</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) apps?$</string>
+			<key>template</key>
+			<string>$1 apps</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) packages?$</string>
+			<key>template</key>
+			<string>$1 pacotes</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) installed$</string>
+			<key>template</key>
+			<string>$1 instalados</string>
+		</dict>
+	</array>
+	<key>strings</key>
+	<dict>
+		<key>About</key>
+		<string>Sobre</string>
+		<key>Add a Source</key>
+		<string>Adicionar uma fonte</string>
+		<key>Apply</key>
+		<string>Aplicar</string>
+		<key>Back</key>
+		<string>Voltar</string>
+		<key>Battery, uptime, kernel access, storage</key>
+		<string>Bateria, tempo ativo, acesso ao kernel, armazenamento</string>
+		<key>Browse and install JS tweaks from repos</key>
+		<string>Navegar e instalar tweaks JS dos repositórios</string>
+		<key>Browse files and edit plists</key>
+		<string>Navegar por arquivos e editar plists</string>
+		<key>Cache Cleaner</key>
+		<string>Limpeza de cache</string>
+		<key>Cancel</key>
+		<string>Cancelar</string>
+		<key>Choose the app language.</key>
+		<string>Escolha o idioma do app.</string>
+		<key>Close</key>
+		<string>Fechar</string>
+		<key>Community</key>
+		<string>Comunidade</string>
+		<key>Confirm</key>
+		<string>Confirmar</string>
+		<key>Continue</key>
+		<string>Continuar</string>
+		<key>Copy</key>
+		<string>Copiar</string>
+		<key>Daemon Manager</key>
+		<string>Gerenciador de daemons</string>
+		<key>Delete</key>
+		<string>Apagar</string>
+		<key>Disable</key>
+		<string>Desativar</string>
+		<key>Disabled</key>
+		<string>Desativado</string>
+		<key>Done</key>
+		<string>Concluir</string>
+		<key>Enable</key>
+		<string>Ativar</string>
+		<key>Enabled</key>
+		<string>Ativado</string>
+		<key>File Browser</key>
+		<string>Navegador de arquivos</string>
+		<key>Follow System</key>
+		<string>Seguir o sistema</string>
+		<key>Free space from app caches</key>
+		<string>Liberar espaço dos caches dos apps</string>
+		<key>Get Started</key>
+		<string>Começar</string>
+		<key>GitHub</key>
+		<string>GitHub</string>
+		<key>Home</key>
+		<string>Início</string>
+		<key>Import Failed</key>
+		<string>Falha na importação</string>
+		<key>In Development</key>
+		<string>Em desenvolvimento</string>
+		<key>Install</key>
+		<string>Instalar</string>
+		<key>Installed</key>
+		<string>Instalado</string>
+		<key>Kernel Access Ready</key>
+		<string>Acesso ao kernel pronto</string>
+		<key>Kernel access for the tools</key>
+		<string>Acesso ao kernel para as ferramentas</string>
+		<key>Kernel access is not active. Run the chain first.</key>
+		<string>O acesso ao kernel não está ativo. Execute a cadeia primeiro.</string>
+		<key>Language</key>
+		<string>Idioma</string>
+		<key>Language changed</key>
+		<string>Idioma alterado</string>
+		<key>Later</key>
+		<string>Mais tarde</string>
+		<key>Loading…</key>
+		<string>Carregando…</string>
+		<key>Log</key>
+		<string>Log</string>
+		<key>Not Supported</key>
+		<string>Não suportado</string>
+		<key>OK</key>
+		<string>OK</string>
+		<key>Off</key>
+		<string>Desativado</string>
+		<key>On</key>
+		<string>Ativado</string>
+		<key>Open QuickLoader</key>
+		<string>Abrir QuickLoader</string>
+		<key>Packages</key>
+		<string>Pacotes</string>
+		<key>Process Viewer</key>
+		<string>Visualizador de processos</string>
+		<key>Quick Actions</key>
+		<string>Ações rápidas</string>
+		<key>Refresh</key>
+		<string>Atualizar</string>
+		<key>Refreshing sources…</key>
+		<string>Atualizando fontes…</string>
+		<key>Remove</key>
+		<string>Remover</string>
+		<key>Report a Bug</key>
+		<string>Reportar um bug</string>
+		<key>Restart Cyanide to apply the new language.</key>
+		<string>Reinicie o Cyanide para aplicar o novo idioma.</string>
+		<key>Retry</key>
+		<string>Tentar novamente</string>
+		<key>Run Exploit</key>
+		<string>Executar exploit</string>
+		<key>Run a local .js tweak file</key>
+		<string>Executar um arquivo tweak .js local</string>
+		<key>Save</key>
+		<string>Salvar</string>
+		<key>Search</key>
+		<string>Buscar</string>
+		<key>See and quit running processes</key>
+		<string>Ver e encerrar processos em execução</string>
+		<key>Settings</key>
+		<string>Ajustes</string>
+		<key>Share</key>
+		<string>Compartilhar</string>
+		<key>Some sources could not be refreshed</key>
+		<string>Algumas fontes não puderam ser atualizadas</string>
+		<key>Source refresh failed</key>
+		<string>Falha ao atualizar as fontes</string>
+		<key>Sources</key>
+		<string>Fontes</string>
+		<key>Sources up to date</key>
+		<string>Fontes atualizadas</string>
+		<key>SpringBoard tweaks for stock iOS</key>
+		<string>Tweaks do SpringBoard para iOS original</string>
+		<key>System</key>
+		<string>Sistema</string>
+		<key>System Info</key>
+		<string>Informações do sistema</string>
+		<key>Tools</key>
+		<string>Ferramentas</string>
+		<key>Turn system services off and on</key>
+		<string>Ativar e desativar serviços do sistema</string>
+		<key>Tweaks</key>
+		<string>Tweaks</string>
+		<key>What's New</key>
+		<string>Novidades</string>
+		<key>Working</key>
+		<string>Em execução</string>
+	</dict>
+</dict>
+</plist>

@@ -16,7 +16,8 @@ static NSDictionary<NSString *, NSString *> *gStrings;
 static NSArray<NSDictionary *> *gPatterns;
 
 NSArray<NSString *> *CyanideLanguageSupportedCodes(void) {
-    return @[ CyanideLanguageEnglish, CyanideLanguageSimplifiedChinese, @"de", @"fr" ];
+    return @[ CyanideLanguageEnglish, CyanideLanguageSimplifiedChinese, @"de", @"fr",
+               @"es", @"it", @"ja", @"ko", @"pl", @"pt-BR", @"ru", @"th", @"tr", @"vi", @"ar" ];
 }
 
 static BOOL CyanideLanguageIsSupported(NSString *code) {
@@ -28,6 +29,17 @@ NSString *CyanideLanguageNativeName(NSString *code) {
     if ([code isEqualToString:CyanideLanguageSimplifiedChinese]) return @"简体中文";
     if ([code isEqualToString:@"de"]) return @"Deutsch";
     if ([code isEqualToString:@"fr"]) return @"Français";
+    if ([code isEqualToString:@"es"]) return @"Español";
+    if ([code isEqualToString:@"it"]) return @"Italiano";
+    if ([code isEqualToString:@"ja"]) return @"日本語";
+    if ([code isEqualToString:@"ko"]) return @"한국어";
+    if ([code isEqualToString:@"pl"]) return @"Polski";
+    if ([code isEqualToString:@"pt-BR"]) return @"Português (Brasil)";
+    if ([code isEqualToString:@"ru"]) return @"Русский";
+    if ([code isEqualToString:@"th"]) return @"ไทย";
+    if ([code isEqualToString:@"tr"]) return @"Türkçe";
+    if ([code isEqualToString:@"vi"]) return @"Tiếng Việt";
+    if ([code isEqualToString:@"ar"]) return @"العربية";
     return code ?: @"";
 }
 
@@ -40,6 +52,17 @@ NSString *CyanideLanguageSystemCode(void) {
         if ([preferred hasPrefix:@"zh"]) return CyanideLanguageSimplifiedChinese;
         if ([preferred hasPrefix:@"de"]) return @"de";
         if ([preferred hasPrefix:@"fr"]) return @"fr";
+        if ([preferred hasPrefix:@"es"]) return @"es";
+        if ([preferred hasPrefix:@"it"]) return @"it";
+        if ([preferred hasPrefix:@"ja"]) return @"ja";
+        if ([preferred hasPrefix:@"ko"]) return @"ko";
+        if ([preferred hasPrefix:@"pl"]) return @"pl";
+        if ([preferred hasPrefix:@"pt"]) return @"pt-BR";
+        if ([preferred hasPrefix:@"ru"]) return @"ru";
+        if ([preferred hasPrefix:@"th"]) return @"th";
+        if ([preferred hasPrefix:@"tr"]) return @"tr";
+        if ([preferred hasPrefix:@"vi"]) return @"vi";
+        if ([preferred hasPrefix:@"ar"]) return @"ar";
     }
     return CyanideLanguageEnglish;
 }
@@ -326,5 +349,9 @@ void CyanideLanguageInstall(void) {
                        @selector(menuWithTitle:image:identifier:options:children:),
                        @selector(cy_language_menuWithTitle:image:identifier:options:children:));
         CyanideLanguageReload();
+        BOOL rtl = [CyanideLanguageCurrentCode() isEqualToString:@"ar"];
+        [UIView appearance].semanticContentAttribute =
+            rtl ? UISemanticContentAttributeForceRightToLeft
+                : UISemanticContentAttributeForceLeftToRight;
     });
 }

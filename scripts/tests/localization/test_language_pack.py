@@ -12,6 +12,17 @@ PACKS = {
     "zh-Hans": ROOT / "Cyanide/Localization-zh-Hans.plist",
     "de": ROOT / "Cyanide/Localization-de.plist",
     "fr": ROOT / "Cyanide/Localization-fr.plist",
+    "es": ROOT / "Cyanide/Localization-es.plist",
+    "it": ROOT / "Cyanide/Localization-it.plist",
+    "ja": ROOT / "Cyanide/Localization-ja.plist",
+    "ko": ROOT / "Cyanide/Localization-ko.plist",
+    "pl": ROOT / "Cyanide/Localization-pl.plist",
+    "pt-BR": ROOT / "Cyanide/Localization-pt-BR.plist",
+    "ru": ROOT / "Cyanide/Localization-ru.plist",
+    "th": ROOT / "Cyanide/Localization-th.plist",
+    "tr": ROOT / "Cyanide/Localization-tr.plist",
+    "vi": ROOT / "Cyanide/Localization-vi.plist",
+    "ar": ROOT / "Cyanide/Localization-ar.plist",
 }
 REQUIRED = [
     "Home", "Packages", "Sources", "Log", "Settings", "Language",

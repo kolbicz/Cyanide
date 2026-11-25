@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>patterns</key>
+	<array>
+		<dict>
+			<key>pattern</key>
+			<string>^No jailbreak required · v(.+)$</string>
+			<key>template</key>
+			<string>Không cần jailbreak · v$1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending changes?$</string>
+			<key>template</key>
+			<string>$1 thay đổi đang chờ</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) apps?$</string>
+			<key>template</key>
+			<string>$1 ứng dụng</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) packages?$</string>
+			<key>template</key>
+			<string>$1 gói</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) installed$</string>
+			<key>template</key>
+			<string>Đã cài đặt $1</string>
+		</dict>
+	</array>
+	<key>strings</key>
+	<dict>
+		<key>About</key>
+		<string>Giới thiệu</string>
+		<key>Add a Source</key>
+		<string>Thêm nguồn</string>
+		<key>Apply</key>
+		<string>Áp dụng</string>
+		<key>Back</key>
+		<string>Quay lại</string>
+		<key>Battery, uptime, kernel access, storage</key>
+		<string>Pin, thời gian hoạt động, quyền truy cập kernel, lưu trữ</string>
+		<key>Browse and install JS tweaks from repos</key>
+		<string>Duyệt và cài đặt JS tweak từ kho</string>
+		<key>Browse files and edit plists</key>
+		<string>Duyệt tệp và chỉnh sửa plist</string>
+		<key>Cache Cleaner</key>
+		<string>Dọn dẹp Bộ đệm</string>
+		<key>Cancel</key>
+		<string>Hủy</string>
+		<key>Choose the app language.</key>
+		<string>Chọn ngôn ngữ ứng dụng.</string>
+		<key>Close</key>
+		<string>Đóng</string>
+		<key>Community</key>
+		<string>Cộng đồng</string>
+		<key>Confirm</key>
+		<string>Xác nhận</string>
+		<key>Continue</key>
+		<string>Tiếp tục</string>
+		<key>Copy</key>
+		<string>Sao chép</string>
+		<key>Daemon Manager</key>
+		<string>Quản lý daemon</string>
+		<key>Delete</key>
+		<string>Xóa</string>
+		<key>Disable</key>
+		<string>Tắt</string>
+		<key>Disabled</key>
+		<string>Đã tắt</string>
+		<key>Done</key>
+		<string>Xong</string>
+		<key>Enable</key>
+		<string>Bật</string>
+		<key>Enabled</key>
+		<string>Đã bật</string>
+		<key>File Browser</key>
+		<string>Trình duyệt tệp</string>
+		<key>Follow System</key>
+		<string>Theo hệ thống</string>
+		<key>Free space from app caches</key>
+		<string>Giải phóng dung lượng từ bộ nhớ đệm ứng dụng</string>
+		<key>Get Started</key>
+		<string>Bắt đầu</string>
+		<key>GitHub</key>
+		<string>GitHub</string>
+		<key>Home</key>
+		<string>Trang chủ</string>
+		<key>Import Failed</key>
+		<string>Nhập thất bại</string>
+		<key>In Development</key>
+		<string>Đang phát triển</string>
+		<key>Install</key>
+		<string>Cài đặt</string>
+		<key>Installed</key>
+		<string>Đã cài đặt</string>
+		<key>Kernel Access Ready</key>
+		<string>Quyền truy cập kernel sẵn sàng</string>
+		<key>Kernel access for the tools</key>
+		<string>Quyền truy cập kernel cho công cụ</string>
+		<key>Kernel access is not active. Run the chain first.</key>
+		<string>Quyền truy cập kernel chưa hoạt động. Hãy chạy chuỗi trước.</string>
+		<key>Language</key>
+		<string>Ngôn ngữ</string>
+		<key>Language changed</key>
+		<string>Đã đổi ngôn ngữ</string>
+		<key>Later</key>
+		<string>Để sau</string>
+		<key>Loading…</key>
+		<string>Đang tải…</string>
+		<key>Log</key>
+		<string>Nhật ký</string>
+		<key>Not Supported</key>
+		<string>Không hỗ trợ</string>
+		<key>OK</key>
+		<string>OK</string>
+		<key>Off</key>
+		<string>Tắt</string>
+		<key>On</key>
+		<string>Bật</string>
+		<key>Open QuickLoader</key>
+		<string>Mở QuickLoader</string>
+		<key>Packages</key>
+		<string>Gói</string>
+		<key>Process Viewer</key>
+		<string>Trình xem tiến trình</string>
+		<key>Quick Actions</key>
+		<string>Thao tác nhanh</string>
+		<key>Refresh</key>
+		<string>Làm mới</string>
+		<key>Refreshing sources…</key>
+		<string>Đang làm mới nguồn…</string>
+		<key>Remove</key>
+		<string>Xóa</string>
+		<key>Report a Bug</key>
+		<string>Báo lỗi</string>
+		<key>Restart Cyanide to apply the new language.</key>
+		<string>Khởi động lại Cyanide để áp dụng ngôn ngữ mới.</string>
+		<key>Retry</key>
+		<string>Thử lại</string>
+		<key>Run Exploit</key>
+		<string>Chạy exploit</string>
+		<key>Run a local .js tweak file</key>
+		<string>Chạy tệp tweak .js cục bộ</string>
+		<key>Save</key>
+		<string>Lưu</string>
+		<key>Search</key>
+		<string>Tìm kiếm</string>
+		<key>See and quit running processes</key>
+		<string>Xem và kết thúc tiến trình đang chạy</string>
+		<key>Settings</key>
+		<string>Cài đặt</string>
+		<key>Share</key>
+		<string>Chia sẻ</string>
+		<key>Some sources could not be refreshed</key>
+		<string>Không thể làm mới một số nguồn</string>
+		<key>Source refresh failed</key>
+		<string>Làm mới nguồn thất bại</string>
+		<key>Sources</key>
+		<string>Nguồn</string>
+		<key>Sources up to date</key>
+		<string>Nguồn đã cập nhật</string>
+		<key>SpringBoard tweaks for stock iOS</key>
+		<string>Tweaks SpringBoard cho iOS gốc</string>
+		<key>System</key>
+		<string>Hệ thống</string>
+		<key>System Info</key>
+		<string>Thông tin hệ thống</string>
+		<key>Tools</key>
+		<string>Công cụ</string>
+		<key>Turn system services off and on</key>
+		<string>Bật/tắt dịch vụ hệ thống</string>
+		<key>Tweaks</key>
+		<string>Tweaks</string>
+		<key>What's New</key>
+		<string>Có gì mới</string>
+		<key>Working</key>
+		<string>Đang xử lý</string>
+	</dict>
+</dict>
+</plist>

@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>patterns</key>
+	<array>
+		<dict>
+			<key>pattern</key>
+			<string>^No jailbreak required · v(.+)$</string>
+			<key>template</key>
+			<string>لا حاجة إلى Jailbreak · v$1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending changes?$</string>
+			<key>template</key>
+			<string>$1 تغييرات قيد الانتظار</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) apps?$</string>
+			<key>template</key>
+			<string>$1 تطبيقات</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) packages?$</string>
+			<key>template</key>
+			<string>$1 حزم</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) installed$</string>
+			<key>template</key>
+			<string>$1 مثبت</string>
+		</dict>
+	</array>
+	<key>strings</key>
+	<dict>
+		<key>About</key>
+		<string>حول</string>
+		<key>Add a Source</key>
+		<string>إضافة مصدر</string>
+		<key>Apply</key>
+		<string>تطبيق</string>
+		<key>Back</key>
+		<string>رجوع</string>
+		<key>Battery, uptime, kernel access, storage</key>
+		<string>البطارية ومدة التشغيل والوصول إلى النواة والتخزين</string>
+		<key>Browse and install JS tweaks from repos</key>
+		<string>تصفح وتثبيت تعديلات JS من المستودعات</string>
+		<key>Browse files and edit plists</key>
+		<string>تصفح الملفات وتعديل قوائم plist</string>
+		<key>Cache Cleaner</key>
+		<string>منظّف ذاكرة التخزين المؤقت</string>
+		<key>Cancel</key>
+		<string>إلغاء</string>
+		<key>Choose the app language.</key>
+		<string>اختر لغة التطبيق.</string>
+		<key>Close</key>
+		<string>إغلاق</string>
+		<key>Community</key>
+		<string>المجتمع</string>
+		<key>Confirm</key>
+		<string>تأكيد</string>
+		<key>Continue</key>
+		<string>متابعة</string>
+		<key>Copy</key>
+		<string>نسخ</string>
+		<key>Daemon Manager</key>
+		<string>مدير الخدمات</string>
+		<key>Delete</key>
+		<string>حذف</string>
+		<key>Disable</key>
+		<string>تعطيل</string>
+		<key>Disabled</key>
+		<string>معطّل</string>
+		<key>Done</key>
+		<string>تم</string>
+		<key>Enable</key>
+		<string>تفعيل</string>
+		<key>Enabled</key>
+		<string>مفعّل</string>
+		<key>File Browser</key>
+		<string>متصفح الملفات</string>
+		<key>Follow System</key>
+		<string>اتباع النظام</string>
+		<key>Free space from app caches</key>
+		<string>تحرير المساحة من ذاكرات تطبيقات</string>
+		<key>Get Started</key>
+		<string>ابدأ</string>
+		<key>GitHub</key>
+		<string>GitHub</string>
+		<key>Home</key>
+		<string>الرئيسية</string>
+		<key>Import Failed</key>
+		<string>فشل الاستيراد</string>
+		<key>In Development</key>
+		<string>قيد التطوير</string>
+		<key>Install</key>
+		<string>تثبيت</string>
+		<key>Installed</key>
+		<string>مثبّت</string>
+		<key>Kernel Access Ready</key>
+		<string>الوصول إلى النواة جاهز</string>
+		<key>Kernel access for the tools</key>
+		<string>الوصول إلى النواة للأدوات</string>
+		<key>Kernel access is not active. Run the chain first.</key>
+		<string>الوصول إلى النواة غير نشط. شغّل السلسلة أولاً.</string>
+		<key>Language</key>
+		<string>اللغة</string>
+		<key>Language changed</key>
+		<string>تم تغيير اللغة</string>
+		<key>Later</key>
+		<string>لاحقًا</string>
+		<key>Loading…</key>
+		<string>جارٍ التحميل…</string>
+		<key>Log</key>
+		<string>السجل</string>
+		<key>Not Supported</key>
+		<string>غير مدعوم</string>
+		<key>OK</key>
+		<string>حسناً</string>
+		<key>Off</key>
+		<string>إيقاف</string>
+		<key>On</key>
+		<string>تشغيل</string>
+		<key>Open QuickLoader</key>
+		<string>فتح QuickLoader</string>
+		<key>Packages</key>
+		<string>الحزم</string>
+		<key>Process Viewer</key>
+		<string>عارض العمليات</string>
+		<key>Quick Actions</key>
+		<string>إجراءات سريعة</string>
+		<key>Refresh</key>
+		<string>تحديث</string>
+		<key>Refreshing sources…</key>
+		<string>جارٍ تحديث المصادر…</string>
+		<key>Remove</key>
+		<string>إزالة</string>
+		<key>Report a Bug</key>
+		<string>الإبلاغ عن خطأ</string>
+		<key>Restart Cyanide to apply the new language.</key>
+		<string>أعد تشغيل Cyanide لتطبيق اللغة الجديدة.</string>
+		<key>Retry</key>
+		<string>إعادة المحاولة</string>
+		<key>Run Exploit</key>
+		<string>تشغيل الاستغلال</string>
+		<key>Run a local .js tweak file</key>
+		<string>تشغيل ملف تعديل .js محلي</string>
+		<key>Save</key>
+		<string>حفظ</string>
+		<key>Search</key>
+		<string>بحث</string>
+		<key>See and quit running processes</key>
+		<string>عرض العمليات الجارية وإنهائها</string>
+		<key>Settings</key>
+		<string>الإعدادات</string>
+		<key>Share</key>
+		<string>مشاركة</string>
+		<key>Some sources could not be refreshed</key>
+		<string>تعذر تحديث بعض المصادر</string>
+		<key>Source refresh failed</key>
+		<string>فشل تحديث المصادر</string>
+		<key>Sources</key>
+		<string>المصادر</string>
+		<key>Sources up to date</key>
+		<string>المصادر محدثة</string>
+		<key>SpringBoard tweaks for stock iOS</key>
+		<string>تعديلات SpringBoard لنظام iOS الأصلي</string>
+		<key>System</key>
+		<string>النظام</string>
+		<key>System Info</key>
+		<string>معلومات النظام</string>
+		<key>Tools</key>
+		<string>الأدوات</string>
+		<key>Turn system services off and on</key>
+		<string>تشغيل خدمات النظام وإيقافها</string>
+		<key>Tweaks</key>
+		<string>التعديلات</string>
+		<key>What's New</key>
+		<string>الجديد</string>
+		<key>Working</key>
+		<string>جارٍ العمل</string>
+	</dict>
+</dict>
+</plist>

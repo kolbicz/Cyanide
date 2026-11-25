@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>patterns</key>
+	<array>
+		<dict>
+			<key>pattern</key>
+			<string>^No jailbreak required · v(.+)$</string>
+			<key>template</key>
+			<string>Jailbreak gerekmez · v$1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending changes?$</string>
+			<key>template</key>
+			<string>$1 bekleyen değişiklik</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) apps?$</string>
+			<key>template</key>
+			<string>$1 uygulama</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) packages?$</string>
+			<key>template</key>
+			<string>$1 paket</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) installed$</string>
+			<key>template</key>
+			<string>$1 yüklü</string>
+		</dict>
+	</array>
+	<key>strings</key>
+	<dict>
+		<key>About</key>
+		<string>Hakkında</string>
+		<key>Add a Source</key>
+		<string>Kaynak ekle</string>
+		<key>Apply</key>
+		<string>Uygula</string>
+		<key>Back</key>
+		<string>Geri</string>
+		<key>Battery, uptime, kernel access, storage</key>
+		<string>Pil, çalışma süresi, çekirdek erişimi, depolama</string>
+		<key>Browse and install JS tweaks from repos</key>
+		<string>Depolardan JS tweak'lerine göz at ve yükle</string>
+		<key>Browse files and edit plists</key>
+		<string>Dosyalara göz at ve plist düzenle</string>
+		<key>Cache Cleaner</key>
+		<string>Önbellek Temizleyici</string>
+		<key>Cancel</key>
+		<string>İptal</string>
+		<key>Choose the app language.</key>
+		<string>Uygulama dilini seçin.</string>
+		<key>Close</key>
+		<string>Kapat</string>
+		<key>Community</key>
+		<string>Topluluk</string>
+		<key>Confirm</key>
+		<string>Onayla</string>
+		<key>Continue</key>
+		<string>Devam</string>
+		<key>Copy</key>
+		<string>Kopyala</string>
+		<key>Daemon Manager</key>
+		<string>Daemon yöneticisi</string>
+		<key>Delete</key>
+		<string>Sil</string>
+		<key>Disable</key>
+		<string>Devre dışı bırak</string>
+		<key>Disabled</key>
+		<string>Devre dışı</string>
+		<key>Done</key>
+		<string>Bitti</string>
+		<key>Enable</key>
+		<string>Etkinleştir</string>
+		<key>Enabled</key>
+		<string>Etkin</string>
+		<key>File Browser</key>
+		<string>Dosya tarayıcı</string>
+		<key>Follow System</key>
+		<string>Sistemi takip et</string>
+		<key>Free space from app caches</key>
+		<string>Uygulama önbelleklerinden yer aç</string>
+		<key>Get Started</key>
+		<string>Başla</string>
+		<key>GitHub</key>
+		<string>GitHub</string>
+		<key>Home</key>
+		<string>Ana Sayfa</string>
+		<key>Import Failed</key>
+		<string>İçe aktarma başarısız</string>
+		<key>In Development</key>
+		<string>Geliştiriliyor</string>
+		<key>Install</key>
+		<string>Yükle</string>
+		<key>Installed</key>
+		<string>Yüklü</string>
+		<key>Kernel Access Ready</key>
+		<string>Çekirdek erişimi hazır</string>
+		<key>Kernel access for the tools</key>
+		<string>Araçlar için çekirdek erişimi</string>
+		<key>Kernel access is not active. Run the chain first.</key>
+		<string>Çekirdek erişimi etkin değil. Önce zinciri çalıştırın.</string>
+		<key>Language</key>
+		<string>Dil</string>
+		<key>Language changed</key>
+		<string>Dil değiştirildi</string>
+		<key>Later</key>
+		<string>Sonra</string>
+		<key>Loading…</key>
+		<string>Yükleniyor…</string>
+		<key>Log</key>
+		<string>Günlük</string>
+		<key>Not Supported</key>
+		<string>Desteklenmiyor</string>
+		<key>OK</key>
+		<string>Tamam</string>
+		<key>Off</key>
+		<string>Kapalı</string>
+		<key>On</key>
+		<string>Açık</string>
+		<key>Open QuickLoader</key>
+		<string>QuickLoader'ı aç</string>
+		<key>Packages</key>
+		<string>Paketler</string>
+		<key>Process Viewer</key>
+		<string>Süreç görüntüleyici</string>
+		<key>Quick Actions</key>
+		<string>Hızlı işlemler</string>
+		<key>Refresh</key>
+		<string>Yenile</string>
+		<key>Refreshing sources…</key>
+		<string>Kaynaklar yenileniyor…</string>
+		<key>Remove</key>
+		<string>Kaldır</string>
+		<key>Report a Bug</key>
+		<string>Hata bildir</string>
+		<key>Restart Cyanide to apply the new language.</key>
+		<string>Yeni dili uygulamak için Cyanide'i yeniden başlatın.</string>
+		<key>Retry</key>
+		<string>Yeniden dene</string>
+		<key>Run Exploit</key>
+		<string>Exploit'i çalıştır</string>
+		<key>Run a local .js tweak file</key>
+		<string>Yerel bir .js tweak dosyası çalıştır</string>
+		<key>Save</key>
+		<string>Kaydet</string>
+		<key>Search</key>
+		<string>Ara</string>
+		<key>See and quit running processes</key>
+		<string>Çalışan süreçleri görüntüle ve sonlandır</string>
+		<key>Settings</key>
+		<string>Ayarlar</string>
+		<key>Share</key>
+		<string>Paylaş</string>
+		<key>Some sources could not be refreshed</key>
+		<string>Bazı kaynaklar yenilenemedi</string>
+		<key>Source refresh failed</key>
+		<string>Kaynak yenileme başarısız</string>
+		<key>Sources</key>
+		<string>Kaynaklar</string>
+		<key>Sources up to date</key>
+		<string>Kaynaklar güncel</string>
+		<key>SpringBoard tweaks for stock iOS</key>
+		<string>Orijinal iOS için SpringBoard Tweaks</string>
+		<key>System</key>
+		<string>Sistem</string>
+		<key>System Info</key>
+		<string>Sistem bilgisi</string>
+		<key>Tools</key>
+		<string>Araçlar</string>
+		<key>Turn system services off and on</key>
+		<string>Sistem servislerini aç/kapat</string>
+		<key>Tweaks</key>
+		<string>Tweaks</string>
+		<key>What's New</key>
+		<string>Yenilikler</string>
+		<key>Working</key>
+		<string>Çalışıyor</string>
+	</dict>
+</dict>
+</plist>

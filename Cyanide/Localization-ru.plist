@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>patterns</key>
+	<array>
+		<dict>
+			<key>pattern</key>
+			<string>^No jailbreak required · v(.+)$</string>
+			<key>template</key>
+			<string>Jailbreak не требуется · v$1</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) pending changes?$</string>
+			<key>template</key>
+			<string>$1 ожидающих изменений</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) apps?$</string>
+			<key>template</key>
+			<string>$1 приложений</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) packages?$</string>
+			<key>template</key>
+			<string>$1 пакетов</string>
+		</dict>
+		<dict>
+			<key>pattern</key>
+			<string>^([0-9]+) installed$</string>
+			<key>template</key>
+			<string>$1 установлено</string>
+		</dict>
+	</array>
+	<key>strings</key>
+	<dict>
+		<key>About</key>
+		<string>О программе</string>
+		<key>Add a Source</key>
+		<string>Добавить источник</string>
+		<key>Apply</key>
+		<string>Применить</string>
+		<key>Back</key>
+		<string>Назад</string>
+		<key>Battery, uptime, kernel access, storage</key>
+		<string>Батарея, время работы, доступ к ядру, хранилище</string>
+		<key>Browse and install JS tweaks from repos</key>
+		<string>Просмотр и установка JS-твиков из репозиториев</string>
+		<key>Browse files and edit plists</key>
+		<string>Просмотр файлов и редактирование plist</string>
+		<key>Cache Cleaner</key>
+		<string>Очистка кэша</string>
+		<key>Cancel</key>
+		<string>Отмена</string>
+		<key>Choose the app language.</key>
+		<string>Выберите язык приложения.</string>
+		<key>Close</key>
+		<string>Закрыть</string>
+		<key>Community</key>
+		<string>Сообщество</string>
+		<key>Confirm</key>
+		<string>Подтвердить</string>
+		<key>Continue</key>
+		<string>Продолжить</string>
+		<key>Copy</key>
+		<string>Копировать</string>
+		<key>Daemon Manager</key>
+		<string>Менеджер демонов</string>
+		<key>Delete</key>
+		<string>Удалить</string>
+		<key>Disable</key>
+		<string>Отключить</string>
+		<key>Disabled</key>
+		<string>Отключено</string>
+		<key>Done</key>
+		<string>Готово</string>
+		<key>Enable</key>
+		<string>Включить</string>
+		<key>Enabled</key>
+		<string>Включено</string>
+		<key>File Browser</key>
+		<string>Файловый браузер</string>
+		<key>Follow System</key>
+		<string>Как в системе</string>
+		<key>Free space from app caches</key>
+		<string>Освободить место из кэшей приложений</string>
+		<key>Get Started</key>
+		<string>Начать</string>
+		<key>GitHub</key>
+		<string>GitHub</string>
+		<key>Home</key>
+		<string>Главная</string>
+		<key>Import Failed</key>
+		<string>Ошибка импорта</string>
+		<key>In Development</key>
+		<string>В разработке</string>
+		<key>Install</key>
+		<string>Установить</string>
+		<key>Installed</key>
+		<string>Установленные</string>
+		<key>Kernel Access Ready</key>
+		<string>Доступ к ядру готов</string>
+		<key>Kernel access for the tools</key>
+		<string>Доступ к ядру для инструментов</string>
+		<key>Kernel access is not active. Run the chain first.</key>
+		<string>Доступ к ядру не активен. Сначала запустите цепочку.</string>
+		<key>Language</key>
+		<string>Язык</string>
+		<key>Language changed</key>
+		<string>Язык изменён</string>
+		<key>Later</key>
+		<string>Позже</string>
+		<key>Loading…</key>
+		<string>Загрузка…</string>
+		<key>Log</key>
+		<string>Журнал</string>
+		<key>Not Supported</key>
+		<string>Не поддерживается</string>
+		<key>OK</key>
+		<string>ОК</string>
+		<key>Off</key>
+		<string>Выкл.</string>
+		<key>On</key>
+		<string>Вкл.</string>
+		<key>Open QuickLoader</key>
+		<string>Открыть QuickLoader</string>
+		<key>Packages</key>
+		<string>Пакеты</string>
+		<key>Process Viewer</key>
+		<string>Просмотр процессов</string>
+		<key>Quick Actions</key>
+		<string>Быстрые действия</string>
+		<key>Refresh</key>
+		<string>Обновить</string>
+		<key>Refreshing sources…</key>
+		<string>Обновление источников…</string>
+		<key>Remove</key>
+		<string>Удалить</string>
+		<key>Report a Bug</key>
+		<string>Сообщить об ошибке</string>
+		<key>Restart Cyanide to apply the new language.</key>
+		<string>Перезапустите Cyanide, чтобы применить новый язык.</string>
+		<key>Retry</key>
+		<string>Повторить</string>
+		<key>Run Exploit</key>
+		<string>Запустить эксплойт</string>
+		<key>Run a local .js tweak file</key>
+		<string>Запустить локальный .js-твик</string>
+		<key>Save</key>
+		<string>Сохранить</string>
+		<key>Search</key>
+		<string>Поиск</string>
+		<key>See and quit running processes</key>
+		<string>Просмотр и завершение процессов</string>
+		<key>Settings</key>
+		<string>Настройки</string>
+		<key>Share</key>
+		<string>Поделиться</string>
+		<key>Some sources could not be refreshed</key>
+		<string>Некоторые источники не удалось обновить</string>
+		<key>Source refresh failed</key>
+		<string>Не удалось обновить источники</string>
+		<key>Sources</key>
+		<string>Источники</string>
+		<key>Sources up to date</key>
+		<string>Источники обновлены</string>
+		<key>SpringBoard tweaks for stock iOS</key>
+		<string>Твики SpringBoard для оригинальной iOS</string>
+		<key>System</key>
+		<string>Система</string>
+		<key>System Info</key>
+		<string>Системная информация</string>
+		<key>Tools</key>
+		<string>Инструменты</string>
+		<key>Turn system services off and on</key>
+		<string>Включение и отключение системных служб</string>
+		<key>Tweaks</key>
+		<string>Твики</string>
+		<key>What's New</key>
+		<string>Что нового</string>
+		<key>Working</key>
+		<string>Выполняется</string>
+	</dict>
+</dict>
+</plist>

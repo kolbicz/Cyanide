@@ -81,6 +81,7 @@
 #import "installer/MainTabBarController.h"
 #import "docs/DocsViewController.h"
 #import "Localization/CyanideLanguage.h"
+#import "LanguageViewController.h"
 #import "UpdateChecker.h"
 #import "SBLArchiveExtractor.h"
 #import "NiceBarSettingsSupport.h"
@@ -14240,6 +14241,10 @@ static NSUInteger settings_tab_index_for_title(UITabBarController *tab, NSString
     // the point where this view is guaranteed to be uncovered again.
     self.view.tintAdjustmentMode = UIViewTintAdjustmentModeAutomatic;
     [self reloadManualActions];
+    if (!self.detailMode && self.isViewLoaded) {
+        [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:RootSectionAbout]
+                      withRowAnimation:UITableViewRowAnimationNone];
+    }
 
     // The NanoRegistry plist lives behind a sandbox wall on-device. Keep the
     // detail panel passive; the explicit "Load Current" button performs the
@@ -17613,60 +17618,9 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
 
 - (void)presentLanguagePicker
 {
-    NSString *stored = [[NSUserDefaults standardUserDefaults]
-                        stringForKey:CyanideLanguagePreferenceKey];
-
-    UIAlertController *ac = [UIAlertController
-        alertControllerWithTitle:@"Language"
-                         message:@"Choose the app language. Changing it requires restarting Cyanide."
-                  preferredStyle:UIAlertControllerStyleAlert];
-    __weak typeof(self) weakSelf = self;
-
-    NSString *follow = CyanideLocalized(@"Follow System");
-    if (!stored.length) follow = [@"✓ " stringByAppendingString:follow];
-    [ac addAction:[UIAlertAction actionWithTitle:follow
-                                           style:UIAlertActionStyleDefault
-                                         handler:^(UIAlertAction *_) {
-        CyanideLanguageSetCode(nil);
-        [weakSelf languageDidChange];
-    }]];
-
-    for (NSString *code in CyanideLanguageSupportedCodes()) {
-        NSString *title = CyanideLanguageNativeName(code);
-        if ([stored isEqualToString:code]) {
-            title = [@"✓ " stringByAppendingString:title];
-        }
-        [ac addAction:[UIAlertAction actionWithTitle:title
-                                               style:UIAlertActionStyleDefault
-                                             handler:^(UIAlertAction *_) {
-            CyanideLanguageSetCode(code);
-            [weakSelf languageDidChange];
-        }]];
-    }
-
-    [ac addAction:[UIAlertAction actionWithTitle:@"Cancel"
-                                           style:UIAlertActionStyleCancel
-                                         handler:nil]];
-    settings_present_controller(ac, self);
-}
-
-- (void)languageDidChange
-{
-    NSIndexSet *idx = [NSIndexSet indexSetWithIndex:RootSectionAbout];
-    [self.tableView reloadSections:idx withRowAnimation:UITableViewRowAnimationNone];
-
-    __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        UIAlertController *notice = [UIAlertController
-            alertControllerWithTitle:@"Language changed"
-                             message:@"Restart Cyanide to apply the new language."
-                      preferredStyle:UIAlertControllerStyleAlert];
-        [notice addAction:[UIAlertAction actionWithTitle:@"OK"
-                                                    style:UIAlertActionStyleDefault
-                                                  handler:nil]];
-        settings_present_controller(notice, weakSelf);
-    });
+    LanguageViewController *vc = [[LanguageViewController alloc]
+        initWithStyle:UITableViewStyleInsetGrouped];
+    [self.navigationController pushViewController:vc animated:YES];
 }
 
 - (void)openViewLog
