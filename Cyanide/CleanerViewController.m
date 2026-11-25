@@ -849,7 +849,13 @@ static BOOL cleaner_intro_accepted(void)
 - (instancetype)init
 {
     self = [super initWithStyle:UITableViewStyleInsetGrouped];
-    if (self) self.title = @"Cache Cleaner";
+    if (self) {
+        self.title = @"Cache Cleaner";
+        // The Clean button lives in the navigation toolbar. On iOS 26 the
+        // floating tab bar is drawn over that toolbar and hid the button
+        // (issue #26), so the tab bar goes away while this screen is up.
+        self.hidesBottomBarWhenPushed = YES;
+    }
     return self;
 }
 
